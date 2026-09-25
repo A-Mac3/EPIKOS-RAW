@@ -1,0 +1,11 @@
+[package]
+name = "epikos-sidecar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Non-destructive XMP and native JSON sidecars"
+
+[dependencies]
+epikos-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true

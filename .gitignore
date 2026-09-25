@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.pdb
+.idea
+.vscode
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/
+.claude/settings.local.json
+*.tsbuildinfo

@@ -1,0 +1,23 @@
+//! Scene-referred 32-bit develop pipeline.
+//!
+//! Order: demosaic → highlight recovery → white balance → chromatic aberration
+//! → Brown–Conrady distortion → camera RGB → linear Rec.2020 → exposure.
+//! [`to_display_srgb`] is the separate view transform for the screen.
+
+mod color_transform;
+mod demosaic;
+mod develop;
+mod display;
+mod highlights;
+mod matrix;
+mod optics;
+mod preview;
+mod white_balance;
+
+pub use demosaic::{demosaic, DemosaicAlgorithm};
+pub use develop::{develop, develop_rgb};
+pub use display::{to_display_srgb, DisplayImage};
+pub use preview::{base_block, bin_mosaic, block_for_size};
+pub use highlights::recover_highlights;
+pub use optics::{correct_chromatic_aberration, correct_distortion};
+pub use white_balance::{gains_for_temperature, temperature_for_gains};

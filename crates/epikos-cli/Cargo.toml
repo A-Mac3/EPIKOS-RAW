@@ -1,0 +1,17 @@
+[package]
+name = "epikos-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line front-end for the EPIKOS RAW engine"
+
+[[bin]]
+name = "epikos"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+epikos-core.workspace = true
+epikos-decode.workspace = true
+epikos-pipeline.workspace = true
+epikos-sidecar.workspace = true

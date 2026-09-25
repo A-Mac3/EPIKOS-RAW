@@ -1,0 +1,37 @@
+# EPIKOS RAW
+
+Cross-platform RAW/DNG editor. Product spec: [PRD.md](PRD.md).
+
+## Layout
+
+| Path | What |
+|---|---|
+| `crates/epikos-core` | 32-bit float image types, camera formats, sensor profiles |
+| `crates/epikos-decode` | RAW/DNG decode via `rawler`, crop, embedded thumbnails |
+| `crates/epikos-pipeline` | Demosaic, highlights, white balance, optics, colour, exposure, preview binning, display transform |
+| `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
+| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy |
+| `crates/epikos-cli` | `epikos inspect / sidecar / develop` |
+| `apps/desktop` | Tauri 2 + React/TypeScript desktop app (`src-tauri` = Rust commands) |
+
+## Develop
+
+Requires Rust (stable) and Node.js 20+.
+
+```bash
+cargo test --workspace                 # engine tests
+cd apps/desktop && npm install         # once
+npm run tauri dev                      # desktop app with hot reload
+```
+
+UI-only work without the engine: `npm run dev`, then open `http://localhost:5173/?mock`
+(synthetic test chart, dev builds only).
+
+Render a real file through the engine and time it:
+
+```bash
+cargo run --release -p epikos-engine --example render_preview -- <RAW> <OUT_DIR> [EV]
+```
+
+App icons are placeholders; regenerate the full set with
+`npm run tauri icon src-tauri/icons/app-icon-source.png`.

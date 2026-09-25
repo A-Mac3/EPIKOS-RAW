@@ -1,0 +1,13 @@
+[package]
+name = "epikos-decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native RAW/DNG decode via camera sensor profiles"
+
+[dependencies]
+epikos-core.workspace = true
+rawler.workspace = true
+image.workspace = true
+sha2.workspace = true
+hex.workspace = true

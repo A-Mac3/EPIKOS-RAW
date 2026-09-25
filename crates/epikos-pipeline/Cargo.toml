@@ -1,0 +1,11 @@
+[package]
+name = "epikos-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "32-bit develop pipeline: demosaic, highlights, lens optics, color"
+
+[dependencies]
+epikos-core.workspace = true
+epikos-sidecar.workspace = true
+rayon.workspace = true

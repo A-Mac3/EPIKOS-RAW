@@ -1,0 +1,17 @@
+[package]
+name = "epikos-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Session layer for EPIKOS RAW front-ends: image cache, previews, sidecar I/O"
+
+[dependencies]
+epikos-core.workspace = true
+epikos-decode.workspace = true
+epikos-pipeline.workspace = true
+epikos-sidecar.workspace = true
+serde.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+image = { workspace = true, features = ["png"] }
