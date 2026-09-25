@@ -15,3 +15,4 @@ epikos-core.workspace = true
 epikos-decode.workspace = true
 epikos-pipeline.workspace = true
 epikos-sidecar.workspace = true
+epikos-engine.workspace = true

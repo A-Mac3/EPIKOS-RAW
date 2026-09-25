@@ -9,3 +9,4 @@ description = "32-bit develop pipeline: demosaic, highlights, lens optics, color
 epikos-core.workspace = true
 epikos-sidecar.workspace = true
 rayon.workspace = true
+serde.workspace = true

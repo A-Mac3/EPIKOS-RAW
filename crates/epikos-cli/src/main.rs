@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use epikos_core::{ImageRgbF32, Result};
 use epikos_decode::decode_file;
+use epikos_engine::{Engine, OutputSpace};
 use epikos_pipeline::develop;
 use epikos_sidecar::{
     load_json, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, DevelopDocument, SourceRef,
@@ -31,6 +32,25 @@ enum Commands {
         #[arg(long)]
         sidecar: Option<PathBuf>,
     },
+    /// Export a full-resolution 16-bit TIFF with embedded ICC profile.
+    Export {
+        path: PathBuf,
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Output colour space.
+        #[arg(long, value_enum, default_value = "srgb")]
+        space: Space,
+        /// Exposure override in EV (otherwise the sidecar value).
+        #[arg(long)]
+        ev: Option<f32>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Space {
+    Srgb,
+    P3,
+    Prophoto,
 }
 
 fn main() {
@@ -46,6 +66,12 @@ fn run() -> Result<()> {
         Commands::Inspect { path } => inspect(&path),
         Commands::Sidecar { path } => init_sidecar(&path),
         Commands::Develop { path, out, sidecar } => develop_cmd(&path, out, sidecar),
+        Commands::Export {
+            path,
+            out,
+            space,
+            ev,
+        } => export_cmd(&path, &out, space, ev),
     }
 }
 
@@ -56,7 +82,10 @@ fn inspect(path: &Path) -> Result<()> {
     println!("sha256      {}", decoded.source_sha256);
     println!("format      {}", p.format.label());
     println!("camera      {} {}", p.clean_make, p.clean_model);
-    println!("sensor      {}×{}  {} bps  {} spp", p.width, p.height, p.bits_per_sample, p.samples_per_pixel);
+    println!(
+        "sensor      {}×{}  {} bps  {} spp",
+        p.width, p.height, p.bits_per_sample, p.samples_per_pixel
+    );
     println!("layout      {:?}", p.layout);
     println!("as-shot WB  {:?}", p.as_shot_wb);
     Ok(())
@@ -101,6 +130,31 @@ fn develop_cmd(path: &Path, out: Option<PathBuf>, sidecar: Option<PathBuf>) -> R
         rgb.height,
         rgb.space,
         dest.display()
+    );
+    Ok(())
+}
+
+fn export_cmd(path: &Path, out: &Path, space: Space, ev: Option<f32>) -> Result<()> {
+    let engine = Engine::new(1);
+    let mut adjustments = engine.open(path)?.document.adjustments;
+    if let Some(ev) = ev {
+        adjustments.exposure = ev;
+    }
+    let space = match space {
+        Space::Srgb => OutputSpace::Srgb,
+        Space::P3 => OutputSpace::DisplayP3,
+        Space::Prophoto => OutputSpace::ProPhoto,
+    };
+    let r = engine.export_tiff(path, &adjustments, out, space)?;
+    println!(
+        "exported {}×{} {} → {} ({:.1} MB; develop {} ms, write {} ms)",
+        r.width,
+        r.height,
+        r.color_space,
+        r.path,
+        r.bytes as f64 / 1e6,
+        r.develop_ms,
+        r.write_ms
     );
     Ok(())
 }

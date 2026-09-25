@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { inTauri, listFolder, openImage, pickFolder, saveDocument } from "./api";
+import { ExportDialog } from "./components/ExportDialog";
 import { Filmstrip } from "./components/Filmstrip";
 import { Histogram } from "./components/Histogram";
 import { StepsPanel } from "./components/StepsPanel";
@@ -29,6 +30,7 @@ export default function App() {
   const [viewSize, setViewSize] = useState({ w: 0, h: 0 });
   const [before, setBefore] = useState(false);
   const [save, setSave] = useState<SaveStatus>({ kind: "idle" });
+  const [exportOpen, setExportOpen] = useState(false);
 
   const history = useHistory<Adjustments>(defaultAdjustments());
   const adjustments = history.value;
@@ -149,6 +151,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (exportOpen) return; // the modal owns the keyboard
       const mod = e.metaKey || e.ctrlKey;
       const inField = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
       if (mod && e.key.toLowerCase() === "z") {
@@ -158,6 +161,9 @@ export default function App() {
       } else if (mod && e.key.toLowerCase() === "y") {
         e.preventDefault();
         history.redo();
+      } else if (mod && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        if (info) setExportOpen(true);
       } else if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
         void chooseFolder();
@@ -178,7 +184,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [history.undo, history.redo, chooseFolder, step]);
+  }, [history.undo, history.redo, chooseFolder, step, exportOpen, info]);
 
   const onResize = useCallback((w: number, h: number) => setViewSize({ w, h }), []);
 
@@ -232,9 +238,22 @@ export default function App() {
           >
             Before
           </button>
+          <button
+            type="button"
+            className="btn primary-outline"
+            disabled={!info}
+            onClick={() => setExportOpen(true)}
+            title="Export full-resolution 16-bit TIFF (⌘E)"
+          >
+            Export…
+          </button>
           <SaveBadge status={save} />
         </div>
       </header>
+
+      {exportOpen && info && (
+        <ExportDialog info={info} adjustments={adjustments} onClose={() => setExportOpen(false)} />
+      )}
 
       {folder ? (
         <>

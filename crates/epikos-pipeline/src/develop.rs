@@ -14,7 +14,15 @@ pub fn develop(
     profile: &SensorProfile,
     doc: &DevelopDocument,
 ) -> Result<ImageRgbF32> {
-    let adj = &doc.adjustments;
+    develop_adjustments(mosaic, profile, &doc.adjustments)
+}
+
+/// Full-resolution develop with explicit adjustments (e.g. unsaved edits from the UI).
+pub fn develop_adjustments(
+    mosaic: &MosaicF32,
+    profile: &SensorProfile,
+    adj: &Adjustments,
+) -> Result<ImageRgbF32> {
     let rgb = demosaic(mosaic, map_demosaic(adj, profile));
     develop_rgb(rgb, profile, adj)
 }
@@ -44,8 +52,14 @@ pub fn develop_rgb(
         apply_white_balance(&mut rgb, gains);
     }
 
-    rgb = correct_chromatic_aberration(&rgb, &adj.lens.chromatic_aberration);
-    rgb = correct_distortion(&rgb, &adj.lens.distortion);
+    // Each correction allocates a full-size copy, so skip them when disabled.
+    let ca = &adj.lens.chromatic_aberration;
+    if ca.enabled && (ca.red != 0.0 || ca.blue != 0.0) {
+        rgb = correct_chromatic_aberration(&rgb, ca);
+    }
+    if adj.lens.distortion.enabled {
+        rgb = correct_distortion(&rgb, &adj.lens.distortion);
+    }
 
     if monochrome {
         // R = G = B is already neutral in any RGB space; a colour matrix would tint it.

@@ -59,7 +59,8 @@ pub fn to_display_srgb(image: &ImageRgbF32) -> DisplayImage {
     }
 }
 
-fn shoulder(v: f32) -> f32 {
+/// Highlight roll-off shared by the preview and export view transforms.
+pub(crate) fn shoulder(v: f32) -> f32 {
     if !v.is_finite() || v <= 0.0 {
         0.0
     } else if v <= SHOULDER {

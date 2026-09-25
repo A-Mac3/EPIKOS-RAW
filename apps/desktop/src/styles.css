@@ -185,6 +185,71 @@ code {
   outline-offset: 1px;
 }
 
+.btn.primary-outline {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.btn.primary-outline:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #2e2a20;
+}
+
+/* ---- Modal ----------------------------------------------------------------------- */
+
+.modal {
+  width: 440px;
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.modal::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-sub {
+  margin: 4px 0 18px;
+  color: var(--text-dim);
+}
+
+.modal .field {
+  gap: 8px;
+}
+
+.modal-status {
+  margin: 16px 0 0;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.modal-status.is-ok {
+  color: var(--ok);
+}
+
+.modal-status.is-error {
+  color: var(--error);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.modal .btn.primary {
+  height: 30px;
+}
+
 .save {
   min-width: 118px;
   text-align: right;

@@ -27,6 +27,20 @@ export function installMockBackend() {
     switch (cmd) {
       case "plugin:dialog|open":
         return FOLDER;
+      case "plugin:dialog|save":
+        return (a.options as { defaultPath?: string } | undefined)?.defaultPath ?? `${FOLDER}/export.tif`;
+      case "export_tiff":
+        await new Promise((r) => setTimeout(r, 900));
+        console.info("[mock] export", a);
+        return {
+          path: a.dest,
+          width: 7728,
+          height: 5152,
+          colorSpace: a.colorSpace,
+          bytes: 231_900_000,
+          developMs: 1180,
+          writeMs: 850,
+        };
       case "list_folder":
         return FILES.map((f) => ({ ...f, hasEdits: f.hasEdits || saved.has(f.path) }));
       case "open_image":

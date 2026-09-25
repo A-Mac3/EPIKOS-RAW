@@ -34,8 +34,16 @@ fn packed_rgb(mosaic: &MosaicF32) -> ImageRgbF32 {
     for i in 0..img.len() {
         let base = i * spp;
         img.r[i] = mosaic.data[base];
-        img.g[i] = mosaic.data.get(base + 1).copied().unwrap_or(mosaic.data[base]);
-        img.b[i] = mosaic.data.get(base + 2).copied().unwrap_or(mosaic.data[base]);
+        img.g[i] = mosaic
+            .data
+            .get(base + 1)
+            .copied()
+            .unwrap_or(mosaic.data[base]);
+        img.b[i] = mosaic
+            .data
+            .get(base + 2)
+            .copied()
+            .unwrap_or(mosaic.data[base]);
     }
     img
 }
@@ -142,7 +150,11 @@ fn malvar(data: &[f32], w: u32, h: u32, cfa: &CfaPattern) -> ImageRgbF32 {
                     }
                 }
             };
-            img.set(x as u32, y as u32, Pixel::new(r.max(0.0), g.max(0.0), b.max(0.0)));
+            img.set(
+                x as u32,
+                y as u32,
+                Pixel::new(r.max(0.0), g.max(0.0), b.max(0.0)),
+            );
         }
     }
     img
@@ -257,7 +269,9 @@ mod tests {
                 for x in 0..16 {
                     let p = rgb.get(x, y);
                     assert!(
-                        (p.r - 0.4).abs() < 1e-5 && (p.g - 0.3).abs() < 1e-5 && (p.b - 0.2).abs() < 1e-5,
+                        (p.r - 0.4).abs() < 1e-5
+                            && (p.g - 0.3).abs() < 1e-5
+                            && (p.b - 0.2).abs() < 1e-5,
                         "{name} ({x},{y}) = {p:?}"
                     );
                 }

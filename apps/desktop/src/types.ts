@@ -84,6 +84,18 @@ export interface SaveReport {
   warning: string | null;
 }
 
+export type OutputSpace = "srgb" | "displayP3" | "proPhoto";
+
+export interface ExportReport {
+  path: string;
+  width: number;
+  height: number;
+  colorSpace: string;
+  bytes: number;
+  developMs: number;
+  writeMs: number;
+}
+
 export interface Preview {
   width: number;
   height: number;

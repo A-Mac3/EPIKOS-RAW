@@ -20,6 +20,10 @@ use epikos_sidecar::{
 };
 use serde::Serialize;
 
+mod export;
+pub use epikos_pipeline::OutputSpace;
+pub use export::ExportReport;
+
 /// A RAW/DNG file found while browsing a folder.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -205,6 +209,18 @@ impl Engine {
         })
     }
 
+    /// Develop at full resolution and write a 16-bit TIFF in `space` to `dest`.
+    pub fn export_tiff(
+        &self,
+        path: &Path,
+        adjustments: &Adjustments,
+        dest: &Path,
+        space: OutputSpace,
+    ) -> Result<ExportReport> {
+        let loaded = self.load(path)?;
+        export::export_tiff(&loaded, adjustments, dest, space)
+    }
+
     /// JPEG thumbnail: the camera's embedded preview when available, otherwise a
     /// default EPIKOS develop.
     pub fn thumbnail_jpeg(&self, path: &Path, max_side: u32) -> Result<Vec<u8>> {
@@ -364,6 +380,46 @@ mod tests {
         )
         .unwrap();
         assert!(bright.rgba[1] > dark.rgba[1]);
+    }
+
+    #[test]
+    fn export_writes_a_16_bit_tiff_with_icc_and_no_partial_file() {
+        use tiff::decoder::Decoder;
+        use tiff::tags::Tag;
+
+        let dir = temp_dir("export");
+        let dest = dir.join("out.tif");
+        let loaded = synthetic_loaded(64, 48);
+        let report = export::export_tiff(
+            &loaded,
+            &Adjustments::default(),
+            &dest,
+            OutputSpace::ProPhoto,
+        )
+        .unwrap();
+        assert_eq!((report.width, report.height), (64, 48));
+        assert!(!dir.join("out.tif.partial").exists());
+
+        let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
+        assert_eq!(dec.dimensions().unwrap(), (64, 48));
+        assert_eq!(dec.colortype().unwrap(), tiff::ColorType::RGB(16));
+        let icc = dec.get_tag_u8_vec(Tag::IccProfile).unwrap();
+        assert_eq!(&icc[36..40], b"acsp");
+        assert_eq!(icc, OutputSpace::ProPhoto.icc_profile());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_non_tiff_and_the_source_file() {
+        let dir = temp_dir("export-guard");
+        let raw = dir.join("IMG.ARW");
+        fs::write(&raw, b"").unwrap();
+        let mut loaded = synthetic_loaded(8, 8);
+        loaded.raw.source_path = raw.to_string_lossy().into_owned();
+        let adj = Adjustments::default();
+        assert!(export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), OutputSpace::Srgb).is_err());
+        assert!(export::export_tiff(&loaded, &adj, &raw, OutputSpace::Srgb).is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

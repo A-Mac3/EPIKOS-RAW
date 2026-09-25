@@ -22,41 +22,53 @@ const KNEE: f32 = 0.9 * CLIP;
 ///
 /// `gains` are the green-normalised WB multipliers that will be applied next.
 pub fn recover_highlights(image: &mut ImageRgbF32, gains: [f32; 3], reconstruct: bool) {
-    let (w, h, n) = (image.width, image.height, image.len());
+    let (w, h) = (image.width, image.height);
     let (r, g, b) = (image.r.clone(), image.g.clone(), image.b.clone());
 
-    let out: Vec<Pixel> = (0..n)
-        .into_par_iter()
-        .map(|i| {
-            let px = Pixel::new(r[i], g[i], b[i]);
-            let clipped = [px.r >= CLIP, px.g >= CLIP, px.b >= CLIP];
-            let nclip = clipped.iter().filter(|c| **c).count();
-            if nclip > 0 {
-                if reconstruct && nclip < 3 {
-                    let (x, y) = ((i as u32) % w, (i as u32) / w);
-                    if let Some(p) =
-                        reconstruct_from_neighbours(w, h, &r, &g, &b, x, y, px, clipped)
-                    {
-                        return p;
-                    }
-                }
-                return neutral_after_wb(px, gains);
-            }
-            let peak = px.r.max(px.g).max(px.b);
-            if peak <= KNEE {
-                return px;
-            }
-            let t = smoothstep((peak - KNEE) / (CLIP - KNEE));
-            let n = neutral_after_wb(px, gains);
-            Pixel::new(lerp(px.r, n.r, t), lerp(px.g, n.g, t), lerp(px.b, n.b, t))
-        })
-        .collect();
+    // Write straight into the image planes: a temporary Vec<Pixel> would add another
+    // full-size copy (≈ 560 MB for a 47 MP frame).
+    let (out_r, out_g, out_b) = (&mut image.r, &mut image.g, &mut image.b);
+    out_r
+        .par_iter_mut()
+        .zip(out_g.par_iter_mut())
+        .zip(out_b.par_iter_mut())
+        .enumerate()
+        .for_each(|(i, ((or, og), ob))| {
+            let px = handle_pixel(i, w, h, &r, &g, &b, gains, reconstruct);
+            (*or, *og, *ob) = (px.r, px.g, px.b);
+        });
+}
 
-    for (i, px) in out.into_iter().enumerate() {
-        image.r[i] = px.r;
-        image.g[i] = px.g;
-        image.b[i] = px.b;
+#[allow(clippy::too_many_arguments)]
+fn handle_pixel(
+    i: usize,
+    w: u32,
+    h: u32,
+    r: &[f32],
+    g: &[f32],
+    b: &[f32],
+    gains: [f32; 3],
+    reconstruct: bool,
+) -> Pixel {
+    let px = Pixel::new(r[i], g[i], b[i]);
+    let clipped = [px.r >= CLIP, px.g >= CLIP, px.b >= CLIP];
+    let nclip = clipped.iter().filter(|c| **c).count();
+    if nclip > 0 {
+        if reconstruct && nclip < 3 {
+            let (x, y) = ((i as u32) % w, (i as u32) / w);
+            if let Some(p) = reconstruct_from_neighbours(w, h, r, g, b, x, y, px, clipped) {
+                return p;
+            }
+        }
+        return neutral_after_wb(px, gains);
     }
+    let peak = px.r.max(px.g).max(px.b);
+    if peak <= KNEE {
+        return px;
+    }
+    let t = smoothstep((peak - KNEE) / (CLIP - KNEE));
+    let n = neutral_after_wb(px, gains);
+    Pixel::new(lerp(px.r, n.r, t), lerp(px.g, n.g, t), lerp(px.b, n.b, t))
 }
 
 /// Camera values that become `(v, v, v)` after WB, with `v` = brightest WB'd channel.

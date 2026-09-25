@@ -33,5 +33,11 @@ Render a real file through the engine and time it:
 cargo run --release -p epikos-engine --example render_preview -- <RAW> <OUT_DIR> [EV]
 ```
 
+Export a full-resolution 16-bit TIFF (sRGB, Display P3 or ProPhoto, ICC embedded):
+
+```bash
+cargo run --release -p epikos-cli -- export <RAW> -o out.tif --space prophoto
+```
+
 App icons are placeholders; regenerate the full set with
 `npm run tauri icon src-tauri/icons/app-icon-source.png`.

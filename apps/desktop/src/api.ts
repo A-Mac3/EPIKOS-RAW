@@ -1,10 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Adjustments,
   DevelopDocument,
+  ExportReport,
   FileEntry,
   ImageInfo,
+  OutputSpace,
   Preview,
   SaveReport,
 } from "./types";
@@ -15,6 +17,23 @@ export async function pickFolder(): Promise<string | null> {
   const dir = await open({ directory: true, multiple: false, title: "Open folder" });
   return typeof dir === "string" ? dir : null;
 }
+
+/** Native save dialog for a TIFF export; `null` if cancelled. */
+export async function pickExportPath(defaultPath: string): Promise<string | null> {
+  const dest = await save({
+    title: "Export 16-bit TIFF",
+    defaultPath,
+    filters: [{ name: "TIFF image", extensions: ["tif", "tiff"] }],
+  });
+  return dest ?? null;
+}
+
+export const exportTiff = (
+  path: string,
+  adjustments: Adjustments,
+  dest: string,
+  colorSpace: OutputSpace,
+) => invoke<ExportReport>("export_tiff", { path, adjustments, dest, colorSpace });
 
 export const listFolder = (dir: string) => invoke<FileEntry[]>("list_folder", { dir });
 

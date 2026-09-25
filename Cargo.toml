@@ -32,3 +32,20 @@ hex = "0.4"
 clap = { version = "4", features = ["derive"] }
 rawler = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+# Dev builds (incl. `tauri dev`): optimise the image engine and all dependencies so
+# decoding and previews run at near-release speed; the app shell keeps fast debug builds.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.epikos-core]
+opt-level = 3
+
+[profile.dev.package.epikos-decode]
+opt-level = 3
+
+[profile.dev.package.epikos-pipeline]
+opt-level = 3
+
+[profile.dev.package.epikos-engine]
+opt-level = 3

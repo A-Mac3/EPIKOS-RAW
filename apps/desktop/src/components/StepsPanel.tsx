@@ -24,7 +24,7 @@ const STEPS: { title: string; planned: string }[] = [
   { title: "Base Color Grading & HSL", planned: "Skin tone protection, foliage shift, background re-coloration" },
   { title: "Atmospheric & Light Sculpting", planned: "Volumetric light shafts, localized glow, depth-based fog and haze" },
   { title: "Creative Split-Toning & Curves", planned: "Highlight warmth, shadow cooling, black point and matte" },
-  { title: "Final Finishing & Handoff", planned: "Analog grain, vignette, 16-bit TIFF / PSD / DNG export" },
+  { title: "Final Finishing & Handoff", planned: "Analog grain, vignette, PSD / DNG export. 16-bit TIFF export is available now (Export… / ⌘E)" },
 ];
 
 // Temperature slider is logarithmic so the useful 2 000–10 000 K range gets most travel.
