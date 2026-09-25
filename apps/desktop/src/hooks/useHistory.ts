@@ -43,6 +43,14 @@ export function useHistory<T>(initial: T) {
     [edit, endEdit],
   );
 
+  /**
+   * Change the current value without a new undo step: the change joins the last step
+   * (e.g. a correction that arrives just after the edit it belongs to).
+   */
+  const amend = useCallback((update: (value: T) => T) => {
+    setState((s) => ({ ...s, present: update(s.present) }));
+  }, []);
+
   const undo = useCallback(() => {
     pending.current = null;
     setState((s) =>
@@ -74,6 +82,7 @@ export function useHistory<T>(initial: T) {
     edit,
     endEdit,
     commit,
+    amend,
     undo,
     redo,
     reset,

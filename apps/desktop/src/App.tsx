@@ -5,6 +5,8 @@ import { ExportDialog } from "./components/ExportDialog";
 import { captureSummary } from "./format";
 import { Filmstrip } from "./components/Filmstrip";
 import { Histogram } from "./components/Histogram";
+import type { LightKind } from "./components/LightPalette";
+import { LookPromptBar } from "./components/LookPromptBar";
 import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
 import { Viewer } from "./components/Viewer";
@@ -59,7 +61,9 @@ export default function App() {
   const masks = useMasks(info?.path ?? null, adjustments);
   const { styles, thumbs } = useStyles(info?.path ?? null, adjustments);
   const [picking, setPicking] = useState<PickTarget>(null);
-  const depth = useDepth(info?.path ?? null, adjustments, picking === "light");
+  const promptRef = useRef<HTMLInputElement>(null);
+  const [lightDrag, setLightDrag] = useState(false);
+  const depth = useDepth(info?.path ?? null, adjustments, picking === "light" || lightDrag);
   const [selectedLight, setSelectedLight] = useState<number | null>(null);
   const at = adjustments.atmosphere;
   const lightMarker = at.shafts > 0 && !at.shaftAuto ? { x: at.shaftX, y: at.shaftY } : null;
@@ -84,6 +88,65 @@ export default function App() {
       setPicking(null);
     },
     [history.commit, depthMap, adjustments.atmosphere.lights.length],
+  );
+  // Drop presets for the light palette, relative to the surface under the drop point.
+  const presetFor = (kind: LightKind, surface: number) =>
+    ({
+      key: { depth: Math.max(0, surface - 0.1), intensity: 55, reach: 45, warmth: 20, halo: 0 },
+      rim: { depth: Math.min(1, surface + 0.12), intensity: 75, reach: 50, warmth: 45, halo: 55 },
+      sun: { depth: 0.97, intensity: 70, reach: 90, warmth: 80, halo: 80 },
+    })[kind];
+  // A drop that beat the depth map: its depth is corrected once the map arrives.
+  const [pendingDrop, setPendingDrop] = useState<{ index: number; kind: LightKind; x: number; y: number } | null>(
+    null,
+  );
+  const dropLight = useCallback(
+    (kind: LightKind, x: number, y: number) => {
+      const surface = depthAt(depthMap, x, y);
+      const index = Math.min(3, adjustments.atmosphere.lights.length);
+      history.commit((a) => ({
+        ...a,
+        atmosphere: {
+          ...a.atmosphere,
+          lights: [...a.atmosphere.lights, { x, y, ...presetFor(kind, surface ?? 0.5) }].slice(-4),
+        },
+      }));
+      setSelectedLight(index);
+      setPendingDrop(surface === null ? { index, kind, x, y } : null);
+    },
+    [history.commit, depthMap, adjustments.atmosphere.lights.length],
+  );
+  useEffect(() => {
+    if (!pendingDrop || !depthMap) return;
+    const { index, kind, x, y } = pendingDrop;
+    const depth = presetFor(kind, depthAt(depthMap, x, y) ?? 0.5).depth;
+    // Part of the drop's own undo step, not a new one.
+    history.amend((a) => ({
+      ...a,
+      atmosphere: {
+        ...a.atmosphere,
+        lights: a.atmosphere.lights.map((l, k) => (k === index && l.x === x && l.y === y ? { ...l, depth } : l)),
+      },
+    }));
+    setPendingDrop(null);
+  }, [pendingDrop, depthMap, history.amend]);
+  const depthCommit = useRef<number | undefined>(undefined);
+  const nudgeLightDepth = useCallback(
+    (i: number, delta: number) => {
+      history.edit((a) => ({
+        ...a,
+        atmosphere: {
+          ...a.atmosphere,
+          lights: a.atmosphere.lights.map((l, k) =>
+            k === i ? { ...l, depth: Math.min(1, Math.max(0, Math.round((l.depth + delta) * 100) / 100)) } : l,
+          ),
+        },
+      }));
+      // A scroll gesture is one undo step: close it once scrolling pauses.
+      window.clearTimeout(depthCommit.current);
+      depthCommit.current = window.setTimeout(history.endEdit, 400);
+    },
+    [history.edit, history.endEdit],
   );
   const moveLight = useCallback(
     (i: number, x: number, y: number) =>
@@ -206,6 +269,7 @@ export default function App() {
   useEffect(() => {
     setPicking(null);
     setSelectedLight(null);
+    setLightDrag(false);
   }, [info?.path]);
 
   useEffect(() => {
@@ -213,7 +277,10 @@ export default function App() {
       if (exportOpen) return; // the modal owns the keyboard
       if (e.key === "Escape") setPicking(null);
       const mod = e.metaKey || e.ctrlKey;
-      const inField = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
+      const inField =
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLSelectElement ||
+        e.target instanceof HTMLTextAreaElement;
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) history.redo();
@@ -224,9 +291,21 @@ export default function App() {
       } else if (mod && e.key.toLowerCase() === "e") {
         e.preventDefault();
         if (info) setExportOpen(true);
+      } else if (mod && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        promptRef.current?.focus();
+        promptRef.current?.select();
       } else if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
         void chooseFolder();
+      } else if (!inField && (e.key === "Backspace" || e.key === "Delete") && selectedLight !== null) {
+        e.preventDefault();
+        const i = selectedLight;
+        history.commit((a) => ({
+          ...a,
+          atmosphere: { ...a.atmosphere, lights: a.atmosphere.lights.filter((_, k) => k !== i) },
+        }));
+        setSelectedLight(null);
       } else if (!inField && e.key === "ArrowRight") {
         step(1);
       } else if (!inField && e.key === "ArrowLeft") {
@@ -244,7 +323,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [history.undo, history.redo, chooseFolder, step, exportOpen, info]);
+  }, [history.undo, history.redo, history.commit, chooseFolder, step, exportOpen, info, selectedLight]);
 
   const onResize = useCallback((w: number, h: number) => setViewSize({ w, h }), []);
 
@@ -321,6 +400,11 @@ export default function App() {
       {folder ? (
         <>
           <main className="stage">
+            {info && (
+              <ErrorBoundary area="the look prompt">
+                <LookPromptBar ref={promptRef} path={info.path} adjustments={adjustments} commit={history.commit} />
+              </ErrorBoundary>
+            )}
             {files.length === 0 ? (
               <div className="viewer-status">No RAW or DNG files in this folder.</div>
             ) : (
@@ -340,6 +424,9 @@ export default function App() {
                   onSelectLight={setSelectedLight}
                   onMoveLight={moveLight}
                   onMoveLightEnd={history.endEdit}
+                  onLightDepth={nudgeLightDepth}
+                  onDropLight={dropLight}
+                  onLightPrepare={() => setLightDrag(true)}
                 />
               </ErrorBoundary>
             )}
@@ -350,7 +437,6 @@ export default function App() {
               <ErrorBoundary area="the side panel">
                 {info && (
                   <StylePanel
-                    path={info.path}
                     styles={styles}
                     thumbs={thumbs}
                     adjustments={adjustments}

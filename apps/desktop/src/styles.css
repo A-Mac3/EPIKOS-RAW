@@ -121,8 +121,101 @@ code {
 .stage {
   grid-area: stage;
   position: relative;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-stage);
   min-height: 0;
+}
+
+.stage > .viewer {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+  margin: 16px;
+}
+
+/* ---- Natural Language Look Prompting bar ---------------------------------------- */
+
+.prompt-bar {
+  position: relative;
+  flex: none;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  z-index: 5;
+}
+
+.prompt-bar-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.prompt-bar-input:focus-within {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+
+.prompt-bar-icon {
+  color: var(--accent);
+}
+
+.prompt-bar-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text);
+  user-select: text;
+}
+
+.prompt-bar-input input::placeholder {
+  color: var(--text-faint);
+}
+
+.prompt-bar-input kbd {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* Floats over the photo so the viewer never jumps. */
+.prompt-bar-result {
+  position: absolute;
+  top: 100%;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  margin-top: 6px;
+  padding: 8px 40px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgb(35 35 35 / 94%);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 40%);
+}
+
+.prompt-bar-result .chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.prompt-bar-result > .btn.icon {
+  position: absolute;
+  top: 6px;
+  right: 6px;
 }
 
 .panel {
@@ -1043,36 +1136,6 @@ input[type="range"]::-moz-range-thumb {
 
 /* ---- Section 4: prompt, fusion, 3D lights ------------------------------------------- */
 
-.look-prompt {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.look-prompt textarea {
-  resize: vertical;
-  min-height: 44px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-2);
-  color: var(--text);
-  font: inherit;
-  user-select: text;
-}
-
-.look-prompt textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.look-prompt-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
 .btn.link {
   border: 0;
   background: none;
@@ -1241,6 +1304,12 @@ input[type="range"]::-moz-range-thumb {
   font-size: 9px;
 }
 
+.viewer-light-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
 .viewer-light {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -1255,4 +1324,104 @@ input[type="range"]::-moz-range-thumb {
 .viewer-light.is-selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgb(255 200 100 / 80%);
+}
+
+/* How far the selected light reaches. */
+.viewer-light-reach {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px dashed rgb(255 210 122 / 55%);
+  background: radial-gradient(circle, rgb(255 210 122 / 8%), rgb(255 210 122 / 0%) 70%);
+  pointer-events: none;
+}
+
+.viewer-light-label {
+  position: absolute;
+  left: 18px;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 70%);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.viewer-light-label small {
+  color: rgb(255 255 255 / 60%);
+  font-size: 10px;
+}
+
+/* Palette of lights to drag onto the photo. */
+.light-palette {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgb(30 30 30 / 88%);
+  z-index: 4;
+}
+
+.light-palette-title {
+  padding: 0 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.light-source {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.light-source:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+}
+
+.light-source-dot,
+.light-ghost {
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff3c4 0 30%, #ffd27a 50%, rgb(255 210 122 / 0%) 72%);
+}
+
+.light-source-dot {
+  width: 12px;
+  height: 12px;
+}
+
+.light-source.is-rim .light-source-dot,
+.light-ghost.is-rim {
+  background: radial-gradient(circle, #fff 0 20%, rgb(255 190 120 / 0%) 35%, #ffbe78 55%, rgb(255 190 120 / 0%) 72%);
+}
+
+.light-source.is-sun .light-source-dot,
+.light-ghost.is-sun {
+  background: radial-gradient(circle, #fff6d8 0 35%, #ffb347 55%, rgb(255 179 71 / 0%) 75%);
+}
+
+.light-ghost {
+  position: fixed;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 50;
+  filter: drop-shadow(0 0 10px rgb(255 200 100 / 80%));
 }

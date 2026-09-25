@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Mask, Preview } from "../types";
+import { LightPalette, type LightKind } from "./LightPalette";
 
 /** Lightroom-style red mask overlay; depth in cyan (brighter = nearer). */
 const OVERLAY_RGB = [255, 48, 64];
@@ -21,11 +22,17 @@ interface Props {
   /** When set, a click on the image reports its 0–1 position instead. */
   onPick?: ((x: number, y: number) => void) | null;
   /** 3D virtual lights: draggable markers, smaller the farther away. */
-  lights?: { x: number; y: number; depth: number }[];
+  lights?: { x: number; y: number; depth: number; reach: number }[];
   selectedLight?: number | null;
   onSelectLight?: (i: number) => void;
   onMoveLight?: (i: number, x: number, y: number) => void;
   onMoveLightEnd?: () => void;
+  /** Scroll over a light: move it nearer (< 0) or farther (> 0). */
+  onLightDepth?: (i: number, delta: number) => void;
+  /** A light dragged from the palette was dropped at (x, y), 0–1 on the photo. */
+  onDropLight?: (kind: LightKind, x: number, y: number) => void;
+  /** The light palette may be used soon: fetch what a drop needs (the depth map). */
+  onLightPrepare?: () => void;
 }
 
 export function Viewer({
@@ -43,7 +50,11 @@ export function Viewer({
   onSelectLight,
   onMoveLight,
   onMoveLightEnd,
+  onLightDepth,
+  onDropLight,
+  onLightPrepare,
 }: Props) {
+  const imageRef = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlayCanvas = useRef<HTMLCanvasElement>(null);
@@ -99,6 +110,7 @@ export function Viewer({
   return (
     <div className="viewer" ref={frame}>
       <div
+        ref={imageRef}
         className={`viewer-image${onPick ? " is-picking" : ""}`}
         style={style}
         onClick={(e) => {
@@ -118,26 +130,43 @@ export function Viewer({
         {!showingBefore &&
           lights.map((l, i) => {
             const size = 26 - 14 * l.depth;
+            const selected = i === selectedLight;
+            // Reach as the engine models it: 5–65 % of the frame's long side.
+            const box = imageRef.current?.getBoundingClientRect();
+            const reachPx = box ? (0.05 + 0.6 * (l.reach / 100)) * Math.max(box.width, box.height) : 0;
             return (
-              <span
-                key={i}
-                className={`viewer-light${i === selectedLight ? " is-selected" : ""}`}
-                style={{ left: `${l.x * 100}%`, top: `${l.y * 100}%`, width: size, height: size }}
-                title={`Light ${i + 1}: drag to move; depth ${Math.round(l.depth * 100)}%`}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  onSelectLight?.(i);
-                }}
-                onPointerMove={(e) => {
-                  if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-                  const box = e.currentTarget.parentElement!.getBoundingClientRect();
-                  const clamp = (v: number) => Math.min(1, Math.max(0, v));
-                  onMoveLight?.(i, clamp((e.clientX - box.left) / box.width), clamp((e.clientY - box.top) / box.height));
-                }}
-                onPointerUp={() => onMoveLightEnd?.()}
-                onClick={(e) => e.stopPropagation()}
-              />
+              <div key={i} className="viewer-light-anchor" style={{ left: `${l.x * 100}%`, top: `${l.y * 100}%` }}>
+                {selected && <span className="viewer-light-reach" style={{ width: reachPx * 2, height: reachPx * 2 }} />}
+                <span
+                  className={`viewer-light${selected ? " is-selected" : ""}`}
+                  style={{ width: size, height: size }}
+                  title={`Light ${i + 1}: drag to move, scroll to change depth`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    onSelectLight?.(i);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+                    const b = imageRef.current!.getBoundingClientRect();
+                    const clamp = (v: number) => Math.min(1, Math.max(0, v));
+                    onMoveLight?.(i, clamp((e.clientX - b.left) / b.width), clamp((e.clientY - b.top) / b.height));
+                  }}
+                  onPointerUp={() => onMoveLightEnd?.()}
+                  onClick={(e) => e.stopPropagation()}
+                  onWheel={(e) => {
+                    e.preventDefault();
+                    onSelectLight?.(i);
+                    onLightDepth?.(i, Math.sign(e.deltaY) * 0.02);
+                  }}
+                />
+                {selected && (
+                  <span className="viewer-light-label">
+                    Light {i + 1} · depth {Math.round(l.depth * 100)}%
+                    <small>scroll: nearer / farther · ⌫ remove</small>
+                  </span>
+                )}
+              </div>
             );
           })}
         {marker && !showingBefore && (
@@ -150,6 +179,16 @@ export function Viewer({
         )}
       </div>
       {onPick && <div className="viewer-tag">Click the image to place the light</div>}
+      {preview && onDropLight && !showingBefore && (
+        <LightPalette
+          onPrepare={onLightPrepare}
+          onDrop={(kind, cx, cy) => {
+            const b = imageRef.current?.getBoundingClientRect();
+            if (!b || cx < b.left || cx > b.right || cy < b.top || cy > b.bottom) return;
+            onDropLight(kind, (cx - b.left) / b.width, (cy - b.top) / b.height);
+          }}
+        />
+      )}
       {showingBefore && preview && <div className="viewer-tag">Before</div>}
       {(loading || (busy && !preview)) && !error && <div className="viewer-status">Developing…</div>}
       {error && <div className="viewer-status is-error">{error}</div>}

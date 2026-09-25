@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { Adjustments, Preview, StyleInfo, StyleWeight } from "../types";
 import { FusionWheel } from "./FusionWheel";
-import { LookPromptBox } from "./LookPromptBox";
 import { Slider } from "./Slider";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
 
 interface Props {
-  path: string;
   styles: StyleInfo[];
   thumbs: Record<string, Preview>;
   adjustments: Adjustments;
@@ -17,7 +15,7 @@ interface Props {
 }
 
 /** Parametric Style Engine: one-click styles layered over the Step 4–5 settings. */
-export function StylePanel({ path, styles, thumbs, adjustments, edit, endEdit, commit }: Props) {
+export function StylePanel({ styles, thumbs, adjustments, edit, endEdit, commit }: Props) {
   const [open, setOpen] = useState(true);
   const style = adjustments.style;
   const fused = style.blend.length > 0;
@@ -60,7 +58,6 @@ export function StylePanel({ path, styles, thumbs, adjustments, edit, endEdit, c
       </button>
       {open && (
         <div className="step-body">
-          <LookPromptBox path={path} adjustments={adjustments} commit={commit} />
           <div className="style-grid" role="radiogroup" aria-label="Style">
             {styles.map((s) => (
               <button
