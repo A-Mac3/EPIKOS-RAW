@@ -57,6 +57,28 @@ export interface TemperatureTint {
   tint: number;
 }
 
+/** EXIF rationals are [numerator, denominator]. */
+export type Ratio = [number, number];
+
+export interface CaptureMetadata {
+  make: string;
+  model: string;
+  dateTimeOriginal: string | null;
+  exposureTime: Ratio | null;
+  fNumber: Ratio | null;
+  focalLength: Ratio | null;
+  exposureBias: Ratio | null;
+  iso: number | null;
+  lensMake: string | null;
+  lensModel: string | null;
+  gps: { latitude: Ratio[] | null; longitude: Ratio[] | null } | null;
+}
+
+export interface ExportOptions {
+  colorSpace: OutputSpace;
+  includeLocation: boolean;
+}
+
 export interface ImageInfo {
   path: string;
   name: string;
@@ -68,6 +90,7 @@ export interface ImageInfo {
   monochrome: boolean;
   asShot: TemperatureTint | null;
   document: DevelopDocument;
+  capture: CaptureMetadata;
   loadedFrom: string | null;
 }
 
@@ -92,6 +115,8 @@ export interface ExportReport {
   height: number;
   colorSpace: string;
   bytes: number;
+  wroteExif: boolean;
+  wroteLocation: boolean;
   developMs: number;
   writeMs: number;
 }

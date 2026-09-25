@@ -106,6 +106,12 @@ code {
   font-weight: 600;
 }
 
+.topbar-title .capture {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -223,6 +229,10 @@ code {
 
 .modal .field {
   gap: 8px;
+}
+
+.modal-meta {
+  margin-top: 16px;
 }
 
 .modal-status {

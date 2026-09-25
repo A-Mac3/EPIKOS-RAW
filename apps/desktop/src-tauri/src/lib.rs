@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use epikos_core::CameraFormat;
-use epikos_engine::{Engine, ExportReport, FileEntry, ImageInfo, OutputSpace, SaveReport};
+use epikos_engine::{Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, SaveReport};
 use epikos_sidecar::{Adjustments, DevelopDocument};
 use tauri::ipc::Response;
 use tauri::State;
@@ -89,12 +89,12 @@ async fn export_tiff(
     path: String,
     adjustments: Adjustments,
     dest: String,
-    color_space: OutputSpace,
+    options: ExportOptions,
 ) -> CmdResult<ExportReport> {
     let path = raw_path(&path)?;
     let dest = PathBuf::from(dest);
     let engine = engine.inner().clone();
-    blocking(move || engine.export_tiff(&path, &adjustments, &dest, color_space)).await
+    blocking(move || engine.export_tiff(&path, &adjustments, &dest, options)).await
 }
 
 /// Only existing RAW/DNG files may be opened, and sidecars are only written next to them.

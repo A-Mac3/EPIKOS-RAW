@@ -3,10 +3,10 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Adjustments,
   DevelopDocument,
+  ExportOptions,
   ExportReport,
   FileEntry,
   ImageInfo,
-  OutputSpace,
   Preview,
   SaveReport,
 } from "./types";
@@ -32,8 +32,8 @@ export const exportTiff = (
   path: string,
   adjustments: Adjustments,
   dest: string,
-  colorSpace: OutputSpace,
-) => invoke<ExportReport>("export_tiff", { path, adjustments, dest, colorSpace });
+  options: ExportOptions,
+) => invoke<ExportReport>("export_tiff", { path, adjustments, dest, options });
 
 export const listFolder = (dir: string) => invoke<FileEntry[]>("list_folder", { dir });
 

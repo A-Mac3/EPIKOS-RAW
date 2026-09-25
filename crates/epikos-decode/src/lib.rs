@@ -4,6 +4,7 @@
 //! [`rawler`]. Black/white scaling and sensor metadata become [`epikos_core`] types.
 
 mod convert;
+mod metadata;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -37,8 +38,10 @@ pub fn decode_file(path: impl AsRef<Path>) -> Result<DecodedRaw> {
     let mut raw = rawler::decode(&src, &params).map_err(decode_err)?;
     raw.apply_scaling().map_err(decode_err)?;
     // rawler 0.8 leaves `RawImage::orientation` as Normal; the EXIF tag is authoritative.
-    let orientation = exif_orientation(&src, &params);
-    convert::from_rawler(path, raw, digest, orientation)
+    let (orientation, capture) = metadata::read(&src, &params, &raw.make, &raw.model);
+    let mut decoded = convert::from_rawler(path, raw, digest, orientation)?;
+    decoded.metadata = capture;
+    Ok(decoded)
 }
 
 /// Camera-embedded JPEG preview, upright, downscaled so its longest side is at most

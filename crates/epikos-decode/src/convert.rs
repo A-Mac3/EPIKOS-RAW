@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use epikos_core::{
-    CameraFormat, CfaPattern, Error, MosaicF32, Orientation, Result, SensorLayout, SensorProfile,
+    CameraFormat, CaptureMetadata, CfaPattern, Error, MosaicF32, Orientation, Result, SensorLayout,
+    SensorProfile,
 };
 use rawler::rawimage::{RawImage, RawImageData, RawPhotometricInterpretation};
 
@@ -12,6 +13,8 @@ pub struct DecodedRaw {
     pub mosaic: MosaicF32,
     pub source_sha256: String,
     pub source_path: String,
+    /// EXIF capture metadata (camera, lens, exposure, time, GPS) for exports.
+    pub metadata: CaptureMetadata,
 }
 
 pub fn from_rawler(
@@ -104,6 +107,7 @@ pub fn from_rawler(
         },
         source_sha256: digest,
         source_path: path.to_string_lossy().into_owned(),
+        metadata: CaptureMetadata::default(),
     })
 }
 

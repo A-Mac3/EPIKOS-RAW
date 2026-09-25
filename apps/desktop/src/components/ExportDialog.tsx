@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { exportTiff, pickExportPath } from "../api";
 import type { Adjustments, ExportReport, ImageInfo, OutputSpace } from "../types";
-import { Segmented } from "./Slider";
+import { hasLocation } from "../format";
+import { Segmented, Toggle } from "./Slider";
 
 interface Props {
   info: ImageInfo;
@@ -16,6 +17,7 @@ const SPACES: { value: OutputSpace; label: string; hint: string }[] = [
 ];
 
 const SPACE_KEY = "epikos.export.space";
+const LOCATION_KEY = "epikos.export.includeLocation";
 
 type State =
   | { kind: "idle" }
@@ -28,7 +30,11 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
   const [space, setSpace] = useState<OutputSpace>(
     () => (localStorage.getItem(SPACE_KEY) as OutputSpace | null) ?? "srgb",
   );
+  const [includeLocation, setIncludeLocation] = useState(
+    () => localStorage.getItem(LOCATION_KEY) !== "false",
+  );
   const [state, setState] = useState<State>({ kind: "idle" });
+  const photoHasLocation = hasLocation(info.capture);
   const dialog = useRef<HTMLDialogElement>(null);
   const busy = state.kind === "exporting";
 
@@ -38,6 +44,7 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
 
   const run = async () => {
     localStorage.setItem(SPACE_KEY, space);
+    localStorage.setItem(LOCATION_KEY, String(includeLocation));
     const stem = info.name.replace(/\.[^.]+$/, "");
     const folder = info.path.slice(0, info.path.length - info.name.length);
     const dest = await pickExportPath(`${folder}${stem}.tif`);
@@ -45,7 +52,10 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
     setState({ kind: "exporting", dest });
     try {
       // Snapshot of the current edits, including any not yet autosaved.
-      const report = await exportTiff(info.path, adjustments, dest, space);
+      const report = await exportTiff(info.path, adjustments, dest, {
+        colorSpace: space,
+        includeLocation,
+      });
       setState({ kind: "done", report });
     } catch (e) {
       setState({ kind: "error", message: String(e) });
@@ -79,11 +89,24 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         <span className="hint">{hint} The ICC profile is embedded.</span>
       </div>
 
+      <div className="field modal-meta">
+        <span className="field-label">Metadata</span>
+        <span className="hint">
+          Camera, lens, exposure and capture time are copied from the RAW.
+        </span>
+        {photoHasLocation ? (
+          <Toggle label="Include location (GPS)" checked={includeLocation} onChange={setIncludeLocation} />
+        ) : (
+          <span className="hint">This photo has no location data.</span>
+        )}
+      </div>
+
       {state.kind === "exporting" && <p className="modal-status">Developing at full resolution…</p>}
       {state.kind === "done" && (
         <p className="modal-status is-ok" title={state.report.path}>
           Saved {state.report.path.split("/").pop()} · {(state.report.bytes / 1e6).toFixed(0)} MB ·{" "}
           {((state.report.developMs + state.report.writeMs) / 1000).toFixed(1)} s
+          {state.report.wroteLocation ? " · with location" : ""}
         </p>
       )}
       {state.kind === "error" && <p className="modal-status is-error">{state.message}</p>}

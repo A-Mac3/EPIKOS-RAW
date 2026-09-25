@@ -22,7 +22,7 @@ use serde::Serialize;
 
 mod export;
 pub use epikos_pipeline::OutputSpace;
-pub use export::ExportReport;
+pub use export::{ExportOptions, ExportReport};
 
 /// A RAW/DNG file found while browsing a folder.
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +50,8 @@ pub struct ImageInfo {
     /// Camera as-shot white balance expressed as temperature/tint, to seed the sliders.
     pub as_shot: Option<TemperatureTint>,
     pub document: DevelopDocument,
+    /// Camera, lens, exposure, capture time and GPS from the RAW's EXIF.
+    pub capture: epikos_core::CaptureMetadata,
     /// Which sidecar the document was loaded from, if any.
     pub loaded_from: Option<String>,
 }
@@ -176,6 +178,7 @@ impl Engine {
             monochrome,
             as_shot,
             document,
+            capture: raw.metadata.clone(),
             loaded_from: loaded_from.map(|p| p.to_string_lossy().into_owned()),
         })
     }
@@ -209,16 +212,16 @@ impl Engine {
         })
     }
 
-    /// Develop at full resolution and write a 16-bit TIFF in `space` to `dest`.
+    /// Develop at full resolution and write a 16-bit TIFF (with EXIF) to `dest`.
     pub fn export_tiff(
         &self,
         path: &Path,
         adjustments: &Adjustments,
         dest: &Path,
-        space: OutputSpace,
+        options: ExportOptions,
     ) -> Result<ExportReport> {
         let loaded = self.load(path)?;
-        export::export_tiff(&loaded, adjustments, dest, space)
+        export::export_tiff(&loaded, adjustments, dest, options)
     }
 
     /// JPEG thumbnail: the camera's embedded preview when available, otherwise a
@@ -345,6 +348,7 @@ mod tests {
                 },
                 source_sha256: String::new(),
                 source_path: "synthetic.ARW".into(),
+                metadata: Default::default(),
             },
             bases: Mutex::new(Vec::new()),
         }
@@ -382,6 +386,13 @@ mod tests {
         assert!(bright.rgba[1] > dark.rgba[1]);
     }
 
+    fn prophoto() -> ExportOptions {
+        ExportOptions {
+            color_space: OutputSpace::ProPhoto,
+            ..ExportOptions::default()
+        }
+    }
+
     #[test]
     fn export_writes_a_16_bit_tiff_with_icc_and_no_partial_file() {
         use tiff::decoder::Decoder;
@@ -390,13 +401,8 @@ mod tests {
         let dir = temp_dir("export");
         let dest = dir.join("out.tif");
         let loaded = synthetic_loaded(64, 48);
-        let report = export::export_tiff(
-            &loaded,
-            &Adjustments::default(),
-            &dest,
-            OutputSpace::ProPhoto,
-        )
-        .unwrap();
+        let report =
+            export::export_tiff(&loaded, &Adjustments::default(), &dest, prophoto()).unwrap();
         assert_eq!((report.width, report.height), (64, 48));
         assert!(!dir.join("out.tif.partial").exists());
 
@@ -410,6 +416,70 @@ mod tests {
     }
 
     #[test]
+    fn export_copies_exif_and_gps_only_when_allowed() {
+        use epikos_core::{CaptureMetadata, GpsInfo};
+        use tiff::decoder::Decoder;
+        use tiff::tags::Tag;
+
+        let dir = temp_dir("export-exif");
+        let mut loaded = synthetic_loaded(16, 16);
+        loaded.raw.metadata = CaptureMetadata {
+            make: "FUJIFILM".into(),
+            model: "X-T5".into(),
+            exposure_time: Some((1, 250)),
+            f_number: Some((28, 10)),
+            iso: Some(3200),
+            lens_model: Some("XF33mmF1.4 R LM WR".into()),
+            date_time_original: Some("2026:05:14 18:42:07".into()),
+            gps: Some(GpsInfo {
+                latitude_ref: Some("S".into()),
+                latitude: Some([(33, 1), (52, 1), (1234, 100)]),
+                longitude_ref: Some("E".into()),
+                longitude: Some([(151, 1), (12, 1), (3456, 100)]),
+                ..GpsInfo::default()
+            }),
+            ..CaptureMetadata::default()
+        };
+
+        for include_location in [true, false] {
+            let dest = dir.join(format!("gps-{include_location}.tif"));
+            let options = ExportOptions {
+                include_location,
+                ..ExportOptions::default()
+            };
+            let report =
+                export::export_tiff(&loaded, &Adjustments::default(), &dest, options).unwrap();
+            assert_eq!(report.wrote_location, include_location);
+
+            let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
+            assert_eq!(dec.get_tag_ascii_string(Tag::Make).unwrap(), "FUJIFILM");
+            assert_eq!(dec.get_tag_u32(Tag::Orientation).unwrap(), 1);
+            assert_eq!(
+                dec.find_tag(Tag::GpsDirectory).unwrap().is_some(),
+                include_location
+            );
+
+            let ptr = dec
+                .get_tag(Tag::ExifDirectory)
+                .unwrap()
+                .into_ifd_pointer()
+                .unwrap();
+            let exif = dec.read_directory(ptr).unwrap();
+            let mut tags = dec.read_directory_tags(&exif);
+            assert_eq!(
+                tags.get_tag_ascii_string(Tag::Unknown(42036)).unwrap(),
+                "XF33mmF1.4 R LM WR"
+            );
+            assert_eq!(
+                tags.get_tag_ascii_string(Tag::Unknown(36867)).unwrap(),
+                "2026:05:14 18:42:07"
+            );
+            assert_eq!(tags.get_tag_u32(Tag::Unknown(34855)).unwrap(), 3200);
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn export_refuses_non_tiff_and_the_source_file() {
         let dir = temp_dir("export-guard");
         let raw = dir.join("IMG.ARW");
@@ -417,8 +487,11 @@ mod tests {
         let mut loaded = synthetic_loaded(8, 8);
         loaded.raw.source_path = raw.to_string_lossy().into_owned();
         let adj = Adjustments::default();
-        assert!(export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), OutputSpace::Srgb).is_err());
-        assert!(export::export_tiff(&loaded, &adj, &raw, OutputSpace::Srgb).is_err());
+        assert!(
+            export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default())
+                .is_err()
+        );
+        assert!(export::export_tiff(&loaded, &adj, &raw, ExportOptions::default()).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 

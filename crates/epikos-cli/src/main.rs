@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use epikos_core::{ImageRgbF32, Result};
 use epikos_decode::decode_file;
-use epikos_engine::{Engine, OutputSpace};
+use epikos_engine::{Engine, ExportOptions, OutputSpace};
 use epikos_pipeline::develop;
 use epikos_sidecar::{
     load_json, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, DevelopDocument, SourceRef,
@@ -43,6 +43,9 @@ enum Commands {
         /// Exposure override in EV (otherwise the sidecar value).
         #[arg(long)]
         ev: Option<f32>,
+        /// Leave GPS location out of the exported metadata.
+        #[arg(long)]
+        no_location: bool,
     },
 }
 
@@ -71,7 +74,8 @@ fn run() -> Result<()> {
             out,
             space,
             ev,
-        } => export_cmd(&path, &out, space, ev),
+            no_location,
+        } => export_cmd(&path, &out, space, ev, !no_location),
     }
 }
 
@@ -134,7 +138,13 @@ fn develop_cmd(path: &Path, out: Option<PathBuf>, sidecar: Option<PathBuf>) -> R
     Ok(())
 }
 
-fn export_cmd(path: &Path, out: &Path, space: Space, ev: Option<f32>) -> Result<()> {
+fn export_cmd(
+    path: &Path,
+    out: &Path,
+    space: Space,
+    ev: Option<f32>,
+    include_location: bool,
+) -> Result<()> {
     let engine = Engine::new(1);
     let mut adjustments = engine.open(path)?.document.adjustments;
     if let Some(ev) = ev {
@@ -145,7 +155,11 @@ fn export_cmd(path: &Path, out: &Path, space: Space, ev: Option<f32>) -> Result<
         Space::P3 => OutputSpace::DisplayP3,
         Space::Prophoto => OutputSpace::ProPhoto,
     };
-    let r = engine.export_tiff(path, &adjustments, out, space)?;
+    let options = ExportOptions {
+        color_space: space,
+        include_location,
+    };
+    let r = engine.export_tiff(path, &adjustments, out, options)?;
     println!(
         "exported {}×{} {} → {} ({:.1} MB; develop {} ms, write {} ms)",
         r.width,
@@ -155,6 +169,15 @@ fn export_cmd(path: &Path, out: &Path, space: Space, ev: Option<f32>) -> Result<
         r.bytes as f64 / 1e6,
         r.develop_ms,
         r.write_ms
+    );
+    println!(
+        "metadata    EXIF {}, GPS {}",
+        if r.wrote_exif { "written" } else { "none" },
+        if r.wrote_location {
+            "written"
+        } else {
+            "not written"
+        }
     );
     Ok(())
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { inTauri, listFolder, openImage, pickFolder, saveDocument } from "./api";
 import { ExportDialog } from "./components/ExportDialog";
+import { captureSummary } from "./format";
 import { Filmstrip } from "./components/Filmstrip";
 import { Histogram } from "./components/Histogram";
 import { StepsPanel } from "./components/StepsPanel";
@@ -213,8 +214,9 @@ export default function App() {
             <>
               <strong>{info.name}</strong>
               <span>
-                {info.make} {info.model} · {info.width}×{info.height} · {info.format}
+                {info.make} {info.model} · {info.width}×{info.height}
               </span>
+              {captureSummary(info.capture) && <span className="capture">{captureSummary(info.capture)}</span>}
             </>
           ) : (
             folder && <span>{folder}</span>
