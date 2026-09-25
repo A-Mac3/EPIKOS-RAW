@@ -3,7 +3,7 @@
 // chart and applies exposure / white balance approximately. Never shipped: main.tsx only
 // imports this behind `import.meta.env.DEV`.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { Adjustments, DevelopDocument, FileEntry, ImageInfo, MaskKind } from "../types";
+import type { Adjustments, DevelopDocument, FileEntry, ImageInfo, MaskKind, StyleInfo } from "../types";
 import { defaultAdjustments } from "../types";
 
 const FOLDER = "/mock/Sydney shoot";
@@ -17,6 +17,34 @@ const FILES: FileEntry[] = ["DSCF0346.RAF", "DSCF0352.RAF", "L1000530.DNG", "L10
 );
 const saved = new Map<string, DevelopDocument>();
 const AS_SHOT = { temperature: 5600, tint: 4 };
+
+// Copy of the engine's built-in styles (crates/epikos-pipeline/src/look/style.rs).
+const STYLES: StyleInfo[] = [
+  {
+    id: "dark-melanin-glow",
+    name: "Dark Melanin Glow",
+    world: "High-Fashion & Melanin Precision",
+    description: "Rich chocolate and bronze undertones with a clean, luminous glow.",
+    skinProtection: 70,
+    swatch: ["#3b2116", "#c98a4b"],
+  },
+  {
+    id: "silver-charcoal",
+    name: "Silver & Charcoal",
+    world: "Character & High-Contrast Portraiture",
+    description: "Black and white with deep blacks and crisp midtone texture.",
+    skinProtection: 60,
+    swatch: ["#111214", "#d9dadc"],
+  },
+  {
+    id: "volumetric-golden-hour",
+    name: "Volumetric Golden Hour",
+    world: "Atmospheric & Environmental Landscapes",
+    description: "Warm low-sun light with soft bloom and a hazy, lifted atmosphere.",
+    skinProtection: 75,
+    swatch: ["#5a3a1c", "#f2b45a"],
+  },
+];
 
 export function installMockBackend() {
   (globalThis as { isTauri?: boolean }).isTauri = true;
@@ -51,6 +79,8 @@ export function installMockBackend() {
         return render(a.adjustments as Adjustments, a.maxWidth as number, a.maxHeight as number, a.path as string);
       case "thumbnail":
         return jpegThumb(a.path as string);
+      case "list_styles":
+        return STYLES;
       case "mask_models":
         return {
           dir: "/mock/models",
@@ -153,6 +183,13 @@ function render(adj: Adjustments, maxW: number, maxH: number, path: string): Arr
   const tint = (wb.tint - AS_SHOT.tint) / 300;
   const mul = [1 + 0.35 * t + tint, 1 - tint, 1 - 0.35 * t + tint];
   const hue = seed(path);
+  // Rough stand-ins for the styles: enough to see the UI react, not the real looks.
+  const k = adj.style?.id ? (adj.style.amount ?? 100) / 100 : 0;
+  const mono = adj.style?.id === "silver-charcoal" ? k : 0;
+  const warm =
+    adj.style?.id === "volumetric-golden-hour" ? [1 + 0.25 * k, 1 + 0.05 * k, 1 - 0.3 * k]
+    : adj.style?.id === "dark-melanin-glow" ? [1 + 0.08 * k, 1, 1 - 0.1 * k]
+    : [1, 1, 1];
 
   const hist = new Uint32Array(3 * 256);
   const out = new ArrayBuffer(8 + hist.byteLength + w * h * 4);
@@ -162,7 +199,9 @@ function render(adj: Adjustments, maxW: number, maxH: number, path: string): Arr
   const px = new Uint8ClampedArray(out, 8 + hist.byteLength);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const lin = scene(x / w, y / h, hue);
+      const raw = scene(x / w, y / h, hue);
+      const grey = 0.2627 * raw[0] + 0.678 * raw[1] + 0.0593 * raw[2];
+      const lin = raw.map((v, c) => (v + (grey - v) * mono) * warm[c]);
       const i = (y * w + x) * 4;
       for (let c = 0; c < 3; c++) {
         const v = Math.max(0, lin[c] * gain * mul[c]);

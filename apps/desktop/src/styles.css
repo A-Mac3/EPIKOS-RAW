@@ -366,9 +366,13 @@ code {
 
 /* ---- Steps panel ----------------------------------------------------------------- */
 
-.steps {
+.panel-scroll {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+}
+
+.steps {
   padding: 0 0 24px;
 }
 
@@ -760,4 +764,149 @@ input[type="range"]::-moz-range-thumb {
   background: #3a3a3a;
   border-radius: 5px;
   border: 2px solid var(--panel);
+}
+
+/* ---- Styles panel -------------------------------------------------------------- */
+
+.styles {
+  border-bottom: 1px solid var(--line);
+}
+
+.styles-icon {
+  width: 20px;
+  text-align: center;
+  color: var(--accent);
+}
+
+.badge.is-on {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.style-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.style-card:hover {
+  border-color: #4a4a4a;
+}
+
+.style-card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.style-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.style-thumb {
+  display: block;
+  aspect-ratio: 3 / 2;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.style-thumb canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.style-name {
+  font-size: 11px;
+  line-height: 1.25;
+  color: var(--text-dim);
+}
+
+.style-card.is-active .style-name {
+  color: var(--text);
+}
+
+/* ---- Colour wheels -------------------------------------------------------------- */
+
+.wheels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.wheel-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.wheel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.wheel-disc {
+  position: relative;
+  border-radius: 50%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Desaturate towards the centre: centre = no tint. */
+.wheel-disc::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, #5a5a5a 0%, rgba(90, 90, 90, 0.75) 35%, rgba(90, 90, 90, 0) 100%);
+}
+
+.wheel-disc:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.wheel-puck {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: #777;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.wheel-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.wheel-label output {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
 }

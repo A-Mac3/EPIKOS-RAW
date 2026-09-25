@@ -33,6 +33,59 @@ export interface NoiseReduction {
   color: number;
 }
 
+/** Step 4. Clarity and micro-texture −100…100; skin retouching 0…100. */
+export interface Texture {
+  clarity: number;
+  microTexture: number;
+  blemishSmoothing: number;
+  specularBalance: number;
+}
+
+/** −100…100 each. */
+export interface HslChannel {
+  hue: number;
+  saturation: number;
+  luminance: number;
+}
+
+export const HSL_BANDS = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"] as const;
+export type HslBand = (typeof HSL_BANDS)[number];
+export type HslBands = Record<HslBand, HslChannel>;
+
+/** Hue in degrees on the HSV wheel, amount 0…100, luminance −100…100. */
+export interface ColorWheel {
+  hue: number;
+  amount: number;
+  luminance: number;
+}
+
+export const WHEEL_RANGES = ["shadows", "midtones", "highlights"] as const;
+export type WheelRange = (typeof WHEEL_RANGES)[number];
+
+/** Step 5. */
+export interface ColorGrade {
+  hsl: HslBands;
+  wheels: Record<WheelRange, ColorWheel>;
+  /** 0…100. */
+  skinProtection: number;
+}
+
+/** Parametric style layered on the manual Step 4–5 settings. `id` empty = none. */
+export interface StyleRef {
+  id: string;
+  amount: number;
+  skinProtection: number;
+}
+
+export interface StyleInfo {
+  id: string;
+  name: string;
+  world: string;
+  description: string;
+  skinProtection: number;
+  swatch: [string, string];
+}
+
 export interface Adjustments {
   whiteBalance: WhiteBalance;
   highlightRecovery: boolean;
@@ -43,6 +96,9 @@ export interface Adjustments {
   };
   exposure: number;
   noiseReduction: NoiseReduction;
+  texture: Texture;
+  color: ColorGrade;
+  style: StyleRef;
 }
 
 export interface SourceRef {
@@ -172,5 +228,18 @@ export function defaultAdjustments(): Adjustments {
     },
     exposure: 0,
     noiseReduction: { luminance: 0, color: 25 },
+    texture: { clarity: 0, microTexture: 0, blemishSmoothing: 0, specularBalance: 0 },
+    color: defaultColorGrade(),
+    style: { id: "", amount: 100, skinProtection: 0 },
+  };
+}
+
+export function defaultColorGrade(): ColorGrade {
+  const zero = () => ({ hue: 0, saturation: 0, luminance: 0 });
+  const wheel = () => ({ hue: 0, amount: 0, luminance: 0 });
+  return {
+    hsl: Object.fromEntries(HSL_BANDS.map((b) => [b, zero()])) as HslBands,
+    wheels: { shadows: wheel(), midtones: wheel(), highlights: wheel() },
+    skinProtection: 0,
   };
 }

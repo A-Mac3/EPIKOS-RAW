@@ -12,6 +12,7 @@ import type {
   MaskModels,
   Preview,
   SaveReport,
+  StyleInfo,
 } from "./types";
 
 export const inTauri = isTauri();
@@ -92,3 +93,5 @@ export async function detectMask(path: string, adjustments: Adjustments, kind: M
   for (let i = 0; i < alpha.length; i++) sum += alpha[i];
   return { kind, width, height, alpha, coverage: alpha.length ? sum / (255 * alpha.length) : 0, inferMs };
 }
+
+export const listStyles = () => invoke<StyleInfo[]>("list_styles");

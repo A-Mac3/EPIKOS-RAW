@@ -1,8 +1,8 @@
 //! Scene-referred 32-bit develop pipeline.
 //!
 //! Order: demosaic → highlight recovery → white balance → noise reduction →
-//! chromatic aberration
-//! → Brown–Conrady distortion → camera RGB → linear Rec.2020 → exposure → orientation.
+//! chromatic aberration → Brown–Conrady distortion → camera RGB → linear Rec.2020 →
+//! exposure → Step 4 texture → Step 5 colour → style → orientation.
 //! [`to_display_srgb`] is the separate view transform for the screen.
 
 mod color_transform;
@@ -11,6 +11,7 @@ mod denoise;
 mod develop;
 mod display;
 mod highlights;
+mod look;
 mod matrix;
 mod optics;
 mod orient;
@@ -24,6 +25,7 @@ pub use denoise::reduce_noise;
 pub use develop::{develop, develop_adjustments, develop_rgb};
 pub use display::{to_display_srgb, DisplayImage};
 pub use highlights::recover_highlights;
+pub use look::{apply_look, look_is_active, skin_likelihood, styles, StyleInfo};
 pub use optics::{correct_chromatic_aberration, correct_distortion};
 pub use orient::apply_orientation;
 pub use output::{encode_rgb16, OutputSpace};

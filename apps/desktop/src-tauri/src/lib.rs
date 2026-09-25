@@ -10,7 +10,7 @@ use std::sync::Arc;
 use epikos_core::CameraFormat;
 use epikos_engine::{
     dev_models_dir, env_models_dir, Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, MaskKind,
-    MaskModels, Masker, SaveReport,
+    MaskModels, Masker, SaveReport, StyleInfo,
 };
 use epikos_sidecar::{Adjustments, DevelopDocument};
 use tauri::ipc::Response;
@@ -105,6 +105,12 @@ fn mask_models(engine: EngineState<'_>) -> MaskModels {
     engine.mask_models()
 }
 
+/// Built-in parametric styles for the preset panel.
+#[tauri::command]
+fn list_styles() -> Vec<StyleInfo> {
+    epikos_engine::styles()
+}
+
 /// Binary layout (little-endian): `u32 width, u32 height, u32 inference ms,
 /// width×height mask bytes` (0 = outside, 255 = inside). Upright, preview framing.
 #[tauri::command]
@@ -178,7 +184,8 @@ pub fn run() {
             save_document,
             export_tiff,
             mask_models,
-            detect_mask
+            detect_mask,
+            list_styles
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

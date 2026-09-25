@@ -24,7 +24,7 @@ use serde::Serialize;
 
 mod export;
 pub use epikos_masks::{Mask, MaskKind, Masker, ModelStatus};
-pub use epikos_pipeline::OutputSpace;
+pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportOptions, ExportReport};
 
 /// A RAW/DNG file found while browsing a folder.
@@ -168,7 +168,15 @@ impl Engine {
         kind: MaskKind,
     ) -> Result<Arc<Mask>> {
         let loaded = self.load(path)?;
-        let display = render(&loaded, adjustments, MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
+        // Masks describe the scene, not the look: drop Steps 4+ (a black-and-white or
+        // golden style would only make the sky and subject harder to find).
+        let through_step2 = Adjustments {
+            texture: Default::default(),
+            color: Default::default(),
+            style: Default::default(),
+            ..adjustments.clone()
+        };
+        let display = render(&loaded, &through_step2, MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
         let rgb = rgba_to_rgb(&display);
         let image = RgbImage {
             width: rgb.width(),

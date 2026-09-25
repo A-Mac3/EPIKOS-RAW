@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use epikos_core::{Error, Result};
 
 use crate::document::{
-    Adjustments, ChromaticAberration, DemosaicMode, DevelopDocument, DistortionCoeffs, LensCorrections,
-    NoiseReduction, SourceRef, WbMode, WhiteBalance,
+    Adjustments, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, DemosaicMode,
+    DevelopDocument, DistortionCoeffs, HslBands, HslChannel, LensCorrections, NoiseReduction,
+    SourceRef, StyleRef, Texture, WbMode, WhiteBalance,
 };
 
 /// XMP namespace that marks a sidecar as written by EPIKOS RAW.
@@ -105,7 +106,7 @@ fn render_xmp(doc: &DevelopDocument) -> String {
     epikos:cy="{cy}"
     epikos:caEnabled="{ca_on}"
     epikos:caRed="{ca_r}"
-    epikos:caBlue="{ca_b}"/>
+    epikos:caBlue="{ca_b}"{look}/>
  </rdf:RDF>
 </x:xmpmeta>
 "#,
@@ -137,7 +138,56 @@ fn render_xmp(doc: &DevelopDocument) -> String {
         ca_on = a.lens.chromatic_aberration.enabled,
         ca_r = a.lens.chromatic_aberration.red,
         ca_b = a.lens.chromatic_aberration.blue,
+        look = render_look(a),
     )
+}
+
+/// Steps 4–5 and the style. Camera Raw's Clarity, Texture, HSL and Color Grading use
+/// other algorithms and hue bands, so none of these map to `crs:` fields.
+fn render_look(a: &Adjustments) -> String {
+    let t = &a.texture;
+    let mut out = format!(
+        "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"",
+        t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance
+    );
+    for (name, band) in HslBands::NAMES.iter().zip(a.color.hsl.bands()) {
+        out += &format!(
+            "\n    epikos:hsl{}=\"{},{},{}\"",
+            capitalise(name),
+            band.hue,
+            band.saturation,
+            band.luminance
+        );
+    }
+    let w = &a.color.wheels;
+    for (name, wheel) in [("Shadows", &w.shadows), ("Midtones", &w.midtones), ("Highlights", &w.highlights)] {
+        out += &format!(
+            "\n    epikos:wheel{name}=\"{},{},{}\"",
+            wheel.hue, wheel.amount, wheel.luminance
+        );
+    }
+    out += &format!(
+        "\n    epikos:skinProtection=\"{}\"\n    epikos:style=\"{}\"\n    epikos:styleAmount=\"{}\"\n    epikos:styleSkinProtection=\"{}\"",
+        a.color.skin_protection,
+        esc(&a.style.id),
+        a.style.amount,
+        a.style.skin_protection
+    );
+    out
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+        .unwrap_or_default()
+}
+
+/// `"a,b,c"` → three numbers.
+fn triple(s: &str) -> Option<[f32; 3]> {
+    let mut it = s.split(',').map(|v| v.trim().parse::<f32>().ok());
+    let v = [it.next()??, it.next()??, it.next()??];
+    it.next().is_none().then_some(v)
 }
 
 fn attr<'a>(xml: &'a str, key: &str) -> Option<&'a str> {
@@ -216,6 +266,43 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                 color: num("epikos:nrColor").unwrap_or(defaults.noise_reduction.color),
             },
             demosaic,
+            texture: Texture {
+                clarity: num("epikos:clarity").unwrap_or(0.0),
+                micro_texture: num("epikos:microTexture").unwrap_or(0.0),
+                blemish_smoothing: num("epikos:blemishSmoothing").unwrap_or(0.0),
+                specular_balance: num("epikos:specularBalance").unwrap_or(0.0),
+            },
+            color: {
+                let mut hsl = HslBands::default();
+                for (name, band) in HslBands::NAMES.iter().zip(hsl.bands_mut()) {
+                    if let Some([hue, saturation, luminance]) =
+                        get(&format!("epikos:hsl{}", capitalise(name))).and_then(triple)
+                    {
+                        *band = HslChannel { hue, saturation, luminance };
+                    }
+                }
+                let wheel = |name: &str| {
+                    get(&format!("epikos:wheel{name}"))
+                        .and_then(triple)
+                        .map(|[hue, amount, luminance]| ColorWheel { hue, amount, luminance })
+                        .unwrap_or_default()
+                };
+                ColorGrade {
+                    hsl,
+                    wheels: ColorWheels {
+                        shadows: wheel("Shadows"),
+                        midtones: wheel("Midtones"),
+                        highlights: wheel("Highlights"),
+                    },
+                    skin_protection: num("epikos:skinProtection").unwrap_or(0.0),
+                }
+            },
+            style: StyleRef {
+                id: text("epikos:style"),
+                amount: num("epikos:styleAmount").unwrap_or(defaults.style.amount),
+                skin_protection: num("epikos:styleSkinProtection")
+                    .unwrap_or(defaults.style.skin_protection),
+            },
             lens: LensCorrections {
                 distortion: DistortionCoeffs {
                     enabled: flag("epikos:distortionEnabled").unwrap_or(d.enabled),
@@ -275,6 +362,20 @@ mod tests {
         doc.adjustments.lens.chromatic_aberration.enabled = true;
         doc.adjustments.lens.chromatic_aberration.red = 0.004;
         doc.adjustments.lens.chromatic_aberration.blue = -0.003;
+        doc.adjustments.texture.clarity = -12.5;
+        doc.adjustments.texture.micro_texture = 30.0;
+        doc.adjustments.texture.blemish_smoothing = 45.0;
+        doc.adjustments.texture.specular_balance = 20.0;
+        doc.adjustments.color.hsl.orange.hue = -5.0;
+        doc.adjustments.color.hsl.blue.saturation = 22.0;
+        doc.adjustments.color.hsl.magenta.luminance = -7.25;
+        doc.adjustments.color.wheels.highlights.hue = 45.0;
+        doc.adjustments.color.wheels.highlights.amount = 18.0;
+        doc.adjustments.color.wheels.shadows.luminance = -10.0;
+        doc.adjustments.color.skin_protection = 60.0;
+        doc.adjustments.style.id = "silver-charcoal".into();
+        doc.adjustments.style.amount = 70.0;
+        doc.adjustments.style.skin_protection = 55.0;
         let xml = render_xmp(&doc);
         let back = parse_xmp(&xml).unwrap();
         assert_eq!(doc, back);

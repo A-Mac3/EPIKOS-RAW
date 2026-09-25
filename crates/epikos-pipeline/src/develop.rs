@@ -5,6 +5,7 @@ use crate::color_transform::{apply_white_balance, camera_to_linear_rec2020, wb_m
 use crate::demosaic::{demosaic, DemosaicAlgorithm};
 use crate::denoise::{self, reduce_noise};
 use crate::highlights::recover_highlights;
+use crate::look::apply_look;
 use crate::optics::{correct_chromatic_aberration, correct_distortion};
 use crate::orient::apply_orientation;
 use crate::white_balance::gains_for_temperature;
@@ -29,7 +30,7 @@ pub fn develop_adjustments(
 }
 
 /// Everything after demosaic: highlights → WB → noise reduction → optics → camera RGB → Rec.2020 →
-/// exposure → orientation.
+/// exposure → Steps 4–5 and style → orientation.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
 /// interactive preview share one code path.
@@ -79,6 +80,9 @@ pub fn develop_rgb(
             plane.iter_mut().for_each(|v| *v *= gain);
         }
     }
+
+    // Steps 4–5 and the style. Radii scale with image size, so the preview matches.
+    apply_look(&mut rgb, adj);
 
     // Last, so lens corrections above work in the sensor's own frame.
     let rgb = apply_orientation(rgb, profile.orientation);

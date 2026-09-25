@@ -1,6 +1,19 @@
 import { useState, type ReactNode } from "react";
 import { MASK_KINDS, type MaskState } from "../hooks/useMasks";
-import type { Adjustments, DemosaicMode, ImageInfo, MaskKind, WbMode } from "../types";
+import {
+  HSL_BANDS,
+  WHEEL_RANGES,
+  type Adjustments,
+  type ColorWheel as Wheel,
+  type DemosaicMode,
+  type HslBand,
+  type HslChannel,
+  type ImageInfo,
+  type MaskKind,
+  type WbMode,
+  type WheelRange,
+} from "../types";
+import { ColorWheel } from "./ColorWheel";
 import { Segmented, Slider, Toggle } from "./Slider";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
@@ -22,9 +35,9 @@ const STEPS: { title: string; planned: string }[] = [
   { title: "RAW Input & Optical Calibration", planned: "Lens profile database, auto-geometry" },
   { title: "Global Exposure & Dynamic Range", planned: "Shadow lift, auto exposure" },
   { title: "AI Subject & Semantic Masking", planned: "Skin, eyes, hair and foreground masks; masks driving local adjustments in later steps" },
-  { title: "Micro-Texture & Retouching", planned: "Blemish smoothing, specular balancing, character line sculpting" },
-  { title: "Base Color Grading & HSL", planned: "Skin tone protection, foliage shift, background re-coloration" },
-  { title: "Atmospheric & Light Sculpting", planned: "Volumetric light shafts, localized glow, depth-based fog and haze" },
+  { title: "Micro-Texture & Retouching", planned: "Character line sculpting; retouching confined to the subject mask" },
+  { title: "Base Color Grading & HSL", planned: "Foliage shift and background re-coloration through the Step 3 masks" },
+  { title: "Atmospheric & Light Sculpting", planned: "Volumetric light shafts, localized glow, depth-based fog and haze (styles already add glow and haze)" },
   { title: "Creative Split-Toning & Curves", planned: "Highlight warmth, shadow cooling, black point and matte" },
   { title: "Final Finishing & Handoff", planned: "Analog grain, vignette, PSD / DNG export. 16-bit TIFF export is available now (Export… / ⌘E)" },
 ];
@@ -40,8 +53,37 @@ const fmtSigned = (digits: number, unit = "") => (v: number) =>
 
 const MASK_LABEL: Record<MaskKind, string> = { subject: "Subject", sky: "Sky" };
 
+type HslMode = keyof HslChannel;
+
+/** Display hue (HSV degrees) of each HSL band, for slider tracks. */
+const BAND_HUE: Record<HslBand, number> = {
+  red: 0,
+  orange: 30,
+  yellow: 55,
+  green: 110,
+  aqua: 180,
+  blue: 225,
+  purple: 270,
+  magenta: 310,
+};
+
+function hslTrack(band: HslBand, mode: HslMode) {
+  const h = BAND_HUE[band];
+  switch (mode) {
+    case "hue":
+      return `linear-gradient(90deg, hsl(${h - 30} 70% 50%), hsl(${h} 70% 50%), hsl(${h + 30} 70% 50%))`;
+    case "saturation":
+      return `linear-gradient(90deg, hsl(${h} 0% 45%), hsl(${h} 85% 50%))`;
+    case "luminance":
+      return `linear-gradient(90deg, hsl(${h} 60% 15%), hsl(${h} 60% 50%), hsl(${h} 60% 85%))`;
+  }
+}
+
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+
 export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks }: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
+  const [hslMode, setHslMode] = useState<HslMode>("saturation");
   const toggle = (i: number) =>
     setOpen((s) => {
       const next = new Set(s);
@@ -75,6 +117,41 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks 
   const dist = a.lens.distortion;
   const setLens = (fn: (l: Adjustments["lens"]) => Adjustments["lens"]): ((x: Adjustments) => Adjustments) =>
     (x) => ({ ...x, lens: fn(x.lens) });
+
+  const tex = a.texture;
+  const setTex = (patch: Partial<Adjustments["texture"]>) => (x: Adjustments) => ({
+    ...x,
+    texture: { ...x.texture, ...patch },
+  });
+  const texSlider = (label: string, key: keyof Adjustments["texture"], min: number) => (
+    <Slider
+      label={label}
+      value={tex[key]}
+      min={min}
+      max={100}
+      step={1}
+      defaultValue={0}
+      format={min < 0 ? fmtSigned(0) : (v) => v.toFixed(0)}
+      onChange={(v) => edit(setTex({ [key]: v }))}
+      onCommit={endEdit}
+    />
+  );
+
+  const color = a.color;
+  const setBand = (band: HslBand, v: number) => (x: Adjustments) => ({
+    ...x,
+    color: {
+      ...x.color,
+      hsl: { ...x.color.hsl, [band]: { ...x.color.hsl[band], [hslMode]: v } },
+    },
+  });
+  const setWheel = (range: WheelRange, patch: Partial<Wheel>) => (x: Adjustments) => ({
+    ...x,
+    color: {
+      ...x.color,
+      wheels: { ...x.color.wheels, [range]: { ...x.color.wheels[range], ...patch } },
+    },
+  });
 
   const content: Record<number, ReactNode> = {
     0: (
@@ -251,6 +328,87 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks 
       </>
     ),
     2: <MaskControls masks={masks} />,
+    3: (
+      <>
+        {texSlider("Clarity", "clarity", -100)}
+        {texSlider("Micro-texture", "microTexture", -100)}
+        <span className="field-label">Skin retouching</span>
+        {texSlider("Blemish smoothing", "blemishSmoothing", 0)}
+        {texSlider("Specular highlight balancing", "specularBalance", 0)}
+        <p className="hint">
+          Retouching acts only where skin is detected. Micro-texture is cored against noise and eased off on skin, so
+          hair, fabric and bark sharpen without making skin look dirty.
+        </p>
+      </>
+    ),
+    4: (
+      <>
+        <div className="field-row">
+          <span className="field-label">HSL</span>
+          <Segmented<HslMode>
+            label="HSL property"
+            value={hslMode}
+            options={[
+              { value: "hue", label: "Hue" },
+              { value: "saturation", label: "Saturation" },
+              { value: "luminance", label: "Luminance" },
+            ]}
+            onChange={setHslMode}
+          />
+        </div>
+        {HSL_BANDS.map((band) => (
+          <Slider
+            key={`${band}-${hslMode}`}
+            label={cap(band)}
+            value={color.hsl[band][hslMode]}
+            min={-100}
+            max={100}
+            step={1}
+            defaultValue={0}
+            format={fmtSigned(0)}
+            track={hslTrack(band, hslMode)}
+            onChange={(v) => edit(setBand(band, v))}
+            onCommit={endEdit}
+          />
+        ))}
+        <span className="field-label">Color wheels</span>
+        <div className="wheels">
+          {WHEEL_RANGES.map((range) => (
+            <div key={range} className="wheel-col">
+              <ColorWheel
+                label={cap(range)}
+                value={color.wheels[range]}
+                onChange={(v) => edit(setWheel(range, v))}
+                onCommit={endEdit}
+              />
+              <Slider
+                label="Lum"
+                value={color.wheels[range].luminance}
+                min={-100}
+                max={100}
+                step={1}
+                defaultValue={0}
+                format={fmtSigned(0)}
+                onChange={(v) => edit(setWheel(range, { luminance: v }))}
+                onCommit={endEdit}
+              />
+            </div>
+          ))}
+        </div>
+        <Slider
+          label="Skin tone protection"
+          value={color.skinProtection}
+          min={0}
+          max={100}
+          step={1}
+          defaultValue={0}
+          format={(v) => `${v.toFixed(0)}%`}
+          onChange={(v) => edit((x) => ({ ...x, color: { ...x.color, skinProtection: v } }))}
+          onCommit={endEdit}
+        />
+        <p className="hint">Shields detected skin from the HSL and wheel changes above.</p>
+      </>
+    ),
   };
 
   return (

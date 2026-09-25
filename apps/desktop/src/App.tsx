@@ -5,10 +5,12 @@ import { captureSummary } from "./format";
 import { Filmstrip } from "./components/Filmstrip";
 import { Histogram } from "./components/Histogram";
 import { StepsPanel } from "./components/StepsPanel";
+import { StylePanel } from "./components/StylePanel";
 import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
 import { useMasks } from "./hooks/useMasks";
 import { usePreview } from "./hooks/usePreview";
+import { useStyles } from "./hooks/useStyles";
 import { defaultAdjustments, type Adjustments, type FileEntry, type ImageInfo } from "./types";
 
 const AUTOSAVE_MS = 600;
@@ -46,6 +48,7 @@ export default function App() {
   );
 
   const masks = useMasks(info?.path ?? null, adjustments);
+  const { styles, thumbs } = useStyles(info?.path ?? null, adjustments);
 
   // ---- Saving -------------------------------------------------------------------------
 
@@ -279,18 +282,30 @@ export default function App() {
           </main>
           <aside className="panel">
             <Histogram preview={preview} />
-            {info ? (
-              <StepsPanel
-                info={info}
-                adjustments={adjustments}
-                edit={history.edit}
-                endEdit={history.endEdit}
-                commit={history.commit}
-                masks={masks}
-              />
-            ) : (
-              <p className="note pad">Select a photo to start editing.</p>
-            )}
+            <div className="panel-scroll">
+              {info && (
+                <StylePanel
+                  styles={styles}
+                  thumbs={thumbs}
+                  adjustments={adjustments}
+                  edit={history.edit}
+                  endEdit={history.endEdit}
+                  commit={history.commit}
+                />
+              )}
+              {info ? (
+                <StepsPanel
+                  info={info}
+                  adjustments={adjustments}
+                  edit={history.edit}
+                  endEdit={history.endEdit}
+                  commit={history.commit}
+                  masks={masks}
+                />
+              ) : (
+                <p className="note pad">Select a photo to start editing.</p>
+              )}
+            </div>
           </aside>
           <footer className="strip">
             <Filmstrip files={files} selected={selected} onSelect={(p) => void select(p)} />

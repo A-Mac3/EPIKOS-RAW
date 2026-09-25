@@ -43,6 +43,12 @@ pub struct Adjustments {
     /// Global exposure in stops (EV), applied in scene-referred linear light.
     pub exposure: f32,
     pub noise_reduction: NoiseReduction,
+    /// Step 4: micro-texture and skin retouching.
+    pub texture: Texture,
+    /// Step 5: HSL and three-way colour grading.
+    pub color: ColorGrade,
+    /// Parametric style layered on top of the manual Step 4–5 settings.
+    pub style: StyleRef,
 }
 
 impl Default for Adjustments {
@@ -54,6 +60,9 @@ impl Default for Adjustments {
             lens: LensCorrections::default(),
             exposure: 0.0,
             noise_reduction: NoiseReduction::default(),
+            texture: Texture::default(),
+            color: ColorGrade::default(),
+            style: StyleRef::default(),
         }
     }
 }
@@ -73,6 +82,140 @@ impl Default for NoiseReduction {
             luminance: 0.0,
             color: 25.0,
         }
+    }
+}
+
+/// PRD Step 4. Clarity and micro-texture run −100…100 (negative softens); the skin
+/// retouching controls run 0…100 and only act where skin is detected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Texture {
+    /// Mid-scale local contrast in the midtones.
+    pub clarity: f32,
+    /// Fine structure (hair, fabric, bark), cored against noise and eased off on skin.
+    pub micro_texture: f32,
+    /// Evens out spot-sized blemishes on skin while keeping pores and facial lines.
+    pub blemish_smoothing: f32,
+    /// Tames shiny hot spots on skin and restores the skin colour under them.
+    pub specular_balance: f32,
+}
+
+impl Texture {
+    pub fn is_neutral(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// One HSL band: each value −100…100.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HslChannel {
+    pub hue: f32,
+    pub saturation: f32,
+    pub luminance: f32,
+}
+
+/// PRD Step 5 HSL: eight hue bands, as in Lightroom's HSL panel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HslBands {
+    pub red: HslChannel,
+    pub orange: HslChannel,
+    pub yellow: HslChannel,
+    pub green: HslChannel,
+    pub aqua: HslChannel,
+    pub blue: HslChannel,
+    pub purple: HslChannel,
+    pub magenta: HslChannel,
+}
+
+impl HslBands {
+    /// Band names in hue order, matching [`HslBands::bands`].
+    pub const NAMES: [&'static str; 8] = [
+        "red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta",
+    ];
+
+    pub fn bands(&self) -> [&HslChannel; 8] {
+        [
+            &self.red,
+            &self.orange,
+            &self.yellow,
+            &self.green,
+            &self.aqua,
+            &self.blue,
+            &self.purple,
+            &self.magenta,
+        ]
+    }
+
+    pub fn bands_mut(&mut self) -> [&mut HslChannel; 8] {
+        [
+            &mut self.red,
+            &mut self.orange,
+            &mut self.yellow,
+            &mut self.green,
+            &mut self.aqua,
+            &mut self.blue,
+            &mut self.purple,
+            &mut self.magenta,
+        ]
+    }
+}
+
+/// One colour wheel: a tint (hue in degrees on the usual HSV wheel, amount 0…100)
+/// and a luminance offset (−100…100) for one tonal range.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorWheel {
+    pub hue: f32,
+    pub amount: f32,
+    pub luminance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorWheels {
+    pub shadows: ColorWheel,
+    pub midtones: ColorWheel,
+    pub highlights: ColorWheel,
+}
+
+/// PRD Step 5: base colour grading.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorGrade {
+    pub hsl: HslBands,
+    pub wheels: ColorWheels,
+    /// 0…100: how much of the HSL and wheel changes skin is shielded from.
+    pub skin_protection: f32,
+}
+
+/// A parametric style from the style engine, applied on top of the manual settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StyleRef {
+    /// Style id (e.g. `"dark-melanin-glow"`); empty for none.
+    pub id: String,
+    /// 0…100: scales every parameter of the style.
+    pub amount: f32,
+    /// 0…100: how much of the style's scene grade skin is shielded from. Seeded from
+    /// the style's own default when it is applied.
+    pub skin_protection: f32,
+}
+
+impl Default for StyleRef {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            amount: 100.0,
+            skin_protection: 0.0,
+        }
+    }
+}
+
+impl StyleRef {
+    pub fn is_none(&self) -> bool {
+        self.id.is_empty() || self.amount <= 0.0
     }
 }
 

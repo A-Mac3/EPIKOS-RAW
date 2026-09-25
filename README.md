@@ -8,7 +8,7 @@ Cross-platform RAW/DNG editor. Product spec: [PRD.md](PRD.md).
 |---|---|
 | `crates/epikos-core` | 32-bit float image types, camera formats, sensor profiles |
 | `crates/epikos-decode` | RAW/DNG decode via `rawler`, crop, embedded thumbnails |
-| `crates/epikos-pipeline` | Demosaic, highlights, white balance, optics, colour, exposure, preview binning, display transform |
+| `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, optics, colour, exposure, Step 4 texture / retouching, Step 5 HSL and colour wheels, parametric styles (`src/look`), preview binning, display transform |
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
 | `crates/epikos-masks` | Step 3 AI masks: IS-Net (subject) and skyseg (sky) ONNX models on the CPU via ONNX Runtime |
 | `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy |
@@ -33,6 +33,12 @@ Render a real file through the engine and time it:
 
 ```bash
 cargo run --release -p epikos-engine --example render_preview -- <RAW> <OUT_DIR> [EV]
+```
+
+Render a file with each built-in style (plus its skin map) and time full-resolution develops:
+
+```bash
+cargo run --release -p epikos-engine --example render_looks -- <RAW> <OUT_DIR> [--full]
 ```
 
 Export a full-resolution 16-bit TIFF (sRGB, Display P3 or ProPhoto, ICC embedded):
