@@ -76,7 +76,7 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit }: Prop
           >
             <option value="auto">Auto</option>
             <option value="malvar">Malvar–He–Cutler (Bayer)</option>
-            <option value="xtrans">X-Trans</option>
+            <option value="xtrans">Markesteijn (X-Trans)</option>
             <option value="bilinear">Bilinear</option>
           </select>
         </Field>

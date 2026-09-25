@@ -15,6 +15,7 @@ mod orient;
 mod output;
 mod preview;
 mod white_balance;
+mod xtrans;
 
 pub use demosaic::{demosaic, DemosaicAlgorithm};
 pub use develop::{develop, develop_adjustments, develop_rgb};

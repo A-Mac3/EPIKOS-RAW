@@ -1,6 +1,8 @@
 use epikos_core::{CfaPattern, ColorSpace, ImageRgbF32, MosaicF32, Pixel};
 
-/// Demosaic strategy. Bayer uses Malvar–He–Cutler; X-Trans uses a 6×6 weighted interpolator.
+use crate::xtrans::markesteijn;
+
+/// Demosaic strategy. Bayer uses Malvar–He–Cutler; X-Trans uses Markesteijn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DemosaicAlgorithm {
     Auto,
@@ -22,7 +24,11 @@ pub fn demosaic(mosaic: &MosaicF32, algorithm: DemosaicAlgorithm) -> ImageRgbF32
         other => other,
     };
     match algo {
-        DemosaicAlgorithm::Xtrans => xtrans(&mosaic.data, mosaic.width, mosaic.height, &cfa),
+        DemosaicAlgorithm::Xtrans => {
+            // The simple interpolator fills the border the edge-aware pass can't reach.
+            let fallback = xtrans(&mosaic.data, mosaic.width, mosaic.height, &cfa);
+            markesteijn(&mosaic.data, mosaic.width, mosaic.height, &cfa, fallback)
+        }
         DemosaicAlgorithm::Bilinear => bilinear(&mosaic.data, mosaic.width, mosaic.height, &cfa),
         _ => malvar(&mosaic.data, mosaic.width, mosaic.height, &cfa),
     }
@@ -160,7 +166,9 @@ fn malvar(data: &[f32], w: u32, h: u32, cfa: &CfaPattern) -> ImageRgbF32 {
     img
 }
 
-fn xtrans(data: &[f32], w: u32, h: u32, cfa: &CfaPattern) -> ImageRgbF32 {
+/// Distance-weighted X-Trans interpolation. Fast but not edge-aware (colour fringes on
+/// sharp edges); used for the image border and as the reference in tests.
+pub(crate) fn xtrans(data: &[f32], w: u32, h: u32, cfa: &CfaPattern) -> ImageRgbF32 {
     let mut img = ImageRgbF32::new(w, h, ColorSpace::CameraRgb);
     for y in 0..h {
         for x in 0..w {
