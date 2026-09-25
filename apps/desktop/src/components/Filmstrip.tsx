@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { thumbnailUrl } from "../api";
-import type { FileEntry } from "../types";
+import type { FileEntry, StoryArc } from "../types";
+import { Palette } from "./ScenePanel";
 
 const THUMB_SIDE = 320;
 const MAX_CONCURRENT = 3;
@@ -41,11 +42,13 @@ function loadThumbnail(path: string): Promise<string> {
 
 interface Props {
   files: FileEntry[];
+  /** Story-arc groups; the strip shows them as labelled runs once they arrive. */
+  story: StoryArc | null;
   selected: string | null;
   onSelect: (path: string) => void;
 }
 
-export function Filmstrip({ files, selected, onSelect }: Props) {
+export function Filmstrip({ files, story, selected, onSelect }: Props) {
   const strip = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -55,16 +58,53 @@ export function Filmstrip({ files, selected, onSelect }: Props) {
     if (el && strip.current?.contains(document.activeElement)) el.focus({ preventScroll: true });
   }, [selected]);
 
+  const thumb = (f: FileEntry, hero = false) => (
+    <Thumb key={f.path} file={f} hero={hero} selected={f.path === selected} onSelect={onSelect} />
+  );
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const grouped = new Set(story?.groups.flatMap((g) => g.frames) ?? []);
   return (
     <div className="filmstrip" ref={strip} role="listbox" aria-label="Photos in folder">
-      {files.map((f) => (
-        <Thumb key={f.path} file={f} selected={f.path === selected} onSelect={onSelect} />
-      ))}
+      {story
+        ? [
+            ...story.groups.map((g) => (
+              <div
+                key={g.id}
+                className="story-group"
+                role="group"
+                aria-label={g.label}
+                title={g.splitReason ? `New group: ${g.splitReason}` : undefined}
+              >
+                <div className="story-head">
+                  <span>{g.label}</span>
+                  <Palette swatches={g.palette} compact />
+                </div>
+                <div className="story-thumbs">
+                  {g.frames.flatMap((p) => {
+                    const f = byPath.get(p);
+                    return f ? [thumb(f, p === g.hero && g.frames.length > 1)] : [];
+                  })}
+                </div>
+              </div>
+            )),
+            ...files.filter((f) => !grouped.has(f.path)).map((f) => thumb(f)),
+          ]
+        : files.map((f) => thumb(f))}
     </div>
   );
 }
 
-function Thumb({ file, selected, onSelect }: { file: FileEntry; selected: boolean; onSelect: (p: string) => void }) {
+function Thumb({
+  file,
+  hero,
+  selected,
+  onSelect,
+}: {
+  file: FileEntry;
+  hero: boolean;
+  selected: boolean;
+  onSelect: (p: string) => void;
+}) {
   const el = useRef<HTMLButtonElement>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -104,6 +144,11 @@ function Thumb({ file, selected, onSelect }: { file: FileEntry; selected: boolea
       {url ? <img src={url} alt="" draggable={false} /> : <span className="thumb-ph">{failed ? "No preview" : ""}</span>}
       <span className="thumb-name">{file.name}</span>
       {file.hasEdits && <span className="thumb-dot" title="Has EPIKOS edits" />}
+      {hero && (
+        <span className="thumb-hero" title="Hero frame of this group">
+          ★
+        </span>
+      )}
     </button>
   );
 }

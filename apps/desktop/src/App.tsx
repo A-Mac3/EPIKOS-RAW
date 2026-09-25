@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { inTauri, listFolder, openImage, pickFolder, saveDocument } from "./api";
+import { inTauri, listFolder, openImage, pickFolder, saveDocument, storyArc } from "./api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ExportDialog } from "./components/ExportDialog";
 import { captureSummary } from "./format";
@@ -7,6 +7,7 @@ import { Filmstrip } from "./components/Filmstrip";
 import { Histogram } from "./components/Histogram";
 import type { LightKind } from "./components/LightPalette";
 import { LookPromptBar } from "./components/LookPromptBar";
+import { BatchSyncCard, SceneCard } from "./components/ScenePanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
 import { Viewer } from "./components/Viewer";
@@ -22,6 +23,7 @@ import {
   type FileEntry,
   type ImageInfo,
   type PickTarget,
+  type StoryArc,
 } from "./types";
 
 const AUTOSAVE_MS = 600;
@@ -37,6 +39,7 @@ type SaveStatus =
 export default function App() {
   const [folder, setFolder] = useState<string | null>(null);
   const [files, setFiles] = useState<FileEntry[]>([]);
+  const [story, setStory] = useState<StoryArc | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [info, setInfo] = useState<ImageInfo | null>(null);
@@ -237,6 +240,7 @@ export default function App() {
     [flushSave, history.reset],
   );
 
+  const folderToken = useRef(0);
   const chooseFolder = useCallback(async () => {
     const dir = await pickFolder();
     if (!dir) return;
@@ -244,24 +248,48 @@ export default function App() {
     setFolderError(null);
     try {
       const entries = await listFolder(dir);
+      const token = ++folderToken.current;
       setFolder(dir);
       setFiles(entries);
+      setStory(null);
       setInfo(null);
       setSelected(null);
       if (entries.length > 0) void select(entries[0].path);
+      // Story-arc grouping reads only previews and EXIF, so it's quick; the strip
+      // regroups when it lands. A failure just leaves the plain strip.
+      storyArc(dir).then(
+        (arc) => token === folderToken.current && setStory(arc),
+        (e) => console.warn("story arc:", e),
+      );
     } catch (e) {
       setFolderError(String(e));
     }
   }, [flushSave, select]);
 
+  // Shooting order once the story arc is known (groups in time order), else name order.
+  const ordered = useMemo(() => {
+    if (!story) return files;
+    const rank = new Map(story.groups.flatMap((g) => g.frames).map((p, i) => [p, i]));
+    return [...files].sort((a, b) => (rank.get(a.path) ?? Infinity) - (rank.get(b.path) ?? Infinity));
+  }, [files, story]);
+  const group = useMemo(
+    () => (info && story ? (story.groups.find((g) => g.frames.includes(info.path)) ?? null) : null),
+    [info, story],
+  );
+  // A sync or undo rewrote other photos' sidecars: refresh their edit dots.
+  const refreshFiles = useCallback(() => {
+    if (!folder) return;
+    listFolder(folder).then(setFiles, (e) => console.warn("refresh folder:", e));
+  }, [folder]);
+
   const step = useCallback(
     (delta: number) => {
-      if (files.length === 0) return;
-      const i = files.findIndex((f) => f.path === selected);
-      const next = files[Math.max(0, Math.min(files.length - 1, (i < 0 ? 0 : i) + delta))];
+      if (ordered.length === 0) return;
+      const i = ordered.findIndex((f) => f.path === selected);
+      const next = ordered[Math.max(0, Math.min(ordered.length - 1, (i < 0 ? 0 : i) + delta))];
       if (next && next.path !== selected) void select(next.path);
     },
-    [files, selected, select],
+    [ordered, selected, select],
   );
 
   // ---- Keyboard -----------------------------------------------------------------------
@@ -435,6 +463,16 @@ export default function App() {
             <Histogram preview={preview} />
             <div className="panel-scroll">
               <ErrorBoundary area="the side panel">
+                {info && <SceneCard info={info} />}
+                {info && (
+                  <BatchSyncCard
+                    info={info}
+                    adjustments={adjustments}
+                    group={group}
+                    flushSave={flushSave}
+                    onChanged={refreshFiles}
+                  />
+                )}
                 {info && (
                   <StylePanel
                     styles={styles}
@@ -467,7 +505,7 @@ export default function App() {
             </div>
           </aside>
           <footer className="strip">
-            <Filmstrip files={files} selected={selected} onSelect={(p) => void select(p)} />
+            <Filmstrip files={files} story={story} selected={selected} onSelect={(p) => void select(p)} />
           </footer>
         </>
       ) : (

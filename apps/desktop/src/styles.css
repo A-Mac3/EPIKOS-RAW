@@ -54,7 +54,7 @@ code {
   display: grid;
   height: 100%;
   grid-template-columns: minmax(0, 1fr) 320px;
-  grid-template-rows: 44px minmax(0, 1fr) 128px;
+  grid-template-rows: 44px minmax(0, 1fr) 144px;
   grid-template-areas:
     "top top"
     "stage panel"
@@ -477,6 +477,8 @@ code {
 /* ---- Steps panel ----------------------------------------------------------------- */
 
 .panel-scroll {
+  /* Containing block for visually hidden inputs, so they can't stretch the page. */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1424,4 +1426,187 @@ input[type="range"]::-moz-range-thumb {
   pointer-events: none;
   z-index: 50;
   filter: drop-shadow(0 0 10px rgb(255 200 100 / 80%));
+}
+
+/* ---- Story-arc groups (Section 2.2) ---------------------------------------------- */
+
+.story-group {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+}
+
+.story-group:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.story-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.story-head .palette {
+  width: 60px;
+}
+
+.story-thumbs {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  min-height: 0;
+}
+
+.thumb-hero {
+  position: absolute;
+  top: 3px;
+  left: 6px;
+  color: var(--accent);
+  font-size: 13px;
+  text-shadow: 0 0 3px rgb(0 0 0 / 80%);
+}
+
+/* ---- Scene analysis & sync (Section 2) ------------------------------------------- */
+
+.scene {
+  border-bottom: 1px solid var(--line);
+}
+
+.scene-body {
+  gap: 14px;
+}
+
+.scene-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scene-group h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.genres {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.genre-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.genre-score {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.genre-bar {
+  height: 3px;
+  margin: 3px 0;
+  border-radius: 2px;
+  background: var(--panel-2);
+}
+
+.genre-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.genres small {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 3px 8px;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--text-faint);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.palette {
+  display: flex;
+  height: 18px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.palette.is-compact {
+  height: 8px;
+  border-radius: 2px;
+}
+
+.palette span {
+  flex-basis: 0;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+}
+
+.confirm p {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sync-report {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.sync-report li {
+  display: flex;
+  flex-direction: column;
+}
+
+.sync-report span {
+  color: var(--text-dim);
+}
+
+.sync-report li.is-skipped span {
+  color: var(--warn);
 }

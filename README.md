@@ -54,6 +54,20 @@ cargo run --release -p epikos-cli -- export <RAW> -o out.dng --masks --depth
 The app's Export dialog can then open the TIFF in an installed editor (Photoshop, Lightroom,
 Capture One, DxO PhotoLab, Affinity Photo, Pixelmator Pro).
 
+Scene analysis (Section 2) and story-arc grouping of a folder, as JSON:
+
+```bash
+cargo run --release -p epikos-cli -- analyze <RAW>   # genre, light, skin, palette (~3 s with models)
+cargo run --release -p epikos-cli -- story <DIR>     # groups, hero frames, palettes (previews + EXIF only)
+```
+
+Genres are scored by hand-written rules over measured cues (skin and subject coverage,
+sky, depth range, focal length, light colour, capture time, straight lines, stars), not
+a trained classifier; each score carries the evidence behind it. In the app, "Sync this
+look" copies the open photo's look to the rest of its story-arc group, adapting exposure,
+white-balance shift, skin protection and micro-contrast per frame. Each changed sidecar is
+backed up to `<file>.epikos.json.presync`, so "Undo sync" can restore it.
+
 Keep the checkout out of iCloud Drive (e.g. `~/Developer`), or mark the folder "Keep
 Downloaded". With "Optimize Mac Storage", macOS evicts project files (`node_modules`,
 `target`, `.git`, models) and reads of them can time out, which crashes dev servers and
