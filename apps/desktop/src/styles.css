@@ -231,8 +231,8 @@ code {
   gap: 8px;
 }
 
-.modal-meta {
-  margin-top: 16px;
+.modal .field + .field {
+  margin-top: 14px;
 }
 
 .modal-status {
@@ -926,4 +926,45 @@ input[type="range"]::-moz-range-thumb {
 .wheel-label output {
   font-variant-numeric: tabular-nums;
   color: var(--text-faint);
+}
+
+/* ---- Step 7 curves ---------------------------------------------------------------- */
+
+.curve-graph {
+  display: block;
+  margin: 2px auto 4px;
+  background: #1b1b1b;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.curve-grid line,
+.curve-diagonal {
+  stroke: #333;
+  stroke-width: 1;
+}
+
+.curve-diagonal {
+  stroke-dasharray: 3 3;
+}
+
+.curve-graph path {
+  fill: none;
+  stroke-linejoin: round;
+}
+
+.curve-main {
+  stroke-width: 2;
+}
+
+.curve-other {
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+.tone-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #555;
 }

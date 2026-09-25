@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use epikos_core::{Error, Result};
 
 use crate::document::{
-    Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels,
+    Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, HslBands, HslChannel, LensCorrections,
-    NoiseReduction, SourceRef, StyleRef, Texture, WbMode, WhiteBalance,
+    NoiseReduction, SourceRef, SplitToning, StyleRef, Texture, ToneCurve, WbMode, WhiteBalance,
 };
 
 /// XMP namespace that marks a sidecar as written by EPIKOS RAW.
@@ -178,6 +178,21 @@ fn render_look(a: &Adjustments) -> String {
         at.shafts, at.shaft_length, at.shaft_warmth,
         if at.shaft_auto { "auto" } else { "manual" }, at.shaft_x, at.shaft_y
     );
+    let c = &a.curves;
+    for (name, curve) in [
+        ("Rgb", c.rgb),
+        ("Red", c.red),
+        ("Green", c.green),
+        ("Blue", c.blue),
+    ] {
+        let v = curve.to_array().map(|x| x.to_string()).join(",");
+        out += &format!("\n    epikos:curve{name}=\"{v}\"");
+    }
+    let st = &a.split_toning;
+    out += &format!(
+        "\n    epikos:splitToning=\"{},{},{},{},{}\"",
+        st.highlight_hue, st.highlight_saturation, st.shadow_hue, st.shadow_saturation, st.balance
+    );
     out += &format!(
         "\n    epikos:skinProtection=\"{}\"\n    epikos:style=\"{}\"\n    epikos:styleAmount=\"{}\"\n    epikos:styleSkinProtection=\"{}\"",
         a.color.skin_protection,
@@ -197,9 +212,16 @@ fn capitalise(s: &str) -> String {
 
 /// `"a,b,c"` → three numbers.
 fn triple(s: &str) -> Option<[f32; 3]> {
-    let mut it = s.split(',').map(|v| v.trim().parse::<f32>().ok());
-    let v = [it.next()??, it.next()??, it.next()??];
-    it.next().is_none().then_some(v)
+    numbers(s)
+}
+
+/// Exactly `N` comma-separated numbers.
+fn numbers<const N: usize>(s: &str) -> Option<[f32; N]> {
+    let v: Vec<f32> = s
+        .split(',')
+        .map(|v| v.trim().parse::<f32>().ok())
+        .collect::<Option<_>>()?;
+    v.try_into().ok()
 }
 
 fn attr<'a>(xml: &'a str, key: &str) -> Option<&'a str> {
@@ -355,6 +377,30 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     shaft_y,
                 }
             },
+            curves: {
+                let curve = |name: &str| {
+                    get(&format!("epikos:curve{name}"))
+                        .and_then(numbers::<6>)
+                        .map(ToneCurve::from_array)
+                        .unwrap_or_default()
+                };
+                Curves {
+                    rgb: curve("Rgb"),
+                    red: curve("Red"),
+                    green: curve("Green"),
+                    blue: curve("Blue"),
+                }
+            },
+            split_toning: get("epikos:splitToning")
+                .and_then(numbers::<5>)
+                .map(|[hh, hs, sh, ss, balance]| SplitToning {
+                    highlight_hue: hh,
+                    highlight_saturation: hs,
+                    shadow_hue: sh,
+                    shadow_saturation: ss,
+                    balance,
+                })
+                .unwrap_or_default(),
             style: StyleRef {
                 id: text("epikos:style"),
                 amount: num("epikos:styleAmount").unwrap_or(defaults.style.amount),
@@ -438,6 +484,12 @@ mod tests {
         doc.adjustments.atmosphere.shaft_auto = false;
         doc.adjustments.atmosphere.shaft_x = 0.8;
         doc.adjustments.atmosphere.shaft_y = 0.05;
+        doc.adjustments.curves.rgb.darks = -15.0;
+        doc.adjustments.curves.rgb.black = 12.5;
+        doc.adjustments.curves.blue.highlights = -8.0;
+        doc.adjustments.split_toning.highlight_saturation = 30.0;
+        doc.adjustments.split_toning.shadow_hue = 190.0;
+        doc.adjustments.split_toning.balance = -20.0;
         doc.adjustments.style.id = "silver-charcoal".into();
         doc.adjustments.style.amount = 70.0;
         doc.adjustments.style.skin_protection = 55.0;

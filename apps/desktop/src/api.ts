@@ -6,6 +6,7 @@ import type {
   ExportOptions,
   ExportReport,
   FileEntry,
+  HandoffApp,
   ImageInfo,
   Mask,
   MaskKind,
@@ -103,3 +104,8 @@ function parseMask(buf: ArrayBuffer, kind: Mask["kind"]): Mask {
 }
 
 export const listStyles = () => invoke<StyleInfo[]>("list_styles");
+
+/** Photo editors installed on this computer (macOS). */
+export const handoffApps = () => invoke<HandoffApp[]>("handoff_apps");
+
+export const openInApp = (app: string, file: string) => invoke<void>("open_in_app", { app, file });

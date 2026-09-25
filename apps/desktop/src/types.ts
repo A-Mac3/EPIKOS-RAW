@@ -88,6 +88,32 @@ export interface Atmosphere {
   shaftY: number;
 }
 
+/**
+ * Step 7 parametric curve, every value −100…100 (all zero = identity). `black` > 0
+ * lifts the floor (matte), < 0 crushes; `white` > 0 clips earlier, < 0 fades.
+ */
+export interface ToneCurve {
+  shadows: number;
+  darks: number;
+  lights: number;
+  highlights: number;
+  black: number;
+  white: number;
+}
+
+export const CURVE_CHANNELS = ["rgb", "red", "green", "blue"] as const;
+export type CurveChannel = (typeof CURVE_CHANNELS)[number];
+export type Curves = Record<CurveChannel, ToneCurve>;
+
+/** Hue in degrees on the HSV wheel, saturation 0…100, balance −100…100. */
+export interface SplitToning {
+  highlightHue: number;
+  highlightSaturation: number;
+  shadowHue: number;
+  shadowSaturation: number;
+  balance: number;
+}
+
 /** Parametric style layered on the manual Step 4–6 settings. `id` empty = none. */
 export interface StyleRef {
   id: string;
@@ -117,6 +143,8 @@ export interface Adjustments {
   texture: Texture;
   color: ColorGrade;
   atmosphere: Atmosphere;
+  curves: Curves;
+  splitToning: SplitToning;
   style: StyleRef;
 }
 
@@ -159,6 +187,18 @@ export interface CaptureMetadata {
 export interface ExportOptions {
   colorSpace: OutputSpace;
   includeLocation: boolean;
+  /** Subject, sky and skin masks as named alpha channels (Photoshop). */
+  aiMasks: boolean;
+  /** Depth map as an alpha channel. */
+  depthChannel: boolean;
+  /** Long edge in pixels; null = full size. */
+  longEdge: number | null;
+}
+
+/** A photo editor the export can be handed to. */
+export interface HandoffApp {
+  name: string;
+  path: string;
 }
 
 export interface ImageInfo {
@@ -199,6 +239,7 @@ export interface ExportReport {
   bytes: number;
   wroteExif: boolean;
   wroteLocation: boolean;
+  alphaChannels: string[];
   developMs: number;
   writeMs: number;
 }
@@ -255,8 +296,19 @@ export function defaultAdjustments(): Adjustments {
     texture: { clarity: 0, microTexture: 0, blemishSmoothing: 0, specularBalance: 0 },
     color: defaultColorGrade(),
     atmosphere: defaultAtmosphere(),
+    curves: {
+      rgb: defaultToneCurve(),
+      red: defaultToneCurve(),
+      green: defaultToneCurve(),
+      blue: defaultToneCurve(),
+    },
+    splitToning: { highlightHue: 40, highlightSaturation: 0, shadowHue: 215, shadowSaturation: 0, balance: 0 },
     style: { id: "", amount: 100, skinProtection: 0 },
   };
+}
+
+export function defaultToneCurve(): ToneCurve {
+  return { shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0 };
 }
 
 export function defaultAtmosphere(): Atmosphere {

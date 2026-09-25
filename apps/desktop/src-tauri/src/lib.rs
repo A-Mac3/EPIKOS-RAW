@@ -7,6 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod handoff;
+
 use epikos_core::CameraFormat;
 use epikos_engine::{
     dev_models_dir, env_models_dir, Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, MaskKind,
@@ -121,6 +123,20 @@ async fn detect_depth(engine: EngineState<'_>, path: String, adjustments: Adjust
     Ok(Response::new(out))
 }
 
+/// Photo editors installed on this computer, for "Export & open in…".
+#[tauri::command]
+async fn handoff_apps() -> CmdResult<Vec<handoff::HandoffApp>> {
+    blocking(|| Ok(handoff::installed())).await
+}
+
+/// Open an exported TIFF in one of [`handoff_apps`].
+#[tauri::command]
+async fn open_in_app(app: String, file: String) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || handoff::open_in(&app, Path::new(&file)))
+        .await
+        .map_err(|e| format!("worker failed: {e}"))?
+}
+
 /// Built-in parametric styles for the preset panel.
 #[tauri::command]
 fn list_styles() -> Vec<StyleInfo> {
@@ -202,7 +218,9 @@ pub fn run() {
             mask_models,
             detect_mask,
             detect_depth,
-            list_styles
+            list_styles,
+            handoff_apps,
+            open_in_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

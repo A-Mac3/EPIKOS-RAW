@@ -49,6 +49,10 @@ pub struct Adjustments {
     pub color: ColorGrade,
     /// Step 6: glow, depth-based fog and light shafts.
     pub atmosphere: Atmosphere,
+    /// Step 7: parametric tone curves.
+    pub curves: Curves,
+    /// Step 7: split toning.
+    pub split_toning: SplitToning,
     /// Parametric style layered on top of the manual Step 4–6 settings.
     pub style: StyleRef,
 }
@@ -65,6 +69,8 @@ impl Default for Adjustments {
             texture: Texture::default(),
             color: ColorGrade::default(),
             atmosphere: Atmosphere::default(),
+            curves: Curves::default(),
+            split_toning: SplitToning::default(),
             style: StyleRef::default(),
         }
     }
@@ -235,6 +241,97 @@ impl Default for Atmosphere {
             shaft_x: 0.5,
             shaft_y: 0.15,
         }
+    }
+}
+
+/// One parametric tone curve (PRD Step 7). Every value −100…100; all zero is the
+/// identity. The four regions bend the curve around ⅕, ⅖, ⅗ and ⅘ of the tonal range;
+/// `black` lifts the floor (matte, > 0) or crushes shadows to black (< 0); `white`
+/// clips highlights earlier (> 0) or lowers the ceiling (faded, < 0).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ToneCurve {
+    pub shadows: f32,
+    pub darks: f32,
+    pub lights: f32,
+    pub highlights: f32,
+    pub black: f32,
+    pub white: f32,
+}
+
+impl ToneCurve {
+    pub fn is_identity(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// `[shadows, darks, lights, highlights, black, white]`.
+    pub fn to_array(self) -> [f32; 6] {
+        [
+            self.shadows,
+            self.darks,
+            self.lights,
+            self.highlights,
+            self.black,
+            self.white,
+        ]
+    }
+
+    pub fn from_array([shadows, darks, lights, highlights, black, white]: [f32; 6]) -> Self {
+        Self {
+            shadows,
+            darks,
+            lights,
+            highlights,
+            black,
+            white,
+        }
+    }
+}
+
+/// The master RGB curve (applied first) and one curve per channel.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Curves {
+    pub rgb: ToneCurve,
+    pub red: ToneCurve,
+    pub green: ToneCurve,
+    pub blue: ToneCurve,
+}
+
+impl Curves {
+    pub fn is_identity(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// PRD Step 7 split toning: hue in degrees on the HSV wheel, saturation 0…100,
+/// balance −100 (favour shadows) … 100 (favour highlights).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SplitToning {
+    pub highlight_hue: f32,
+    pub highlight_saturation: f32,
+    pub shadow_hue: f32,
+    pub shadow_saturation: f32,
+    pub balance: f32,
+}
+
+impl Default for SplitToning {
+    fn default() -> Self {
+        // Hues start on the classic warm highlights / cool shadows pairing.
+        Self {
+            highlight_hue: 40.0,
+            highlight_saturation: 0.0,
+            shadow_hue: 215.0,
+            shadow_saturation: 0.0,
+            balance: 0.0,
+        }
+    }
+}
+
+impl SplitToning {
+    pub fn is_neutral(&self) -> bool {
+        self.highlight_saturation <= 0.0 && self.shadow_saturation <= 0.0
     }
 }
 

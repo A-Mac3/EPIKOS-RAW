@@ -3,7 +3,7 @@
 //! Order: demosaic → highlight recovery → white balance → noise reduction →
 //! chromatic aberration → Brown–Conrady distortion → camera RGB → linear Rec.2020 →
 //! exposure → orientation → Step 4 texture → Step 5 colour → Step 6 atmosphere (with
-//! the style layered into Steps 4–6).
+//! the style layered into Steps 4–6) → Step 7 curves and split toning.
 //! [`to_display_srgb`] is the separate view transform for the screen.
 
 mod color_transform;
@@ -29,7 +29,7 @@ pub use develop::{
 pub use display::{to_display_srgb, DisplayImage};
 pub use highlights::recover_highlights;
 pub use look::{
-    apply_look, look_is_active, look_needs_depth, skin_likelihood, styles, DepthPlane, LookInputs,
+    apply_look, fit_to_image, look_is_active, look_needs_depth, skin_likelihood, styles, DepthPlane, LookInputs,
     StyleInfo,
 };
 pub use optics::{correct_chromatic_aberration, correct_distortion};

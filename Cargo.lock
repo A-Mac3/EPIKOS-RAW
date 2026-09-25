@@ -1006,6 +1006,7 @@ dependencies = [
  "epikos-masks",
  "epikos-pipeline",
  "epikos-sidecar",
+ "flate2",
  "image",
  "serde",
  "tiff",

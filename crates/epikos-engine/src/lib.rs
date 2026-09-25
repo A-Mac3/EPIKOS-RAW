@@ -14,7 +14,7 @@ use epikos_core::{CameraFormat, Error, ImageRgbF32, Result, SensorLayout};
 use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
 use epikos_masks::{DepthMap, RgbImage};
 use epikos_pipeline::{
-    bin_mosaic, block_for_size, develop_rgb_with, look_needs_depth, temperature_for_gains,
+    bin_mosaic, block_for_size, develop_rgb_with, look_needs_depth, skin_likelihood, temperature_for_gains,
     to_display_srgb, DepthPlane, DisplayImage, LookInputs,
 };
 use epikos_sidecar::{
@@ -222,18 +222,22 @@ impl Engine {
         kind: MaskKind,
     ) -> Result<Arc<Mask>> {
         let loaded = self.load(path)?;
-        let display = render(&loaded, &scene_only(adjustments), MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
+        let mask = Arc::new(self.segment(&loaded, adjustments, kind)?);
+        let mut masks = loaded.masks.lock().unwrap();
+        masks.retain(|m| m.kind != kind);
+        masks.push(mask.clone());
+        Ok(mask)
+    }
+
+    fn segment(&self, loaded: &Loaded, adjustments: &Adjustments, kind: MaskKind) -> Result<Mask> {
+        let display = render(loaded, &scene_only(adjustments), MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
         let rgb = rgba_to_rgb(&display);
         let image = RgbImage {
             width: rgb.width(),
             height: rgb.height(),
             data: rgb.into_raw(),
         };
-        let mask = Arc::new(self.masker.segment(kind, &image)?);
-        let mut masks = loaded.masks.lock().unwrap();
-        masks.retain(|m| m.kind != kind);
-        masks.push(mask.clone());
-        Ok(mask)
+        self.masker.segment(kind, &image)
     }
 
     /// The last mask of `kind` detected for `path`, if the image is still cached.
@@ -357,7 +361,57 @@ impl Engine {
     ) -> Result<ExportReport> {
         let loaded = self.load(path)?;
         let depth = self.look_depth(&loaded, adjustments);
-        export::export_tiff(&loaded, adjustments, dest, options, depth.as_deref())
+        let aux = self.export_channels(&loaded, adjustments, &options, depth.as_deref())?;
+        export::export_tiff(&loaded, adjustments, dest, options, depth.as_deref(), aux)
+    }
+
+    /// Model outputs for the export's alpha channels (Step 8 handoff): subject and sky
+    /// where their models are installed, skin always, depth on request.
+    fn export_channels(
+        &self,
+        loaded: &Loaded,
+        adjustments: &Adjustments,
+        options: &ExportOptions,
+        look_depth: Option<&DepthMap>,
+    ) -> Result<Vec<export::AuxPlane>> {
+        let mut aux = Vec::new();
+        if options.ai_masks {
+            let status = self.masker.status();
+            for kind in MaskKind::ALL {
+                if !status.iter().any(|s| s.kind == kind && s.available) {
+                    continue;
+                }
+                let mask = self.segment(loaded, adjustments, kind)?;
+                aux.push(export::AuxPlane {
+                    name: kind.label().to_string(),
+                    width: mask.width,
+                    height: mask.height,
+                    data: mask.alpha.iter().map(|&a| a as f32 / 255.0).collect(),
+                });
+            }
+            let (w, h, skin) = self.skin_plane(loaded, adjustments)?;
+            aux.push(export::AuxPlane { name: "Skin".into(), width: w, height: h, data: skin });
+        }
+        if options.depth_channel && self.masker.depth_available() {
+            let depth = match look_depth {
+                Some(d) => d.clone(),
+                None => (*self.depth_for(loaded, adjustments)?).clone(),
+            };
+            aux.push(export::AuxPlane {
+                name: "Depth".into(),
+                width: depth.width,
+                height: depth.height,
+                data: depth.depth,
+            });
+        }
+        Ok(aux)
+    }
+
+    /// Skin likelihood of the scene (Steps 1–2) at mask resolution.
+    fn skin_plane(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<(u32, u32, Vec<f32>)> {
+        let base = loaded.base(MASK_INPUT_SIDE, MASK_INPUT_SIDE);
+        let rgb = develop_rgb_with((*base).clone(), &loaded.raw.profile, &scene_only(adjustments), &LookInputs::default())?;
+        Ok((rgb.width, rgb.height, skin_likelihood(&rgb)))
     }
 
     /// JPEG thumbnail: the camera's embedded preview when available, otherwise a
@@ -607,7 +661,7 @@ mod tests {
         let dest = dir.join("out.tif");
         let loaded = synthetic_loaded(64, 48);
         let report =
-            export::export_tiff(&loaded, &Adjustments::default(), &dest, prophoto(), None).unwrap();
+            export::export_tiff(&loaded, &Adjustments::default(), &dest, prophoto(), None, Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (64, 48));
         assert!(!dir.join("out.tif.partial").exists());
 
@@ -617,6 +671,79 @@ mod tests {
         let icc = dec.get_tag_u8_vec(Tag::IccProfile).unwrap();
         assert_eq!(&icc[36..40], b"acsp");
         assert_eq!(icc, OutputSpace::ProPhoto.icc_profile());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_writes_named_alpha_channels_that_decode_intact() {
+        use tiff::decoder::Decoder;
+        use tiff::tags::Tag;
+
+        let dir = temp_dir("export-alpha");
+        let dest = dir.join("masks.tif");
+        let loaded = synthetic_loaded(64, 48);
+        // Low-resolution planes, as the models produce: subject on the left half.
+        let subject: Vec<f32> = (0..32 * 24).map(|i| if i % 32 < 16 { 1.0 } else { 0.0 }).collect();
+        let aux = vec![
+            export::AuxPlane { name: "Subject".into(), width: 32, height: 24, data: subject },
+            export::AuxPlane { name: "Skin".into(), width: 32, height: 24, data: vec![0.25; 32 * 24] },
+        ];
+        let report = export::export_tiff(
+            &loaded,
+            &Adjustments::default(),
+            &dest,
+            ExportOptions::default(),
+            None,
+            aux,
+        )
+        .unwrap();
+        assert_eq!(report.alpha_channels, ["Subject", "Skin"]);
+
+        let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
+        assert_eq!(dec.get_tag_u32_vec(Tag::ExtraSamples).unwrap(), [0, 0]);
+        assert_eq!(dec.get_tag_u32(Tag::SamplesPerPixel).unwrap(), 5);
+        let resources = dec.get_tag_u8_vec(Tag::Unknown(34377)).unwrap();
+        assert!(resources.windows(8).any(|w| w == b"\x07Subject"), "no Pascal name");
+        let utf16: Vec<u8> = "Skin".encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        assert!(resources.windows(utf16.len()).any(|w| w == utf16), "no Unicode name");
+
+        // The `tiff` decoder drops non-alpha extra channels, so read the strips as
+        // Photoshop does: inflate, then undo horizontal differencing over 5 samples.
+        let offsets = dec.get_tag_u64_vec(Tag::StripOffsets).unwrap();
+        let counts = dec.get_tag_u64_vec(Tag::StripByteCounts).unwrap();
+        let file = fs::read(&dest).unwrap();
+        let mut bytes = Vec::new();
+        for (&o, &n) in offsets.iter().zip(&counts) {
+            use std::io::Read;
+            flate2::read::ZlibDecoder::new(&file[o as usize..(o + n) as usize])
+                .read_to_end(&mut bytes)
+                .unwrap();
+        }
+        let mut px: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
+        assert_eq!(px.len(), 64 * 48 * 5);
+        for row in px.as_chunks_mut::<{ 64 * 5 }>().0 {
+            for i in 5..row.len() {
+                row[i] = row[i].wrapping_add(row[i - 5]);
+            }
+        }
+        let at = |x: usize, y: usize, c: usize| px[(y * 64 + x) * 5 + c];
+        // Grey synthetic image: RGB neutral; masks survive the predictor and ZIP.
+        assert_eq!(at(10, 20, 0), at(10, 20, 1));
+        assert!(at(5, 20, 3) > 60_000, "subject inside: {}", at(5, 20, 3));
+        assert!(at(58, 20, 3) < 5_000, "subject outside: {}", at(58, 20, 3));
+        assert!(at(30, 30, 4).abs_diff(16_384) < 700, "skin: {}", at(30, 30, 4));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_resizes_to_the_long_edge() {
+        let dir = temp_dir("export-size");
+        let dest = dir.join("small.tif");
+        let loaded = synthetic_loaded(64, 48);
+        let options = ExportOptions { long_edge: Some(32), ..ExportOptions::default() };
+        let report =
+            export::export_tiff(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+        assert_eq!((report.width, report.height), (32, 24));
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -653,12 +780,14 @@ mod tests {
                 ..ExportOptions::default()
             };
             let report =
-                export::export_tiff(&loaded, &Adjustments::default(), &dest, options, None).unwrap();
+                export::export_tiff(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
             assert_eq!(report.wrote_location, include_location);
 
             let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
             assert_eq!(dec.get_tag_ascii_string(Tag::Make).unwrap(), "FUJIFILM");
             assert_eq!(dec.get_tag_u32(Tag::Orientation).unwrap(), 1);
+        assert_eq!(dec.get_tag_u32(Tag::ResolutionUnit).unwrap(), 2);
+        assert_eq!(dec.get_tag_u32_vec(Tag::XResolution).unwrap(), [300, 1]);
             assert_eq!(
                 dec.find_tag(Tag::GpsDirectory).unwrap().is_some(),
                 include_location
@@ -693,10 +822,10 @@ mod tests {
         loaded.raw.source_path = raw.to_string_lossy().into_owned();
         let adj = Adjustments::default();
         assert!(
-            export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), None)
+            export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), None, Vec::new())
                 .is_err()
         );
-        assert!(export::export_tiff(&loaded, &adj, &raw, ExportOptions::default(), None).is_err());
+        assert!(export::export_tiff(&loaded, &adj, &raw, ExportOptions::default(), None, Vec::new()).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 

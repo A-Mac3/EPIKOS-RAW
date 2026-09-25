@@ -2,10 +2,14 @@ import { useState, type ReactNode } from "react";
 import type { DepthState } from "../hooks/useDepth";
 import { MASK_KINDS, type MaskState } from "../hooks/useMasks";
 import {
+  CURVE_CHANNELS,
   HSL_BANDS,
   WHEEL_RANGES,
   type Adjustments,
   type ColorWheel as Wheel,
+  type CurveChannel,
+  type SplitToning,
+  type ToneCurve,
   type DemosaicMode,
   type HslBand,
   type HslChannel,
@@ -15,6 +19,7 @@ import {
   type WheelRange,
 } from "../types";
 import { ColorWheel } from "./ColorWheel";
+import { CurveGraph } from "./CurveGraph";
 import { Segmented, Slider, Toggle } from "./Slider";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
@@ -43,8 +48,8 @@ const STEPS: { title: string; planned: string }[] = [
   { title: "Micro-Texture & Retouching", planned: "Character line sculpting; retouching confined to the subject mask" },
   { title: "Base Color Grading & HSL", planned: "Foliage shift and background re-coloration through the Step 3 masks" },
   { title: "Atmospheric & Light Sculpting", planned: "3D light placement on the depth map; glow confined to the subject mask" },
-  { title: "Creative Split-Toning & Curves", planned: "Highlight warmth, shadow cooling, black point and matte" },
-  { title: "Final Finishing & Handoff", planned: "Analog grain, vignette, PSD / DNG export. 16-bit TIFF export is available now (Export… / ⌘E)" },
+  { title: "Creative Split-Toning & Curves", planned: "Free-form point curves" },
+  { title: "Final Finishing & Handoff", planned: "Analog grain, edge vignette, layered PSD and DNG handoff" },
 ];
 
 // Temperature slider is logarithmic so the useful 2 000–10 000 K range gets most travel.
@@ -88,6 +93,20 @@ const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 const WARMTH_TRACK = "linear-gradient(90deg, #6f9be0, #d8d8d8 50%, #e6a73a)";
 
+const HUE_TRACK = `linear-gradient(90deg, ${[0, 60, 120, 180, 240, 300, 360].map((h) => `hsl(${h} 80% 55%)`).join(", ")})`;
+
+const CURVE_LABEL: Record<CurveChannel, string> = { rgb: "RGB", red: "Red", green: "Green", blue: "Blue" };
+
+/** Slider rows of one tone curve, top to bottom as on the graph. */
+const CURVE_ROWS: { key: keyof ToneCurve; label: string }[] = [
+  { key: "highlights", label: "Highlights" },
+  { key: "lights", label: "Lights" },
+  { key: "darks", label: "Darks" },
+  { key: "shadows", label: "Shadows" },
+  { key: "white", label: "White point (clip ↔ fade)" },
+  { key: "black", label: "Black point (crush ↔ matte)" },
+];
+
 export function StepsPanel({
   info,
   adjustments: a,
@@ -101,6 +120,7 @@ export function StepsPanel({
 }: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const [hslMode, setHslMode] = useState<HslMode>("saturation");
+  const [curveChannel, setCurveChannel] = useState<CurveChannel>("rgb");
   const toggle = (i: number) =>
     setOpen((s) => {
       const next = new Set(s);
@@ -196,6 +216,58 @@ export function StepsPanel({
     />
   );
   const depthAvailable = masks.models?.depth.available ?? false;
+
+  const curve = a.curves[curveChannel];
+  const setCurve = (patch: Partial<ToneCurve>) => (x: Adjustments) => ({
+    ...x,
+    curves: { ...x.curves, [curveChannel]: { ...x.curves[curveChannel], ...patch } },
+  });
+  const st = a.splitToning;
+  const setSplit = (patch: Partial<SplitToning>) => (x: Adjustments) => ({
+    ...x,
+    splitToning: { ...x.splitToning, ...patch },
+  });
+  const toneRow = (
+    label: string,
+    hueKey: "highlightHue" | "shadowHue",
+    satKey: "highlightSaturation" | "shadowSaturation",
+    defHue: number,
+  ) => (
+    <>
+      <div className="field-row">
+        <span className="field-label">{label}</span>
+        <span
+          className="tone-swatch"
+          style={{ background: `hsl(${st[hueKey]} ${Math.max(8, st[satKey])}% 50%)` }}
+          aria-hidden
+        />
+      </div>
+      <Slider
+        label="Hue"
+        value={st[hueKey]}
+        min={0}
+        max={360}
+        step={1}
+        defaultValue={defHue}
+        format={(v) => `${v.toFixed(0)}°`}
+        track={HUE_TRACK}
+        onChange={(v) => edit(setSplit({ [hueKey]: v }))}
+        onCommit={endEdit}
+      />
+      <Slider
+        label="Saturation"
+        value={st[satKey]}
+        min={0}
+        max={100}
+        step={1}
+        defaultValue={0}
+        format={(v) => v.toFixed(0)}
+        track={`linear-gradient(90deg, hsl(${st[hueKey]} 0% 45%), hsl(${st[hueKey]} 80% 50%))`}
+        onChange={(v) => edit(setSplit({ [satKey]: v }))}
+        onCommit={endEdit}
+      />
+    </>
+  );
 
   const content: Record<number, ReactNode> = {
     0: (
@@ -511,6 +583,60 @@ export function StepsPanel({
             Depth model not installed, so fog is a uniform haze. Run <code>scripts/fetch-models.sh</code>.
           </p>
         )}
+      </>
+    ),
+    6: (
+      <>
+        <div className="field-row">
+          <span className="field-label">Curve</span>
+          <Segmented<CurveChannel>
+            label="Curve channel"
+            value={curveChannel}
+            options={CURVE_CHANNELS.map((c) => ({ value: c, label: CURVE_LABEL[c] }))}
+            onChange={setCurveChannel}
+          />
+        </div>
+        <CurveGraph curves={a.curves} channel={curveChannel} />
+        {CURVE_ROWS.map(({ key, label }) => (
+          <Slider
+            key={`${curveChannel}-${key}`}
+            label={label}
+            value={curve[key]}
+            min={-100}
+            max={100}
+            step={1}
+            defaultValue={0}
+            format={fmtSigned(0)}
+            onChange={(v) => edit(setCurve({ [key]: v }))}
+            onCommit={endEdit}
+          />
+        ))}
+        <button
+          type="button"
+          className="btn"
+          disabled={Object.values(curve).every((v) => v === 0)}
+          onClick={() =>
+            commit(setCurve({ shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0 }))
+          }
+        >
+          Reset {CURVE_LABEL[curveChannel]} curve
+        </button>
+
+        <span className="field-label">Split toning</span>
+        {toneRow("Highlights", "highlightHue", "highlightSaturation", 40)}
+        {toneRow("Shadows", "shadowHue", "shadowSaturation", 215)}
+        <Slider
+          label="Balance"
+          value={st.balance}
+          min={-100}
+          max={100}
+          step={1}
+          defaultValue={0}
+          format={fmtSigned(0)}
+          onChange={(v) => edit(setSplit({ balance: v }))}
+          onCommit={endEdit}
+        />
+        <p className="hint">Positive balance gives more of the image the highlight tint.</p>
       </>
     ),
   };

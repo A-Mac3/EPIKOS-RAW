@@ -47,6 +47,16 @@ fn main() {
     step6.atmosphere.fog_warmth = 20.0;
     step6.atmosphere.shafts = 70.0;
     looks.push(("step6".into(), step6));
+    let mut step7 = base.clone();
+    step7.curves.rgb.darks = -25.0;
+    step7.curves.rgb.lights = 20.0;
+    step7.curves.rgb.black = 35.0;
+    step7.curves.blue.shadows = 15.0;
+    step7.split_toning.highlight_hue = 38.0;
+    step7.split_toning.highlight_saturation = 35.0;
+    step7.split_toning.shadow_hue = 190.0;
+    step7.split_toning.shadow_saturation = 40.0;
+    looks.push(("step7".into(), step7));
 
     // Depth map (Step 6), if the model is installed.
     if engine.mask_models().depth.available {

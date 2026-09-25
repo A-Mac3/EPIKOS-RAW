@@ -1,5 +1,9 @@
 //! Full-resolution 16-bit TIFF export with an embedded ICC profile (PRD Section 1.2 /
 //! Step 8 handoff to Photoshop, Lightroom, Capture One, DxO).
+//!
+//! The AI masks (subject, sky, skin) and depth can ride along as extra 16-bit
+//! channels. Photoshop opens those as alpha channels, named through the Photoshop
+//! image-resource tag (34377) it writes and reads itself; other apps use the RGB.
 
 use std::borrow::Cow;
 use std::fs::{self, File};
@@ -9,15 +13,17 @@ use std::time::Instant;
 
 use epikos_core::{CaptureMetadata, Error, GpsInfo, Result};
 use epikos_masks::DepthMap;
-use epikos_pipeline::{develop_adjustments_with, encode_rgb16, OutputSpace};
+use epikos_core::{resize_plane, ImageRgbF32};
+use epikos_pipeline::{develop_adjustments_with, encode_rgb16, fit_to_image, OutputSpace};
 use epikos_sidecar::Adjustments;
 use serde::{Deserialize, Serialize};
 use tiff::encoder::compression::DeflateLevel;
+use tiff::encoder::colortype::ColorType;
 use tiff::encoder::{
     colortype, Compression, DirectoryEncoder, Predictor, Rational, SRational, TiffEncoder,
     TiffKind, TiffValue,
 };
-use tiff::tags::{Tag, Type};
+use tiff::tags::{PhotometricInterpretation, SampleFormat, Tag, Type};
 
 use crate::Loaded;
 
@@ -27,6 +33,12 @@ pub struct ExportOptions {
     pub color_space: OutputSpace,
     /// Copy GPS position into the export. On by default, as in Lightroom and Photoshop.
     pub include_location: bool,
+    /// Add the subject, sky and skin masks as alpha channels.
+    pub ai_masks: bool,
+    /// Add the depth map as an alpha channel (e.g. for Photoshop's Lens Blur).
+    pub depth_channel: bool,
+    /// Downsize so the long edge is at most this many pixels; `None` = full size.
+    pub long_edge: Option<u32>,
 }
 
 impl Default for ExportOptions {
@@ -34,9 +46,23 @@ impl Default for ExportOptions {
         Self {
             color_space: OutputSpace::Srgb,
             include_location: true,
+            ai_masks: false,
+            depth_channel: false,
+            long_edge: None,
         }
     }
 }
+
+/// A low-resolution model output (0–1) to be written as a named alpha channel.
+pub(crate) struct AuxPlane {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<f32>,
+}
+
+/// At most this many extra channels (subject, sky, skin, depth).
+const MAX_EXTRA: usize = 4;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +75,8 @@ pub struct ExportReport {
     /// Whether EXIF capture data (and GPS, if any and allowed) was written.
     pub wrote_exif: bool,
     pub wrote_location: bool,
+    /// Names of the alpha channels written, in order.
+    pub alpha_channels: Vec<String>,
     pub develop_ms: u64,
     pub write_ms: u64,
 }
@@ -59,6 +87,7 @@ pub(crate) fn export_tiff(
     dest: &Path,
     options: ExportOptions,
     depth: Option<&DepthMap>,
+    aux: Vec<AuxPlane>,
 ) -> Result<ExportReport> {
     let space = options.color_space;
     let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -76,10 +105,25 @@ pub(crate) fn export_tiff(
     let t = Instant::now();
     let inputs = crate::look_inputs(depth);
     let rgb = develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, &inputs)?;
+    let rgb = match options.long_edge {
+        Some(edge) => downsize(rgb, edge),
+        None => rgb,
+    };
     let (width, height) = (rgb.width, rgb.height);
-    let pixels = encode_rgb16(&rgb, space);
+    let aux = aux.into_iter().take(MAX_EXTRA).collect::<Vec<_>>();
+    // Fit each model output to this image's edges, then quantise to 16 bits.
+    let channels: Vec<(String, Vec<u16>)> = aux
+        .iter()
+        .filter_map(|a| {
+            let fitted = fit_to_image(&rgb, &a.data, a.width, a.height, 0.003)?;
+            Some((a.name.clone(), fitted.iter().map(|v| (v * 65535.0).round() as u16).collect()))
+        })
+        .collect();
+    let pixels = interleave(encode_rgb16(&rgb, space), &channels);
     drop(rgb);
     let develop_ms = t.elapsed().as_millis() as u64;
+    let names: Vec<String> = channels.iter().map(|(n, _)| n.clone()).collect();
+    drop(channels);
 
     // Write beside the destination, then rename: a failed export never leaves a
     // truncated TIFF where the user expects a finished one.
@@ -90,8 +134,15 @@ pub(crate) fn export_tiff(
         .gps
         .as_ref()
         .filter(|g| options.include_location && g.has_position());
-    let result = write_tiff(&partial, width, height, &pixels, space, meta, gps)
-        .and_then(|()| fs::rename(&partial, dest).map_err(Error::from));
+    let image = TiffImage { width, height, pixels: &pixels, alpha_names: &names };
+    let result = match names.len() {
+        0 => write_tiff::<colortype::RGB16>(&partial, &image, space, meta, gps),
+        1 => write_tiff::<Rgb16Plus1>(&partial, &image, space, meta, gps),
+        2 => write_tiff::<Rgb16Plus2>(&partial, &image, space, meta, gps),
+        3 => write_tiff::<Rgb16Plus3>(&partial, &image, space, meta, gps),
+        _ => write_tiff::<Rgb16Plus4>(&partial, &image, space, meta, gps),
+    }
+    .and_then(|()| fs::rename(&partial, dest).map_err(Error::from));
     if result.is_err() {
         let _ = fs::remove_file(&partial);
     }
@@ -105,20 +156,119 @@ pub(crate) fn export_tiff(
         bytes: fs::metadata(dest)?.len(),
         wrote_exif: true,
         wrote_location: gps.is_some(),
+        alpha_channels: names,
         develop_ms,
         write_ms: t.elapsed().as_millis() as u64,
     })
 }
 
-fn write_tiff(
-    path: &Path,
+/// Scale planes down so the long edge is at most `edge` (never up).
+fn downsize(rgb: ImageRgbF32, edge: u32) -> ImageRgbF32 {
+    let long = rgb.width.max(rgb.height);
+    if edge == 0 || long <= edge {
+        return rgb;
+    }
+    let scale = edge as f64 / long as f64;
+    let w = ((rgb.width as f64 * scale).round() as u32).max(1);
+    let h = ((rgb.height as f64 * scale).round() as u32).max(1);
+    let mut out = ImageRgbF32::new(w, h, rgb.space);
+    out.r = resize_plane(&rgb.r, rgb.width, rgb.height, w, h);
+    out.g = resize_plane(&rgb.g, rgb.width, rgb.height, w, h);
+    out.b = resize_plane(&rgb.b, rgb.width, rgb.height, w, h);
+    out
+}
+
+/// RGB16 pixels followed by each channel's sample, pixel by pixel.
+fn interleave(rgb: Vec<u16>, channels: &[(String, Vec<u16>)]) -> Vec<u16> {
+    if channels.is_empty() {
+        return rgb;
+    }
+    let n = rgb.len() / 3;
+    let stride = 3 + channels.len();
+    let mut out = Vec::with_capacity(n * stride);
+    for i in 0..n {
+        out.extend_from_slice(&rgb[i * 3..i * 3 + 3]);
+        out.extend(channels.iter().map(|(_, c)| c[i]));
+    }
+    out
+}
+
+struct TiffImage<'a> {
     width: u32,
     height: u32,
-    rgb16: &[u16],
+    /// Interleaved RGB plus one sample per alpha channel.
+    pixels: &'a [u16],
+    alpha_names: &'a [String],
+}
+
+/// 16-bit RGB with `N` extra channels. The `tiff` crate's own `extra_samples` keeps
+/// predicting with a 3-sample stride, which corrupts extra channels once decoded; these
+/// types carry the full sample count, so the predictor strides over whole pixels.
+macro_rules! rgb16_plus {
+    ($name:ident, $n:literal) => {
+        struct $name;
+        impl ColorType for $name {
+            type Inner = u16;
+            const TIFF_VALUE: PhotometricInterpretation = PhotometricInterpretation::RGB;
+            const BITS_PER_SAMPLE: &'static [u16] = &[16; 3 + $n];
+            const SAMPLE_FORMAT: &'static [SampleFormat] = &[SampleFormat::Uint; 3 + $n];
+            fn horizontal_predict(row: &[u16], result: &mut Vec<u16>) {
+                predict(row, 3 + $n, result)
+            }
+        }
+    };
+}
+rgb16_plus!(Rgb16Plus1, 1);
+rgb16_plus!(Rgb16Plus2, 2);
+rgb16_plus!(Rgb16Plus3, 3);
+rgb16_plus!(Rgb16Plus4, 4);
+
+/// TIFF horizontal differencing: each sample minus the same sample one pixel left.
+fn predict(row: &[u16], stride: usize, result: &mut Vec<u16>) {
+    result.extend_from_slice(&row[..stride.min(row.len())]);
+    result.extend(row.iter().zip(row.iter().skip(stride)).map(|(prev, cur)| cur.wrapping_sub(*prev)));
+}
+
+/// Photoshop image resources naming the alpha channels: 1006 (Pascal strings, for
+/// older readers) and 1045 (Unicode names).
+fn photoshop_alpha_names(names: &[String]) -> Vec<u8> {
+    fn block(out: &mut Vec<u8>, id: u16, data: &[u8]) {
+        out.extend_from_slice(b"8BIM");
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&[0, 0]); // empty resource name, padded to even
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            out.push(0);
+        }
+    }
+    let mut pascal = Vec::new();
+    let mut unicode = Vec::new();
+    for name in names {
+        let latin: Vec<u8> = name.chars().map(|c| if c.is_ascii() { c as u8 } else { b'?' }).take(255).collect();
+        pascal.push(latin.len() as u8);
+        pascal.extend_from_slice(&latin);
+        let utf16: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        unicode.extend_from_slice(&(utf16.len() as u32).to_be_bytes());
+        unicode.extend(utf16.iter().flat_map(|u| u.to_be_bytes()));
+    }
+    let mut out = Vec::new();
+    block(&mut out, 1006, &pascal);
+    block(&mut out, 1045, &unicode);
+    out
+}
+
+fn write_tiff<C: ColorType<Inner = u16>>(
+    path: &Path,
+    img: &TiffImage,
     space: OutputSpace,
     meta: &CaptureMetadata,
     gps: Option<&GpsInfo>,
-) -> Result<()> {
+) -> Result<()>
+where
+    [u16]: TiffValue,
+{
+    let (width, height) = (img.width, img.height);
     let file = BufWriter::new(File::create(path)?);
     // Deflate ("ZIP" in Photoshop) with horizontal differencing: lossless.
     let mut encoder = TiffEncoder::new(file)
@@ -141,9 +291,7 @@ fn write_tiff(
         None => None,
     };
 
-    let mut image = encoder
-        .new_image::<colortype::RGB16>(width, height)
-        .map_err(tiff_err)?;
+    let mut image = encoder.new_image::<C>(width, height).map_err(tiff_err)?;
     let dir = image.encoder();
     let ascii = |dir: &mut DirectoryEncoder<'_, _, _>, tag: Tag, v: &Option<String>| match v {
         Some(v) => dir.write_tag(tag, v.as_str()),
@@ -162,16 +310,28 @@ fn write_tiff(
         ascii(dir, Tag::Copyright, &meta.copyright)?;
         // Pixels are already upright; stop viewers from rotating them again.
         dir.write_tag(Tag::Orientation, 1u16)?;
+        // The encoder's default is 1 dpi, which Photoshop reads as a metres-wide print.
+        dir.write_tag(Tag::XResolution, Rational { n: 300, d: 1 })?;
+        dir.write_tag(Tag::YResolution, Rational { n: 300, d: 1 })?;
+        dir.write_tag(Tag::ResolutionUnit, 2u16)?; // inch
         dir.write_tag(Tag::ExifDirectory, exif.offset)?;
         if let Some(g) = &gps_dir {
             dir.write_tag(Tag::GpsDirectory, g.offset)?;
         }
+        if !img.alpha_names.is_empty() {
+            // 0 = unspecified: plain channels, not transparency.
+            dir.write_tag(Tag::ExtraSamples, &vec![0u16; img.alpha_names.len()][..])?;
+            dir.write_tag(Tag::Unknown(PHOTOSHOP_RESOURCES), Undefined(&photoshop_alpha_names(img.alpha_names)))?;
+        }
         Ok(())
     })()
     .map_err(tiff_err)?;
-    image.write_data(rgb16).map_err(tiff_err)?;
+    image.write_data(img.pixels).map_err(tiff_err)?;
     Ok(())
 }
+
+/// TIFF tag holding Photoshop image resources.
+const PHOTOSHOP_RESOURCES: u16 = 34377;
 
 fn tiff_err(e: tiff::TiffError) -> Error {
     Error::Decode(format!("tiff: {e}"))

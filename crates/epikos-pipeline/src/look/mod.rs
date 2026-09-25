@@ -4,7 +4,7 @@
 //! Order inside: Oklab → skin map (from the image before any look) → Step 4 texture
 //! (manual + style) → Step 5 manual grade (manual skin protection) → style skin grade
 //! (skin only) → style scene grade (style skin protection) → linear → Step 6 fog, glow,
-//! light shafts (manual + style).
+//! light shafts (manual + style) → Step 7 curves and split toning.
 
 mod atmosphere;
 mod blur;
@@ -13,10 +13,11 @@ mod oklab;
 mod skin;
 mod style;
 mod texture;
+mod tone;
 
-use epikos_core::ImageRgbF32;
 use epikos_core::resize_plane;
-use epikos_sidecar::{Adjustments, Atmosphere, ColorGrade, Texture};
+use epikos_core::ImageRgbF32;
+use epikos_sidecar::{Adjustments, Atmosphere, ColorGrade, Curves, SplitToning, Texture};
 use rayon::prelude::*;
 
 use atmosphere::{apply_atmosphere, AtmosphereParams};
@@ -67,6 +68,8 @@ struct Look {
     style_scene: ColorParams,
     style_protection: f32,
     atmosphere: AtmosphereParams,
+    curves: Curves,
+    split: SplitToning,
 }
 
 impl Look {
@@ -79,6 +82,8 @@ impl Look {
             style_scene: ColorParams::default(),
             style_protection: 0.0,
             atmosphere: atmosphere_params(&adj.atmosphere),
+            curves: adj.curves,
+            split: adj.split_toning,
         };
         if adj.style.is_none() {
             return look;
@@ -110,7 +115,10 @@ impl Look {
     }
 
     fn is_neutral(&self) -> bool {
-        !self.needs_lab() && self.atmosphere.is_neutral()
+        !self.needs_lab()
+            && self.atmosphere.is_neutral()
+            && self.curves.is_identity()
+            && self.split.is_neutral()
     }
 }
 
@@ -144,25 +152,34 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         .flatten()
         .map(|d| fit_depth(rgb, d));
     apply_atmosphere(rgb, &look.atmosphere, depth.as_deref());
+    tone::apply_tone(rgb, &look.curves, &look.split);
 }
 
 /// Resize the model's depth to the image and snap its edges to the photo's, so fog
 /// doesn't halo around a subject.
 fn fit_depth(rgb: &ImageRgbF32, d: DepthPlane) -> Vec<f32> {
+    fit_to_image(rgb, d.data, d.width, d.height, 0.006)
+        .unwrap_or_else(|| vec![0.5; rgb.len()])
+}
+
+/// Upsample a low-resolution model output (mask or depth, 0–1) to `rgb`'s size and snap
+/// its edges to the photo's own with a joint guided filter. `radius` is a fraction of
+/// the long side. `None` if `plane` doesn't match its stated size.
+pub fn fit_to_image(rgb: &ImageRgbF32, plane: &[f32], width: u32, height: u32, radius: f32) -> Option<Vec<f32>> {
     let (w, h) = (rgb.width as usize, rgb.height as usize);
-    if d.width == 0 || d.height == 0 || d.data.len() != (d.width * d.height) as usize {
-        return vec![0.5; rgb.len()];
+    if width == 0 || height == 0 || plane.len() != (width * height) as usize {
+        return None;
     }
-    let up = resize_plane(d.data, d.width, d.height, rgb.width, rgb.height);
+    let up = resize_plane(plane, width, height, rgb.width, rgb.height);
     // Perceptual lightness as the guide.
     let guide: Vec<f32> = (0..rgb.len())
         .into_par_iter()
         .map(|i| (0.2627 * rgb.r[i] + 0.678 * rgb.g[i] + 0.0593 * rgb.b[i]).max(0.0).cbrt())
         .collect();
-    let r = (0.006 * long_side(w, h)).round().max(2.0) as usize;
+    let r = (radius * long_side(w, h)).round().max(2.0) as usize;
     let mut fitted = blur::guided_joint(&guide, &up, w, h, r, 1e-3);
     fitted.par_iter_mut().for_each(|v| *v = v.clamp(0.0, 1.0));
-    fitted
+    Some(fitted)
 }
 
 fn grade_passes(lab: &mut ImageRgbF32, skin: &[f32], look: &Look) {
@@ -240,11 +257,18 @@ fn atmosphere_params(a: &Atmosphere) -> AtmosphereParams {
 fn color_params(c: &ColorGrade) -> ColorParams {
     let w = |w: &epikos_sidecar::ColorWheel| [w.hue, pct(w.amount), signed_pct(w.luminance)];
     ColorParams {
-        hsl: c
-            .hsl
-            .bands()
-            .map(|b| [signed_pct(b.hue), signed_pct(b.saturation), signed_pct(b.luminance)]),
-        wheels: [w(&c.wheels.shadows), w(&c.wheels.midtones), w(&c.wheels.highlights)],
+        hsl: c.hsl.bands().map(|b| {
+            [
+                signed_pct(b.hue),
+                signed_pct(b.saturation),
+                signed_pct(b.luminance),
+            ]
+        }),
+        wheels: [
+            w(&c.wheels.shadows),
+            w(&c.wheels.midtones),
+            w(&c.wheels.highlights),
+        ],
         ..Default::default()
     }
 }
@@ -268,7 +292,11 @@ mod tests {
         let mut img = ImageRgbF32::new(64, 32, ColorSpace::LinearRec2020);
         for i in 0..img.len() {
             let x = i % 64;
-            let px = if x < 32 { [0.30, 0.17, 0.10] } else { [0.12, 0.25, 0.55] };
+            let px = if x < 32 {
+                [0.30, 0.17, 0.10]
+            } else {
+                [0.12, 0.25, 0.55]
+            };
             (img.r[i], img.g[i], img.b[i]) = (px[0], px[1], px[2]);
         }
         img
@@ -286,7 +314,11 @@ mod tests {
     #[test]
     fn skin_protection_shields_skin_from_the_grade_but_not_the_sky() {
         let mut adj = Adjustments::default();
-        adj.color.wheels.midtones = epikos_sidecar::ColorWheel { hue: 200.0, amount: 80.0, luminance: 0.0 };
+        adj.color.wheels.midtones = epikos_sidecar::ColorWheel {
+            hue: 200.0,
+            amount: 80.0,
+            luminance: 0.0,
+        };
         adj.color.hsl.orange.saturation = 60.0;
         let shift = |protection: f32| {
             let mut a = adj.clone();
@@ -328,7 +360,10 @@ mod tests {
         apply_look(&mut img, &adj, &LookInputs::default());
         for i in [img.index(8, 16), img.index(56, 16)] {
             let (r, g, b) = (img.r[i], img.g[i], img.b[i]);
-            assert!((r - g).abs() < 0.01 * g.max(0.05) && (b - g).abs() < 0.01 * g.max(0.05), "{r} {g} {b}");
+            assert!(
+                (r - g).abs() < 0.01 * g.max(0.05) && (b - g).abs() < 0.01 * g.max(0.05),
+                "{r} {g} {b}"
+            );
         }
     }
 
@@ -339,15 +374,26 @@ mod tests {
         adj.atmosphere.fog_start = 0.0;
         assert!(look_needs_depth(&adj));
         // Left half near, right half far.
-        let depth: Vec<f32> = (0..64 * 32).map(|i| if i % 64 < 32 { 1.0 } else { 0.0 }).collect();
+        let depth: Vec<f32> = (0..64 * 32)
+            .map(|i| if i % 64 < 32 { 1.0 } else { 0.0 })
+            .collect();
         let inputs = LookInputs {
-            depth: Some(DepthPlane { width: 64, height: 32, data: &depth }),
+            depth: Some(DepthPlane {
+                width: 64,
+                height: 32,
+                data: &depth,
+            }),
         };
         let mut img = portrait();
         let before = img.clone();
         apply_look(&mut img, &adj, &inputs);
         let change = |x: u32| (img.g[img.index(x, 16)] - before.g[before.index(x, 16)]).abs();
-        assert!(change(56) > 5.0 * change(8).max(1e-4), "near {} far {}", change(8), change(56));
+        assert!(
+            change(56) > 5.0 * change(8).max(1e-4),
+            "near {} far {}",
+            change(8),
+            change(56)
+        );
     }
 
     #[test]

@@ -46,6 +46,15 @@ enum Commands {
         /// Leave GPS location out of the exported metadata.
         #[arg(long)]
         no_location: bool,
+        /// Add the subject, sky and skin masks as named alpha channels (Photoshop).
+        #[arg(long)]
+        masks: bool,
+        /// Add the depth map as an alpha channel.
+        #[arg(long)]
+        depth: bool,
+        /// Downsize so the long edge is at most this many pixels.
+        #[arg(long)]
+        long_edge: Option<u32>,
     },
 }
 
@@ -75,7 +84,23 @@ fn run() -> Result<()> {
             space,
             ev,
             no_location,
-        } => export_cmd(&path, &out, space, ev, !no_location),
+            masks,
+            depth,
+            long_edge,
+        } => {
+            let options = ExportOptions {
+                color_space: match space {
+                    Space::Srgb => OutputSpace::Srgb,
+                    Space::P3 => OutputSpace::DisplayP3,
+                    Space::Prophoto => OutputSpace::ProPhoto,
+                },
+                include_location: !no_location,
+                ai_masks: masks,
+                depth_channel: depth,
+                long_edge,
+            };
+            export_cmd(&path, &out, ev, options)
+        }
     }
 }
 
@@ -138,27 +163,12 @@ fn develop_cmd(path: &Path, out: Option<PathBuf>, sidecar: Option<PathBuf>) -> R
     Ok(())
 }
 
-fn export_cmd(
-    path: &Path,
-    out: &Path,
-    space: Space,
-    ev: Option<f32>,
-    include_location: bool,
-) -> Result<()> {
+fn export_cmd(path: &Path, out: &Path, ev: Option<f32>, options: ExportOptions) -> Result<()> {
     let engine = Engine::new(1);
     let mut adjustments = engine.open(path)?.document.adjustments;
     if let Some(ev) = ev {
         adjustments.exposure = ev;
     }
-    let space = match space {
-        Space::Srgb => OutputSpace::Srgb,
-        Space::P3 => OutputSpace::DisplayP3,
-        Space::Prophoto => OutputSpace::ProPhoto,
-    };
-    let options = ExportOptions {
-        color_space: space,
-        include_location,
-    };
     let r = engine.export_tiff(path, &adjustments, out, options)?;
     println!(
         "exported {}×{} {} → {} ({:.1} MB; develop {} ms, write {} ms)",
@@ -179,6 +189,9 @@ fn export_cmd(
             "not written"
         }
     );
+    if !r.alpha_channels.is_empty() {
+        println!("channels    {}", r.alpha_channels.join(", "));
+    }
     Ok(())
 }
 

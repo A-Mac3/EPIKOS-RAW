@@ -294,19 +294,19 @@ impl Masker {
                 ),
             )));
         }
+        // Read the bytes ourselves: a model in an iCloud-synced folder may be evicted
+        // ("dataless"), and ONNX Runtime's own reader can see a short file where a
+        // normal read waits for the download.
+        let bytes = std::fs::read(path)?;
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-        let commit = || {
-            Session::builder()
-                .map_err(ml)?
-                .with_optimization_level(GraphOptimizationLevel::Level3)
-                .map_err(ml)?
-                .with_intra_threads(threads)
-                .map_err(ml)?
-                .commit_from_file(path)
-                .map_err(ml)
-        };
-        // One retry: a model in a cloud-synced folder can transiently read short.
-        commit().or_else(|_| commit())
+        Session::builder()
+            .map_err(ml)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(ml)?
+            .with_intra_threads(threads)
+            .map_err(ml)?
+            .commit_from_memory(&bytes)
+            .map_err(ml)
     }
 }
 

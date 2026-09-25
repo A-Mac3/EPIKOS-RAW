@@ -68,6 +68,7 @@ export function installMockBackend() {
           bytes: 231_900_000,
           wroteExif: true,
           wroteLocation: (a.options as { includeLocation: boolean }).includeLocation,
+          alphaChannels: (a.options as { aiMasks: boolean }).aiMasks ? ["Subject", "Sky", "Skin"] : [],
           developMs: 1180,
           writeMs: 850,
         };
@@ -79,6 +80,14 @@ export function installMockBackend() {
         return render(a.adjustments as Adjustments, a.maxWidth as number, a.maxHeight as number, a.path as string);
       case "thumbnail":
         return jpegThumb(a.path as string);
+      case "handoff_apps":
+        return [
+          { name: "Adobe Photoshop 2026", path: "/Applications/Adobe Photoshop 2026/Adobe Photoshop 2026.app" },
+          { name: "Adobe Lightroom Classic", path: "/Applications/Adobe Lightroom Classic/Adobe Lightroom Classic.app" },
+        ];
+      case "open_in_app":
+        console.info("[mock] open", a.file, "in", a.app);
+        return null;
       case "list_styles":
         return STYLES;
       case "mask_models":
