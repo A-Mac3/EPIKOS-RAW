@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { inTauri, listFolder, openImage, pickFolder, saveDocument } from "./api";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ExportDialog } from "./components/ExportDialog";
 import { captureSummary } from "./format";
 import { Filmstrip } from "./components/Filmstrip";
@@ -279,7 +280,9 @@ export default function App() {
       </header>
 
       {exportOpen && info && (
-        <ExportDialog info={info} adjustments={adjustments} onClose={() => setExportOpen(false)} />
+        <ErrorBoundary area="the export dialog">
+          <ExportDialog info={info} adjustments={adjustments} onClose={() => setExportOpen(false)} />
+        </ErrorBoundary>
       )}
 
       {folder ? (
@@ -288,47 +291,51 @@ export default function App() {
             {files.length === 0 ? (
               <div className="viewer-status">No RAW or DNG files in this folder.</div>
             ) : (
-              <Viewer
-                preview={preview}
-                busy={busy}
-                error={openError ?? renderError}
-                loading={loading}
-                showingBefore={before}
-                overlay={depth.depth ?? masks.overlayMask}
-                onResize={onResize}
-                marker={lightMarker}
-                onPick={picking ? placeLight : null}
-              />
+              <ErrorBoundary area="the viewer">
+                <Viewer
+                  preview={preview}
+                  busy={busy}
+                  error={openError ?? renderError}
+                  loading={loading}
+                  showingBefore={before}
+                  overlay={depth.depth ?? masks.overlayMask}
+                  onResize={onResize}
+                  marker={lightMarker}
+                  onPick={picking ? placeLight : null}
+                />
+              </ErrorBoundary>
             )}
           </main>
           <aside className="panel">
             <Histogram preview={preview} />
             <div className="panel-scroll">
-              {info && (
-                <StylePanel
-                  styles={styles}
-                  thumbs={thumbs}
-                  adjustments={adjustments}
-                  edit={history.edit}
-                  endEdit={history.endEdit}
-                  commit={history.commit}
-                />
-              )}
-              {info ? (
-                <StepsPanel
-                  info={info}
-                  adjustments={adjustments}
-                  edit={history.edit}
-                  endEdit={history.endEdit}
-                  commit={history.commit}
-                  masks={masks}
-                  depth={depth}
-                  picking={picking}
-                  setPicking={setPicking}
-                />
-              ) : (
-                <p className="note pad">Select a photo to start editing.</p>
-              )}
+              <ErrorBoundary area="the side panel">
+                {info && (
+                  <StylePanel
+                    styles={styles}
+                    thumbs={thumbs}
+                    adjustments={adjustments}
+                    edit={history.edit}
+                    endEdit={history.endEdit}
+                    commit={history.commit}
+                  />
+                )}
+                {info ? (
+                  <StepsPanel
+                    info={info}
+                    adjustments={adjustments}
+                    edit={history.edit}
+                    endEdit={history.endEdit}
+                    commit={history.commit}
+                    masks={masks}
+                    depth={depth}
+                    picking={picking}
+                    setPicking={setPicking}
+                  />
+                ) : (
+                  <p className="note pad">Select a photo to start editing.</p>
+                )}
+              </ErrorBoundary>
             </div>
           </aside>
           <footer className="strip">

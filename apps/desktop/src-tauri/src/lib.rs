@@ -103,8 +103,9 @@ async fn export_tiff(
 }
 
 #[tauri::command]
-fn mask_models(engine: EngineState<'_>) -> MaskModels {
-    engine.mask_models()
+async fn mask_models(engine: EngineState<'_>) -> CmdResult<MaskModels> {
+    let engine = engine.inner().clone();
+    blocking(move || Ok(engine.mask_models())).await
 }
 
 /// Step 6 depth map, same binary layout as [`detect_mask`] with one byte per pixel
@@ -139,8 +140,8 @@ async fn open_in_app(app: String, file: String) -> CmdResult<()> {
 
 /// Built-in parametric styles for the preset panel.
 #[tauri::command]
-fn list_styles() -> Vec<StyleInfo> {
-    epikos_engine::styles()
+async fn list_styles() -> CmdResult<Vec<StyleInfo>> {
+    blocking(|| Ok(epikos_engine::styles())).await
 }
 
 /// Binary layout (little-endian): `u32 width, u32 height, u32 inference ms,
@@ -188,19 +189,69 @@ fn model_dirs<R: tauri::Runtime>(paths: &tauri::path::PathResolver<R>) -> Vec<Pa
         .collect()
 }
 
+/// Run engine work off the UI thread. A panic in `f` becomes an error message for
+/// the UI (and a crash-log entry, see [`crash_log`]) instead of taking the app down.
 async fn blocking<T, F>(f: F) -> CmdResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> epikos_core::Result<T> + Send + 'static,
 {
-    tauri::async_runtime::spawn_blocking(f)
+    tauri::async_runtime::spawn_blocking(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)))
         .await
         .map_err(|e| format!("worker failed: {e}"))?
+        .map_err(|payload| {
+            format!(
+                "Internal error: {}. The app kept running; details are in {}.",
+                panic_message(&*payload),
+                crash_log().display()
+            )
+        })?
         .map_err(|e| e.to_string())
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".into())
+}
+
+/// `~/Library/Logs/EPIKOS RAW/crash.log` on macOS, the temp folder elsewhere.
+fn crash_log() -> PathBuf {
+    let dir = match std::env::var_os("HOME") {
+        Some(home) if cfg!(target_os = "macos") => Path::new(&home).join("Library/Logs/EPIKOS RAW"),
+        _ => std::env::temp_dir().join("epikos-raw"),
+    };
+    dir.join("crash.log")
+}
+
+/// Record every panic (message, location, backtrace) in [`crash_log`] before the
+/// default hook prints it, so a crash in a dev or release build can be diagnosed.
+fn install_panic_log() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let path = crash_log();
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let when = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+            let _ = writeln!(
+                f,
+                "--- panic at unix time {when} on thread '{thread}' ---\n{info}\n{}\n",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
+        default(info);
+    }));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_log();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -224,4 +275,18 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_command_returns_an_error_instead_of_crashing() {
+        let result: CmdResult<()> = tauri::async_runtime::block_on(blocking(|| panic!("boom in the engine")));
+        let err = result.unwrap_err();
+        assert!(err.contains("boom in the engine") && err.contains("crash.log"), "{err}");
+        // The runtime still works afterwards.
+        assert_eq!(tauri::async_runtime::block_on(blocking(|| Ok(7))), Ok(7));
+    }
 }

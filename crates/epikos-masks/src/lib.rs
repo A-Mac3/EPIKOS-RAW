@@ -12,7 +12,7 @@
 //! 8-bit coverage (255 = fully inside the mask).
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
 use epikos_core::{resize_plane, Error, Result};
@@ -199,7 +199,7 @@ impl Masker {
         let (w, h) = patch_size(image.width, image.height, DEPTH.side);
         let input = to_nchw_sized(image, &DEPTH, w, h);
 
-        let mut slot = self.sessions[DEPTH_SLOT].lock().unwrap();
+        let mut slot = self.sessions[DEPTH_SLOT].lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
             *slot = Some(self.load_file(&self.depth_file(), "Depth")?);
         }
@@ -241,7 +241,7 @@ impl Masker {
         }
         let input = to_nchw(image, spec);
 
-        let mut slot = self.sessions[kind.index()].lock().unwrap();
+        let mut slot = self.sessions[kind.index()].lock().unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
             *slot = Some(self.load(kind)?);
         }

@@ -968,3 +968,34 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 50%;
   border: 1px solid #555;
 }
+
+/* ---- Error handling ---------------------------------------------------------------- */
+
+.crash {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  background: rgb(239 107 107 / 8%);
+}
+
+.error-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 144px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  background: #2a1d1d;
+  color: var(--text);
+  z-index: 100;
+}

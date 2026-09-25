@@ -52,8 +52,14 @@ cargo run --release -p epikos-cli -- export <RAW> -o out.tif --space prophoto --
 The app's Export dialog can then open the TIFF in an installed editor (Photoshop, Lightroom,
 Capture One, DxO PhotoLab, Affinity Photo, Pixelmator Pro).
 
-The mask and depth models are read into memory before loading, so an iCloud-synced checkout
-works even when macOS has evicted them; the first use after eviction waits for the download.
+Keep the checkout out of iCloud Drive (e.g. `~/Developer`), or mark the folder "Keep
+Downloaded". With "Optimize Mac Storage", macOS evicts project files (`node_modules`,
+`target`, `.git`, models) and reads of them can time out, which crashes dev servers and
+builds at random. The mask and depth models are read into memory before loading, which
+survives an eviction but still waits for the download.
+
+Panics are logged with a backtrace to `~/Library/Logs/EPIKOS RAW/crash.log`; a panic in a
+command becomes an error message in the app instead of closing it.
 
 App icons are placeholders; regenerate the full set with
 `npm run tauri icon src-tauri/icons/app-icon-source.png`.

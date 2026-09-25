@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use epikos_core::{CameraFormat, Error, ImageRgbF32, Result, SensorLayout};
 use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
@@ -109,7 +109,7 @@ struct Loaded {
 impl Loaded {
     fn base(&self, max_w: u32, max_h: u32) -> Arc<ImageRgbF32> {
         let block = block_for_size(&self.raw.mosaic, max_w, max_h);
-        let mut bases = self.bases.lock().unwrap();
+        let mut bases = self.bases.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((_, img)) = bases.iter().find(|(b, _)| *b == block) {
             return img.clone();
         }
@@ -119,6 +119,9 @@ impl Loaded {
     }
 }
 
+/// Every lock recovers from poisoning (`PoisonError::into_inner`): the data behind
+/// them are caches that stay valid, so one panicking request must not make every
+/// later one panic too.
 pub struct Engine {
     capacity: usize,
     cache: Mutex<VecDeque<(PathBuf, Arc<Loaded>)>>,
@@ -183,7 +186,7 @@ impl Engine {
     fn depth_for(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Arc<DepthMap>> {
         // Only the geometry changes what the model sees in a way that matters.
         let key = format!("{:?}", adjustments.lens);
-        if let Some((k, d)) = loaded.depth.lock().unwrap().as_ref() {
+        if let Some((k, d)) = loaded.depth.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             if *k == key {
                 return Ok(d.clone());
             }
@@ -196,7 +199,7 @@ impl Engine {
             data: rgb.into_raw(),
         };
         let depth = Arc::new(self.masker.depth(&image)?);
-        *loaded.depth.lock().unwrap() = Some((key, depth.clone()));
+        *loaded.depth.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, depth.clone()));
         Ok(depth)
     }
 
@@ -223,7 +226,7 @@ impl Engine {
     ) -> Result<Arc<Mask>> {
         let loaded = self.load(path)?;
         let mask = Arc::new(self.segment(&loaded, adjustments, kind)?);
-        let mut masks = loaded.masks.lock().unwrap();
+        let mut masks = loaded.masks.lock().unwrap_or_else(PoisonError::into_inner);
         masks.retain(|m| m.kind != kind);
         masks.push(mask.clone());
         Ok(mask)
@@ -242,9 +245,9 @@ impl Engine {
 
     /// The last mask of `kind` detected for `path`, if the image is still cached.
     pub fn mask(&self, path: &Path, kind: MaskKind) -> Option<Arc<Mask>> {
-        let cache = self.cache.lock().unwrap();
+        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         let (_, loaded) = cache.iter().find(|(p, _)| p == path)?;
-        let masks = loaded.masks.lock().unwrap();
+        let masks = loaded.masks.lock().unwrap_or_else(PoisonError::into_inner);
         masks.iter().find(|m| m.kind == kind).cloned()
     }
 
@@ -429,7 +432,7 @@ impl Engine {
 
     fn load(&self, path: &Path) -> Result<Arc<Loaded>> {
         {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(i) = cache.iter().position(|(p, _)| p == path) {
                 let entry = cache.remove(i).unwrap();
                 let loaded = entry.1.clone();
@@ -444,7 +447,7 @@ impl Engine {
             masks: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
         });
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         cache.retain(|(p, _)| p != path);
         cache.push_front((path.to_path_buf(), loaded.clone()));
         cache.truncate(self.capacity);
@@ -588,7 +591,7 @@ mod tests {
         );
         assert_eq!(d.rgba.len(), (d.width * d.height * 4) as usize);
         let _ = render(&loaded, &Adjustments::default(), 160, 160).unwrap();
-        assert_eq!(loaded.bases.lock().unwrap().len(), 1);
+        assert_eq!(loaded.bases.lock().unwrap_or_else(PoisonError::into_inner).len(), 1);
     }
 
     #[test]
