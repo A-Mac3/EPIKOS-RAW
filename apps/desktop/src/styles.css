@@ -932,6 +932,9 @@ input[type="range"]::-moz-range-thumb {
 
 .curve-graph {
   display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
   margin: 2px auto 4px;
   background: #1b1b1b;
   border: 1px solid var(--line);
@@ -951,6 +954,23 @@ input[type="range"]::-moz-range-thumb {
 .curve-graph path {
   fill: none;
   stroke-linejoin: round;
+}
+
+.curve-histogram {
+  fill: rgb(228 228 228 / 16%);
+  stroke: none;
+}
+
+.curve-histogram.is-red {
+  fill: rgb(239 107 107 / 22%);
+}
+
+.curve-histogram.is-green {
+  fill: rgb(124 200 138 / 22%);
+}
+
+.curve-histogram.is-blue {
+  fill: rgb(111 155 224 / 25%);
 }
 
 .curve-main {

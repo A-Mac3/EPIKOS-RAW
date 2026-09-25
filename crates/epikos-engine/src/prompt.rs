@@ -549,6 +549,12 @@ pub fn interpret_look(prompt: &str, base: &Adjustments, subject: Option<(f32, f3
         }
     }
 
+    // The curve canvas edits points only: bake any curve shaping into points.
+    let c = &mut out.curves;
+    for curve in [&mut c.rgb, &mut c.red, &mut c.green, &mut c.blue] {
+        *curve = epikos_pipeline::bake_tone_curve(curve);
+    }
+
     matched.sort_by_key(|(pos, _)| *pos);
     let unknown = words
         .iter()
@@ -591,6 +597,15 @@ mod tests {
         let plain = interpret_look("dramatic", &Adjustments::default(), None);
         assert!(r.adjustments.texture.clarity > plain.adjustments.texture.clarity);
         assert!((r.matched[0].strength - 1.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn prompt_curves_arrive_as_points() {
+        let r = interpret_look("moody matte film", &Adjustments::default(), None);
+        let rgb = &r.adjustments.curves.rgb;
+        assert_eq!(rgb.to_array(), [0.0; 6]);
+        assert!(!rgb.points_are_identity(), "{rgb:?}");
+        assert!(rgb.points[0][1] > 0.05, "matte lifts the black point: {:?}", rgb.points[0]);
     }
 
     #[test]

@@ -22,7 +22,7 @@ import {
 } from "../types";
 import { ColorWheel } from "./ColorWheel";
 import { CurveGraph } from "./CurveGraph";
-import { isIdentity } from "../curve";
+import { bakeCurve, isIdentity } from "../curve";
 import { Segmented, Slider, Toggle } from "./Slider";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
@@ -38,6 +38,8 @@ interface Props {
   commit: Update;
   masks: MaskState;
   depth: DepthState;
+  /** Preview histograms, drawn behind the curve canvas. */
+  histogram: [Uint32Array, Uint32Array, Uint32Array] | null;
   /** Waiting for a click on the image to place a light. */
   picking: PickTarget;
   setPicking: (target: PickTarget) => void;
@@ -102,15 +104,6 @@ const HUE_TRACK = `linear-gradient(90deg, ${[0, 60, 120, 180, 240, 300, 360].map
 
 const CURVE_LABEL: Record<CurveChannel, string> = { rgb: "RGB", red: "Red", green: "Green", blue: "Blue" };
 
-/** Slider rows of one tone curve, top to bottom as on the graph. */
-const CURVE_ROWS: { key: Exclude<keyof ToneCurve, "points">; label: string }[] = [
-  { key: "highlights", label: "Highlights" },
-  { key: "lights", label: "Lights" },
-  { key: "darks", label: "Darks" },
-  { key: "shadows", label: "Shadows" },
-  { key: "white", label: "White point (clip ↔ fade)" },
-  { key: "black", label: "Black point (crush ↔ matte)" },
-];
 
 export function StepsPanel({
   info,
@@ -120,6 +113,7 @@ export function StepsPanel({
   commit,
   masks,
   depth,
+  histogram,
   picking,
   setPicking,
   selectedLight,
@@ -224,10 +218,12 @@ export function StepsPanel({
   );
   const depthAvailable = masks.models?.depth.available ?? false;
 
-  const curve = a.curves[curveChannel];
+  // The canvas edits points only: show parametric shaping (older sidecars) as points.
+  const curve = bakeCurve(a.curves[curveChannel]);
+  const shownCurves = { ...a.curves, [curveChannel]: curve };
   const setCurve = (patch: Partial<ToneCurve>) => (x: Adjustments) => ({
     ...x,
-    curves: { ...x.curves, [curveChannel]: { ...x.curves[curveChannel], ...patch } },
+    curves: { ...x.curves, [curveChannel]: { ...bakeCurve(x.curves[curveChannel]), ...patch } },
   });
   const fin = a.finishing;
   const finSlider = (
@@ -718,29 +714,16 @@ export function StepsPanel({
           />
         </div>
         <CurveGraph
-          curves={a.curves}
+          curves={shownCurves}
           channel={curveChannel}
+          histogram={histogram}
           onPoints={(points) => edit(setCurve({ points }))}
           onCommit={endEdit}
         />
         <p className="hint">
-          Click the curve to add points and drag them; double-click or drag a point off the graph to remove it. The
-          sliders below shape the curve parametrically first.
+          Click the curve to add a point and drag it; double-click a point or drag it off the graph to remove it. Arrow
+          keys nudge the selected point.
         </p>
-        {CURVE_ROWS.map(({ key, label }) => (
-          <Slider
-            key={`${curveChannel}-${key}`}
-            label={label}
-            value={curve[key]}
-            min={-100}
-            max={100}
-            step={1}
-            defaultValue={0}
-            format={fmtSigned(0)}
-            onChange={(v) => edit(setCurve({ [key]: v }))}
-            onCommit={endEdit}
-          />
-        ))}
         <button
           type="button"
           className="btn"

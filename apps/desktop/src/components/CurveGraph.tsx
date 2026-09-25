@@ -28,6 +28,8 @@ const path = (pts: Pt[]) =>
 interface Props {
   curves: Curves;
   channel: CurveChannel;
+  /** Preview histograms (R, G, B; 256 bins), drawn faintly behind the curve. */
+  histogram?: [Uint32Array, Uint32Array, Uint32Array] | null;
   /** Live change of the channel's control points during a drag. */
   onPoints: (points: Pt[]) => void;
   /** End of a drag / key press: one undo step. */
@@ -39,7 +41,7 @@ interface Props {
  * Click to add a point, drag to move, double-click or drag off the graph to remove;
  * arrow keys nudge the selected point. The corners are points too.
  */
-export function CurveGraph({ curves, channel, onPoints, onCommit }: Props) {
+export function CurveGraph({ curves, channel, histogram, onPoints, onCommit }: Props) {
   const svg = useRef<SVGSVGElement>(null);
   const [active, setActive] = useState<number | null>(null);
   const dragging = useRef<number | null>(null);
@@ -126,8 +128,6 @@ export function CurveGraph({ curves, channel, onPoints, onCommit }: Props) {
       ref={svg}
       className="curve-graph"
       viewBox={`0 0 ${SIZE} ${SIZE}`}
-      width={SIZE}
-      height={SIZE}
       role="application"
       tabIndex={0}
       aria-label={`${channel} tone curve. Click to add a point, drag to move, double-click to remove.`}
@@ -137,6 +137,7 @@ export function CurveGraph({ curves, channel, onPoints, onCommit }: Props) {
       onKeyDown={onKeyDown}
       onKeyUp={(e) => e.key.startsWith("Arrow") && onCommit()}
     >
+      {histogram && <path d={histogramPath(histogram, channel)} className={`curve-histogram is-${channel}`} />}
       {[0.25, 0.5, 0.75].map((t) => (
         <g key={t} className="curve-grid">
           <line x1={PAD + t * INNER} y1={PAD} x2={PAD + t * INNER} y2={PAD + INNER} />
@@ -170,4 +171,20 @@ export function CurveGraph({ curves, channel, onPoints, onCommit }: Props) {
       })}
     </svg>
   );
+}
+
+/** Filled histogram of the channel (all three summed for RGB), square-root scaled so
+ * shadows and highlights stay visible next to a tall midtone peak. */
+function histogramPath(h: [Uint32Array, Uint32Array, Uint32Array], channel: CurveChannel): string {
+  const idx = { rgb: -1, red: 0, green: 1, blue: 2 }[channel];
+  const bins = Array.from({ length: 256 }, (_, i) => (idx < 0 ? h[0][i] + h[1][i] + h[2][i] : h[idx][i]));
+  // Ignore the clipped end bins when scaling, or one spike flattens the rest.
+  const peak = Math.sqrt(Math.max(1, ...bins.slice(1, 255)));
+  const pts = bins.map((v, i) => {
+    const [x, y] = toSvg([i / 255, Math.min(1, Math.sqrt(v) / peak) * 0.9]);
+    return `L${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const [x0, y0] = toSvg([0, 0]);
+  const [x1] = toSvg([1, 0]);
+  return `M${x0},${y0}${pts.join("")}L${x1},${y0}Z`;
 }

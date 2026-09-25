@@ -96,3 +96,26 @@ export function curvePoints(c: ToneCurve, n = 96): [number, number][] {
 export const isIdentity = (c: ToneCurve) =>
   [c.shadows, c.darks, c.lights, c.highlights, c.black, c.white].every((v) => v === 0) &&
   c.points.every(([x, y]) => Math.abs(x - y) < 1e-6);
+
+/** Where a baked curve gets its control points (mirrors BAKE_AT in tone.rs). */
+const BAKE_AT = [0, 0.25, 0.5, 0.75, 1];
+
+/**
+ * The curve as points only: parametric shaping (from an older sidecar) is sampled into
+ * control points and zeroed, like `bake_tone_curve` in tone.rs. The curve canvas
+ * edits points, so this is what it shows and edits.
+ */
+export function bakeCurve(c: ToneCurve): ToneCurve {
+  if ([c.shadows, c.darks, c.lights, c.highlights, c.black, c.white].every((v) => v === 0)) return c;
+  const samples = curvePoints(c, 400);
+  const at = (x: number) => samples[Math.round(x * 400)][1];
+  return {
+    shadows: 0,
+    darks: 0,
+    lights: 0,
+    highlights: 0,
+    black: 0,
+    white: 0,
+    points: BAKE_AT.map((x) => [x, at(x)] as [number, number]),
+  };
+}

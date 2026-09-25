@@ -67,6 +67,23 @@ fn table(c: &ToneCurve) -> Vec<f32> {
     out
 }
 
+/// Where a baked curve gets its control points: few enough to drag comfortably,
+/// enough that a monotone cubic through them follows any parametric shape closely.
+const BAKE_AT: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+
+/// The same curve expressed only as control points: the parametric part (regions,
+/// black and white point) is sampled into points and zeroed. The UI's curve canvas
+/// only edits points, so anything that sets parametric values (a look prompt, an
+/// older sidecar) is baked before it's shown.
+pub fn bake_tone_curve(c: &ToneCurve) -> ToneCurve {
+    if c.to_array() == [0.0; 6] {
+        return c.clone();
+    }
+    let lut = table(c);
+    let points = BAKE_AT.iter().map(|&x| [x, lookup(&lut, x)]).collect();
+    ToneCurve { points, ..ToneCurve::default() }
+}
+
 /// Free-form curve through control points: monotone cubic Hermite (Fritsch & Carlson
 /// 1980), so it never overshoots between points. Corners at (0, 0) and (1, 1) are
 /// implied when the points don't reach the ends.
@@ -276,6 +293,20 @@ mod tests {
         assert!(samples.windows(2).all(|w| w[1] >= w[0] - 1e-6), "monotone data stays monotone");
         assert!(PointCurve::new(&[[0.3, 0.3], [0.7, 0.7]]).is_none());
         assert!(PointCurve::new(&[]).is_none());
+    }
+
+    #[test]
+    fn baking_keeps_the_curve_and_leaves_only_points() {
+        let c = ToneCurve { darks: -25.0, lights: 20.0, black: 35.0, ..Default::default() };
+        let baked = bake_tone_curve(&c);
+        assert_eq!(baked.to_array(), [0.0; 6]);
+        assert_eq!(baked.points.len(), 5);
+        let (a, b) = (table(&c), table(&baked));
+        let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
+        assert!(worst < 0.02, "baked curve drifts by {worst}");
+        // Already points only: untouched.
+        let pts = ToneCurve { points: vec![[0.0, 0.1], [1.0, 0.9]], ..Default::default() };
+        assert_eq!(bake_tone_curve(&pts), pts);
     }
 
     #[test]

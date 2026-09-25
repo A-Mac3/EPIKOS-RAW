@@ -31,6 +31,7 @@ use oklab::Oklab;
 use texture::{apply_texture, TextureParams};
 
 pub use style::StyleInfo;
+pub use tone::bake_tone_curve;
 
 /// Every built-in style, in display order.
 pub fn styles() -> Vec<StyleInfo> {

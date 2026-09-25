@@ -368,6 +368,7 @@ export default function App() {
                     commit={history.commit}
                     masks={masks}
                     depth={depth}
+                    histogram={preview?.histogram ?? null}
                     picking={picking}
                     setPicking={setPicking}
                     selectedLight={selectedLight}
