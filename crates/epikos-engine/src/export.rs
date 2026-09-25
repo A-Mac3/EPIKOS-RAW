@@ -195,11 +195,15 @@ pub(crate) fn export(
             let develop_ms = t.elapsed().as_millis() as u64;
             let t = Instant::now();
             let icc = space.icc_profile();
+            let exif = exif_block(meta, space, gps)?;
+            let xmp = xmp_packet(meta, gps);
             let image = crate::psd::PsdImage {
                 width,
                 height,
                 rgb: &pixels,
                 icc: &icc,
+                exif: &exif,
+                xmp: &xmp,
                 ppi: 300,
                 masks: channels
                     .iter()
@@ -233,8 +237,9 @@ pub(crate) fn export(
             space.label().to_string()
         },
         bytes: fs::metadata(dest)?.len(),
-        wrote_exif: format != ExportFormat::Psd,
-        wrote_location: gps.is_some() && format == ExportFormat::Tiff,
+        wrote_exif: true,
+        // The DNG writer carries capture EXIF only, no location.
+        wrote_location: gps.is_some() && format != ExportFormat::Dng,
         alpha_channels: names,
         develop_ms,
         write_ms: t_write.elapsed().as_millis() as u64,
@@ -372,23 +377,9 @@ where
 
     let mut image = encoder.new_image::<C>(width, height).map_err(tiff_err)?;
     let dir = image.encoder();
-    let ascii = |dir: &mut DirectoryEncoder<'_, _, _>, tag: Tag, v: &Option<String>| match v {
-        Some(v) => dir.write_tag(tag, v.as_str()),
-        None => Ok(()),
-    };
     (|| {
         dir.write_tag(Tag::IccProfile, Undefined(&space.icc_profile()))?;
-        dir.write_tag(Tag::Software, "EPIKOS RAW")?;
-        if !meta.make.is_empty() {
-            dir.write_tag(Tag::Make, meta.make.as_str())?;
-        }
-        if !meta.model.is_empty() {
-            dir.write_tag(Tag::Model, meta.model.as_str())?;
-        }
-        ascii(dir, Tag::Artist, &meta.artist)?;
-        ascii(dir, Tag::Copyright, &meta.copyright)?;
-        // Pixels are already upright; stop viewers from rotating them again.
-        dir.write_tag(Tag::Orientation, 1u16)?;
+        write_camera_tags(dir, meta)?;
         // The encoder's default is 1 dpi, which Photoshop reads as a metres-wide print.
         dir.write_tag(Tag::XResolution, Rational { n: 300, d: 1 })?;
         dir.write_tag(Tag::YResolution, Rational { n: 300, d: 1 })?;
@@ -411,6 +402,172 @@ where
 
 /// TIFF tag holding Photoshop image resources.
 const PHOTOSHOP_RESOURCES: u16 = 34377;
+
+/// Main-IFD identity tags shared by the TIFF export and the PSD's EXIF block.
+fn write_camera_tags<W: std::io::Write + std::io::Seek, K: TiffKind>(
+    dir: &mut DirectoryEncoder<'_, W, K>,
+    meta: &CaptureMetadata,
+) -> tiff::TiffResult<()> {
+    dir.write_tag(Tag::Software, "EPIKOS RAW")?;
+    if !meta.make.is_empty() {
+        dir.write_tag(Tag::Make, meta.make.as_str())?;
+    }
+    if !meta.model.is_empty() {
+        dir.write_tag(Tag::Model, meta.model.as_str())?;
+    }
+    if let Some(v) = &meta.artist {
+        dir.write_tag(Tag::Artist, v.as_str())?;
+    }
+    if let Some(v) = &meta.copyright {
+        dir.write_tag(Tag::Copyright, v.as_str())?;
+    }
+    // Pixels are already upright; stop viewers from rotating them again.
+    dir.write_tag(Tag::Orientation, 1u16)
+}
+
+/// Standalone EXIF block: a TIFF header and a main IFD pointing at the EXIF (and,
+/// when allowed, GPS) sub-IFDs, with no image. The same layout as a JPEG's APP1
+/// payload; Photoshop stores it in image resource 1058.
+pub(crate) fn exif_block(meta: &CaptureMetadata, space: OutputSpace, gps: Option<&GpsInfo>) -> Result<Vec<u8>> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut encoder = TiffEncoder::new(&mut buf).map_err(tiff_err)?;
+        let exif = {
+            let mut dir = encoder.extra_directory().map_err(tiff_err)?;
+            write_exif(&mut dir, meta, space).map_err(tiff_err)?;
+            dir.finish_with_offsets().map_err(tiff_err)?
+        };
+        let gps_dir = match gps {
+            Some(g) => {
+                let mut dir = encoder.extra_directory().map_err(tiff_err)?;
+                write_gps(&mut dir, g).map_err(tiff_err)?;
+                Some(dir.finish_with_offsets().map_err(tiff_err)?)
+            }
+            None => None,
+        };
+        let mut dir = encoder.image_directory().map_err(tiff_err)?;
+        (|| {
+            write_camera_tags(&mut dir, meta)?;
+            dir.write_tag(Tag::ExifDirectory, exif.offset)?;
+            if let Some(g) = &gps_dir {
+                dir.write_tag(Tag::GpsDirectory, g.offset)?;
+            }
+            Ok(())
+        })()
+        .map_err(tiff_err)?;
+        dir.finish().map_err(tiff_err)?;
+    }
+    Ok(buf.into_inner())
+}
+
+/// XMP packet with the capture metadata, which Lightroom and Bridge read from a PSD
+/// (image resource 1060). Dates follow XMP's ISO 8601 form; GPS uses its
+/// "DD,MM.mmmmmmK" form.
+pub(crate) fn xmp_packet(meta: &CaptureMetadata, gps: Option<&GpsInfo>) -> Vec<u8> {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    };
+    let ratio = |(n, d): (u32, u32)| format!("{n}/{d}");
+    let mut attrs = vec![("xmp:CreatorTool".to_string(), "EPIKOS RAW".to_string()), ("tiff:Orientation".into(), "1".into())];
+    let mut push = |k: &str, v: String| attrs.push((k.to_string(), esc(&v)));
+    if !meta.make.is_empty() {
+        push("tiff:Make", meta.make.clone());
+    }
+    if !meta.model.is_empty() {
+        push("tiff:Model", meta.model.clone());
+    }
+    if let Some(date) = meta.date_time_original.as_deref().and_then(xmp_date) {
+        let mut date = date;
+        if let Some(sub) = &meta.sub_sec_time_original {
+            date += &format!(".{}", sub.trim());
+        }
+        if let Some(off) = &meta.offset_time_original {
+            date += off.trim();
+        }
+        push("exif:DateTimeOriginal", date.clone());
+        push("xmp:CreateDate", date.clone());
+        push("photoshop:DateCreated", date);
+    }
+    if let Some(v) = meta.exposure_time {
+        push("exif:ExposureTime", ratio(v));
+    }
+    if let Some(v) = meta.f_number {
+        push("exif:FNumber", ratio(v));
+    }
+    if let Some(v) = meta.focal_length {
+        push("exif:FocalLength", ratio(v));
+    }
+    if let Some((n, d)) = meta.exposure_bias {
+        push("exif:ExposureBiasValue", format!("{n}/{d}"));
+    }
+    if let Some(v) = &meta.lens_model {
+        push("aux:Lens", v.clone());
+        push("exifEX:LensModel", v.clone());
+    }
+    if let Some(v) = &meta.lens_make {
+        push("exifEX:LensMake", v.clone());
+    }
+    if let Some(v) = &meta.serial_number {
+        push("exifEX:BodySerialNumber", v.clone());
+    }
+    if let Some(g) = gps {
+        let coord = |v: Option<[(u32, u32); 3]>, r: &Option<String>| {
+            let [d, m, s] = v?;
+            let f = |(n, d): (u32, u32)| if d == 0 { 0.0 } else { n as f64 / d as f64 };
+            let minutes = f(m) + f(s) / 60.0;
+            Some(format!("{},{:.6}{}", f(d).trunc(), minutes, r.as_deref()?.trim()))
+        };
+        if let Some(v) = coord(g.latitude, &g.latitude_ref) {
+            push("exif:GPSLatitude", v);
+        }
+        if let Some(v) = coord(g.longitude, &g.longitude_ref) {
+            push("exif:GPSLongitude", v);
+        }
+        if let Some(v) = g.altitude {
+            push("exif:GPSAltitude", ratio(v));
+            push("exif:GPSAltitudeRef", g.altitude_ref.unwrap_or(0).to_string());
+        }
+    }
+    let mut elements = String::new();
+    if let Some(iso) = meta.iso {
+        elements += &format!("   <exif:ISOSpeedRatings><rdf:Seq><rdf:li>{iso}</rdf:li></rdf:Seq></exif:ISOSpeedRatings>\n");
+    }
+    if let Some(a) = &meta.artist {
+        elements += &format!("   <dc:creator><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></dc:creator>\n", esc(a));
+    }
+    if let Some(c) = &meta.copyright {
+        elements += &format!(
+            "   <dc:rights><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:rights>\n",
+            esc(c)
+        );
+    }
+    let attrs: String = attrs.iter().map(|(k, v)| format!("\n    {k}=\"{v}\"")).collect();
+    format!(
+        r#"<?xpacket begin="\u{{feff}}" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="EPIKOS RAW">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:tiff="http://ns.adobe.com/tiff/1.0/"
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    xmlns:exifEX="http://cipa.jp/exif/1.0/"
+    xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
+    xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"{attrs}>
+{elements}  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#
+    )
+    .into_bytes()
+}
+
+/// EXIF "YYYY:MM:DD HH:MM:SS" → XMP "YYYY-MM-DDTHH:MM:SS".
+fn xmp_date(exif: &str) -> Option<String> {
+    let (date, time) = exif.trim().split_once(' ')?;
+    let date = date.replace(':', "-");
+    (date.len() == 10 && time.len() >= 8).then(|| format!("{date}T{}", &time[..8]))
+}
 
 fn tiff_err(e: tiff::TiffError) -> Error {
     Error::Decode(format!("tiff: {e}"))

@@ -793,6 +793,75 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    fn fuji_metadata() -> epikos_core::CaptureMetadata {
+        use epikos_core::{CaptureMetadata, GpsInfo};
+        CaptureMetadata {
+            make: "FUJIFILM".into(),
+            model: "X-H2".into(),
+            exposure_time: Some((1, 640)),
+            f_number: Some((4, 1)),
+            iso: Some(5000),
+            lens_model: Some("XF50-140mmF2.8 R LM OIS WR".into()),
+            date_time_original: Some("2025:12:14 16:20:31".into()),
+            offset_time_original: Some("+11:00".into()),
+            artist: Some("Aaron Machiri".into()),
+            gps: Some(GpsInfo {
+                latitude_ref: Some("S".into()),
+                latitude: Some([(33, 1), (52, 1), (1234, 100)]),
+                longitude_ref: Some("E".into()),
+                longitude: Some([(151, 1), (12, 1), (3456, 100)]),
+                ..GpsInfo::default()
+            }),
+            ..CaptureMetadata::default()
+        }
+    }
+
+    /// Read one SHORT/LONG tag from a little-endian TIFF-structured block's IFD at `ifd`.
+    fn tiff_tag(block: &[u8], ifd: usize, tag: u16) -> Option<u32> {
+        let u16_at = |o: usize| u16::from_le_bytes([block[o], block[o + 1]]);
+        let u32_at = |o: usize| u32::from_le_bytes(block[o..o + 4].try_into().unwrap());
+        (0..u16_at(ifd) as usize).map(|i| ifd + 2 + 12 * i).find(|&e| u16_at(e) == tag).map(|e| {
+            if u16_at(e + 2) == 3 { u16_at(e + 8) as u32 } else { u32_at(e + 8) }
+        })
+    }
+
+    #[test]
+    fn exif_block_is_a_valid_tiff_structure() {
+        let block = export::exif_block(&fuji_metadata(), OutputSpace::Srgb, None).unwrap();
+        assert_eq!(&block[..4], b"II*\0");
+        let ifd0 = u32::from_le_bytes(block[4..8].try_into().unwrap()) as usize;
+        assert_eq!(tiff_tag(&block, ifd0, 274), Some(1), "orientation");
+        let exif = tiff_tag(&block, ifd0, 34665).expect("EXIF sub-IFD pointer") as usize;
+        assert_eq!(tiff_tag(&block, exif, 34855), Some(5000), "ISO in the EXIF IFD");
+        assert!(tiff_tag(&block, ifd0, 34853).is_none(), "no GPS unless allowed");
+        assert!(block.windows(8).any(|w| w == b"FUJIFILM"));
+    }
+
+    #[test]
+    fn psd_export_carries_exif_and_xmp_metadata() {
+        let dir = temp_dir("export-psd-meta");
+        let mut loaded = synthetic_loaded(32, 24);
+        loaded.raw.metadata = fuji_metadata();
+        for include_location in [true, false] {
+            let dest = dir.join(format!("meta-{include_location}.psd"));
+            let options = ExportOptions { format: ExportFormat::Psd, include_location, ..ExportOptions::default() };
+            let report = export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+            assert!(report.wrote_exif);
+            assert_eq!(report.wrote_location, include_location);
+            let d = fs::read(&dest).unwrap();
+            let find = |needle: &[u8]| d.windows(needle.len()).any(|w| w == needle);
+            // Resources 1058 (EXIF) and 1060 (XMP), each with the "8BIM" signature.
+            assert!(find(&[b'8', b'B', b'I', b'M', 0x04, 0x22]), "EXIF resource");
+            assert!(find(&[b'8', b'B', b'I', b'M', 0x04, 0x24]), "XMP resource");
+            assert!(find(b"exif:DateTimeOriginal=\"2025-12-14T16:20:31+11:00\""));
+            assert!(find(b"<rdf:li>5000</rdf:li>"), "ISO in XMP");
+            assert!(find(b"aux:Lens=\"XF50-140mmF2.8 R LM OIS WR\""));
+            assert!(find(b"<dc:creator><rdf:Seq><rdf:li>Aaron Machiri</rdf:li>"));
+            assert_eq!(find(b"exif:GPSLatitude=\"33,52.205667S\""), include_location);
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn dng_export_reopens_as_linear_rgb() {
         let dir = temp_dir("export-dng");

@@ -7,6 +7,8 @@
 //!   layer, a Hue/Saturation layer…) is confined to the mask, which is how the masks
 //!   stay live instead of being flattened into the pixels.
 //!
+//! Capture metadata travels as EXIF (resource 1058) and XMP (resource 1060).
+//!
 //! Follows the Adobe Photoshop File Format specification: big-endian throughout,
 //! 16-bit layer data in the `Lr16` tagged block (the plain layer-info section stays
 //! empty, as Photoshop itself writes it), layer channels ZIP-compressed with
@@ -33,6 +35,10 @@ pub(crate) struct PsdImage<'a> {
     /// Interleaved 16-bit RGB.
     pub rgb: &'a [u16],
     pub icc: &'a [u8],
+    /// EXIF block (TIFF-structured), image resource 1058.
+    pub exif: &'a [u8],
+    /// XMP packet, image resource 1060.
+    pub xmp: &'a [u8],
     pub ppi: u32,
     pub masks: Vec<MaskLayer<'a>>,
 }
@@ -58,9 +64,16 @@ pub(crate) fn write_psd(path: &Path, img: &PsdImage) -> std::io::Result<()> {
     out.write_all(&3u16.to_be_bytes())?; // RGB
     out.write_all(&0u32.to_be_bytes())?; // colour mode data
 
-    // Image resources: ICC profile (1039) and resolution (1005).
+    // Image resources: ICC profile (1039), resolution (1005), and the capture metadata
+    // as EXIF (1058, read by Photoshop) and XMP (1060, read by Lightroom and Bridge).
     let mut res = Vec::new();
     resource(&mut res, 1039, img.icc);
+    if !img.exif.is_empty() {
+        resource(&mut res, 1058, img.exif);
+    }
+    if !img.xmp.is_empty() {
+        resource(&mut res, 1060, img.xmp);
+    }
     let fixed = (img.ppi << 16).to_be_bytes();
     let mut resolution = Vec::new();
     for _ in 0..2 {
