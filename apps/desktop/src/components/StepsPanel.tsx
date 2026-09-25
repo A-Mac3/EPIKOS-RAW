@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { DepthState } from "../hooks/useDepth";
+import { DepthSideView } from "./DepthSideView";
 import { MASK_KINDS, type MaskState } from "../hooks/useMasks";
 import {
   CURVE_CHANNELS,
@@ -15,6 +16,7 @@ import {
   type HslChannel,
   type ImageInfo,
   type MaskKind,
+  type PickTarget,
   type WbMode,
   type WheelRange,
 } from "../types";
@@ -36,9 +38,11 @@ interface Props {
   commit: Update;
   masks: MaskState;
   depth: DepthState;
-  /** Waiting for a click on the image to place the light source. */
-  picking: boolean;
-  setPicking: (on: boolean) => void;
+  /** Waiting for a click on the image to place a light. */
+  picking: PickTarget;
+  setPicking: (target: PickTarget) => void;
+  selectedLight: number | null;
+  setSelectedLight: (i: number | null) => void;
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
@@ -118,6 +122,8 @@ export function StepsPanel({
   depth,
   picking,
   setPicking,
+  selectedLight,
+  setSelectedLight,
 }: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const [hslMode, setHslMode] = useState<HslMode>("saturation");
@@ -573,21 +579,115 @@ export function StepsPanel({
             ]}
             onChange={(v) => {
               if (v === "auto") {
-                setPicking(false);
+                setPicking(null);
                 commit(setAt({ shaftAuto: true }));
               } else {
-                setPicking(true);
+                setPicking("shafts");
               }
             }}
           />
         </div>
         <button
           type="button"
-          className={`btn${picking ? " is-active" : ""}`}
-          onClick={() => setPicking(!picking)}
+          className={`btn${picking === "shafts" ? " is-active" : ""}`}
+          onClick={() => setPicking(picking === "shafts" ? null : "shafts")}
         >
-          {picking ? "Click the image… (Esc to cancel)" : at.shaftAuto ? "Place light on the image" : "Move light"}
+          {picking === "shafts"
+            ? "Click the image… (Esc to cancel)"
+            : at.shaftAuto
+              ? "Place light on the image"
+              : "Move light"}
         </button>
+
+        <span className="field-label">3D light sculptor</span>
+        <div className="light-list">
+          {at.lights.map((l, i) => (
+            <button
+              key={i}
+              type="button"
+              className={`light-chip${i === selectedLight ? " is-active" : ""}`}
+              onClick={() => setSelectedLight(i)}
+              style={{ ["--light" as string]: l.warmth >= 0 ? `hsl(40 90% ${75 - l.warmth / 5}%)` : `hsl(210 80% ${75 + l.warmth / 5}%)` }}
+            >
+              Light {i + 1}
+            </button>
+          ))}
+          <button
+            type="button"
+            className={`btn${picking === "light" ? " is-active" : ""}`}
+            disabled={at.lights.length >= 4}
+            onClick={() => setPicking(picking === "light" ? null : "light")}
+          >
+            {picking === "light" ? "Click the image…" : "+ Add light"}
+          </button>
+        </div>
+        {selectedLight !== null && at.lights[selectedLight] && (() => {
+          const i = selectedLight;
+          const light = at.lights[i];
+          const setLight = (patch: Partial<typeof light>) => (x: Adjustments) => ({
+            ...x,
+            atmosphere: {
+              ...x.atmosphere,
+              lights: x.atmosphere.lights.map((l, k) => (k === i ? { ...l, ...patch } : l)),
+            },
+          });
+          const lightSlider = (label: string, key: "intensity" | "reach" | "warmth" | "halo", def: number) => (
+            <Slider
+              label={label}
+              value={light[key]}
+              min={key === "warmth" ? -100 : 0}
+              max={100}
+              step={1}
+              defaultValue={def}
+              format={key === "warmth" ? fmtSigned(0) : (v) => v.toFixed(0)}
+              track={key === "warmth" ? WARMTH_TRACK : undefined}
+              onChange={(v) => edit(setLight({ [key]: v }))}
+              onCommit={endEdit}
+            />
+          );
+          return (
+            <>
+              <DepthSideView
+                depth={depth.map}
+                light={light}
+                onMove={(x, d) => edit(setLight({ x, depth: d }))}
+                onCommit={endEdit}
+              />
+              <Slider
+                label="Depth (camera ↔ far)"
+                value={light.depth}
+                min={0}
+                max={1}
+                step={0.01}
+                defaultValue={0.5}
+                format={(v) => `${Math.round(v * 100)}%`}
+                onChange={(v) => edit(setLight({ depth: v }))}
+                onCommit={endEdit}
+              />
+              {lightSlider("Intensity", "intensity", 50)}
+              {lightSlider("Reach", "reach", 50)}
+              {lightSlider("Warmth", "warmth", 40)}
+              {lightSlider("Halo", "halo", 40)}
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  commit((x) => ({
+                    ...x,
+                    atmosphere: { ...x.atmosphere, lights: x.atmosphere.lights.filter((_, k) => k !== i) },
+                  }));
+                  setSelectedLight(null);
+                }}
+              >
+                Remove light {i + 1}
+              </button>
+            </>
+          );
+        })()}
+        <p className="hint">
+          Drag a light on the photo to move it; drag it in the side view to set its depth. Behind the subject it rims
+          the silhouette and its glow shows around it; in front it lights the faces turned towards it.
+        </p>
 
         {depthAvailable ? (
           <>

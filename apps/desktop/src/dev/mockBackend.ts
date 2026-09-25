@@ -44,6 +44,30 @@ const STYLES: StyleInfo[] = [
     skinProtection: 75,
     swatch: ["#5a3a1c", "#f2b45a"],
   },
+  {
+    id: "teal-orange",
+    name: "Teal & Orange",
+    world: "Cinematic & Film Emulation",
+    description: "Blockbuster grade: teal shadows against warm highlights.",
+    skinProtection: 80,
+    swatch: ["#0f4c55", "#e08a3c"],
+  },
+  {
+    id: "moody-earthy",
+    name: "Moody & Earthy",
+    world: "Atmospheric & Environmental Landscapes",
+    description: "Muted foliage, slate blues, earth-tone shadows.",
+    skinProtection: 70,
+    swatch: ["#2d2a22", "#6b7a5e"],
+  },
+  {
+    id: "high-key-editorial",
+    name: "High-Key Editorial",
+    world: "High-Fashion & Melanin Precision",
+    description: "Luminous skin, pastel shadows, gentle contrast.",
+    skinProtection: 60,
+    swatch: ["#d9d2e6", "#f7efe9"],
+  },
 ];
 
 export function installMockBackend() {
@@ -89,6 +113,22 @@ export function installMockBackend() {
       case "open_in_app":
         console.info("[mock] open", a.file, "in", a.app);
         return null;
+      case "interpret_look": {
+        // Stand-in for the engine's interpreter: recognises a few words only.
+        const adj = structuredClone(a.adjustments as Adjustments);
+        const words = String(a.prompt).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+        const matched: { phrase: string; effect: string; strength: number }[] = [];
+        if (words.includes("foggy")) {
+          adj.atmosphere.fog += 45;
+          matched.push({ phrase: "foggy", effect: "distance fog", strength: 1 });
+        }
+        if (words.includes("film")) {
+          adj.finishing.grain += 30;
+          matched.push({ phrase: "film", effect: "film: grain, soft blacks", strength: 1 });
+        }
+        const known = new Set(["foggy", "film", "a", "an", "the", "with", "make", "this", "look", "like"]);
+        return { adjustments: adj, matched, unknown: words.filter((w) => !known.has(w)) };
+      }
       case "list_styles":
         return STYLES;
       case "mask_models":

@@ -1020,3 +1020,219 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text);
   z-index: 100;
 }
+
+/* ---- Section 4: prompt, fusion, 3D lights ------------------------------------------- */
+
+.look-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.look-prompt textarea {
+  resize: vertical;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  user-select: text;
+}
+
+.look-prompt textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.look-prompt-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn.link {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+}
+
+.chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chips li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.chips li strong {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chips li span {
+  color: var(--text-dim);
+}
+
+.chips li.is-negated strong {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.fusion-toggle {
+  margin-top: 10px;
+  width: 100%;
+  text-align: left;
+}
+
+.fusion {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fusion-slots {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  width: 100%;
+}
+
+.fusion-slot {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 36px;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.fusion-slot .swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+
+.fusion-slot select {
+  min-width: 0;
+  font-size: 11px;
+}
+
+.fusion-slot output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.fusion-wheel {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.fusion-wheel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+.fusion-disc {
+  fill: #1b1b1b;
+  stroke: var(--line);
+}
+
+.fusion-anchor {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.fusion-puck {
+  fill: var(--accent);
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.light-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.light-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: inset 3px 0 0 var(--light);
+}
+
+.light-chip.is-active {
+  border-color: var(--accent);
+}
+
+.side-view {
+  width: 100%;
+  height: auto;
+  background: #1b1b1b;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.side-scene {
+  fill: #3a3a3a;
+  stroke: #6b6b6b;
+  stroke-width: 1;
+}
+
+.side-ray {
+  stroke: rgb(255 210 122 / 40%);
+  stroke-dasharray: 3 3;
+}
+
+.side-light {
+  fill: #ffd27a;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.side-label {
+  fill: var(--text-faint);
+  font-size: 9px;
+}
+
+.viewer-light {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: radial-gradient(circle, #fff3c4 0 30%, #ffd27a 45%, rgb(255 210 122 / 0%) 70%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 60%), 0 0 14px rgb(255 200 100 / 60%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.viewer-light.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgb(255 200 100 / 80%);
+}

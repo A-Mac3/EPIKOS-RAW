@@ -83,7 +83,14 @@ fn texture(clarity: f32, micro: f32, blemish: f32, specular: f32) -> TexturePara
 }
 
 pub(crate) fn all() -> Vec<Style> {
-    vec![dark_melanin_glow(), silver_and_charcoal(), volumetric_golden_hour()]
+    vec![
+        dark_melanin_glow(),
+        silver_and_charcoal(),
+        volumetric_golden_hour(),
+        teal_and_orange(),
+        moody_and_earthy(),
+        high_key_editorial(),
+    ]
 }
 
 pub(crate) fn find(id: &str) -> Option<Style> {
@@ -232,6 +239,118 @@ fn volumetric_golden_hour() -> Style {
             light: None,
             haze: 0.2,
             haze_warmth: 0.85,
+            ..Default::default()
+        },
+    }
+}
+
+/// PRD "Hollywood Blockbuster: Teal & Orange": teal shadows, warm highlights, skin
+/// kept warm against the cool background.
+fn teal_and_orange() -> Style {
+    Style {
+        info: StyleInfo {
+            id: "teal-orange",
+            name: "Teal & Orange",
+            world: "Cinematic & Film Emulation",
+            description: "Blockbuster grade: teal shadows and backgrounds against warm highlights. \
+                Skin stays warm and natural.",
+            skin_protection: 80.0,
+            swatch: ["#0f4c55", "#e08a3c"],
+        },
+        texture: texture(10.0, 5.0, 0.0, 0.0),
+        scene: ColorParams {
+            hsl: hsl(&[
+                (ORANGE, [0.0, 10.0, 0.0]),
+                (YELLOW, [-10.0, -5.0, 0.0]),
+                (GREEN, [20.0, -25.0, -5.0]),
+                (AQUA, [0.0, 10.0, 0.0]),
+                (BLUE, [-10.0, 5.0, -5.0]),
+            ]),
+            wheels: wheels(&[
+                (SHADOWS, [188.0, 30.0, -5.0]),
+                (MIDTONES, [190.0, 8.0, 0.0]),
+                (HIGHLIGHTS, [35.0, 25.0, 2.0]),
+            ]),
+            contrast: 0.15,
+            ..Default::default()
+        },
+        skin: ColorParams {
+            hsl: hsl(&[(ORANGE, [0.0, 8.0, 3.0])]),
+            ..Default::default()
+        },
+        atmosphere: AtmosphereParams::default(),
+    }
+}
+
+/// PRD "Moody & Earthy": muted foliage greens, deep slate blues, warm skin accents,
+/// rich earth-tone shadows.
+fn moody_and_earthy() -> Style {
+    Style {
+        info: StyleInfo {
+            id: "moody-earthy",
+            name: "Moody & Earthy",
+            world: "Atmospheric & Environmental Landscapes",
+            description: "Muted foliage, deep slate blues and rich earth-tone shadows, with warm \
+                accents on skin.",
+            skin_protection: 70.0,
+            swatch: ["#2d2a22", "#6b7a5e"],
+        },
+        texture: texture(15.0, 10.0, 0.0, 0.0),
+        scene: ColorParams {
+            hsl: hsl(&[
+                (ORANGE, [0.0, 5.0, 0.0]),
+                (YELLOW, [-5.0, -20.0, -5.0]),
+                (GREEN, [-20.0, -35.0, -15.0]),
+                (AQUA, [0.0, -30.0, -10.0]),
+                (BLUE, [-8.0, -30.0, -20.0]),
+            ]),
+            wheels: wheels(&[
+                (SHADOWS, [30.0, 12.0, -10.0]),
+                (HIGHLIGHTS, [45.0, 6.0, -2.0]),
+            ]),
+            saturation: -0.1,
+            contrast: 0.1,
+            ..Default::default()
+        },
+        skin: ColorParams {
+            hsl: hsl(&[(ORANGE, [0.0, 10.0, 4.0]), (RED, [0.0, 5.0, 2.0])]),
+            ..Default::default()
+        },
+        atmosphere: AtmosphereParams::default(),
+    }
+}
+
+/// PRD "High-Key Editorial": luminous skin, pastel shadows, clean isolation.
+fn high_key_editorial() -> Style {
+    Style {
+        info: StyleInfo {
+            id: "high-key-editorial",
+            name: "High-Key Editorial",
+            world: "High-Fashion & Melanin Precision",
+            description: "Bright and clean: luminous skin, soft pastel shadows, gentle contrast.",
+            skin_protection: 60.0,
+            swatch: ["#d9d2e6", "#f7efe9"],
+        },
+        texture: texture(-10.0, 0.0, 35.0, 30.0),
+        scene: ColorParams {
+            wheels: wheels(&[
+                (SHADOWS, [260.0, 8.0, 20.0]),
+                (MIDTONES, [30.0, 2.0, 8.0]),
+                (HIGHLIGHTS, [30.0, 3.0, 6.0]),
+            ]),
+            saturation: -0.08,
+            vibrance: 0.05,
+            contrast: -0.15,
+            ..Default::default()
+        },
+        skin: ColorParams {
+            hsl: hsl(&[(ORANGE, [0.0, -5.0, 10.0]), (RED, [0.0, -3.0, 6.0])]),
+            ..Default::default()
+        },
+        atmosphere: AtmosphereParams {
+            glow: 0.15,
+            glow_radius: 0.02,
+            glow_warmth: 0.1,
             ..Default::default()
         },
     }

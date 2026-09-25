@@ -226,6 +226,42 @@ pub struct Atmosphere {
     /// Light position when not automatic, 0–1 across and down the upright frame.
     pub shaft_x: f32,
     pub shaft_y: f32,
+    /// 3D Atmospheric Light Sculptor (PRD Section 4): virtual lights placed in the
+    /// scene's depth.
+    pub lights: Vec<VirtualLight>,
+}
+
+/// A light placed in 3D after capture. `x`, `y` are 0–1 across and down the upright
+/// frame; `depth` is 0 (at the camera) … 1 (the far background), on the same scale as
+/// the depth map, so a light "behind" a subject is one with a greater depth than it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VirtualLight {
+    pub x: f32,
+    pub y: f32,
+    pub depth: f32,
+    /// 0…100.
+    pub intensity: f32,
+    /// How far the light reaches, 0…100.
+    pub reach: f32,
+    /// −100 (cool daylight) … 100 (warm tungsten / low sun).
+    pub warmth: f32,
+    /// Visible glow of the light in the air, 0…100.
+    pub halo: f32,
+}
+
+impl Default for VirtualLight {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.4,
+            depth: 0.5,
+            intensity: 50.0,
+            reach: 50.0,
+            warmth: 40.0,
+            halo: 40.0,
+        }
+    }
 }
 
 impl Default for Atmosphere {
@@ -243,6 +279,7 @@ impl Default for Atmosphere {
             shaft_auto: true,
             shaft_x: 0.5,
             shaft_y: 0.15,
+            lights: Vec::new(),
         }
     }
 }
@@ -395,6 +432,17 @@ pub struct StyleRef {
     /// 0…100: how much of the style's scene grade skin is shielded from. Seeded from
     /// the style's own default when it is applied.
     pub skin_protection: f32,
+    /// AI Style Fusion Matrix (PRD Section 4): up to four styles blended by weight.
+    /// When set it replaces `id`; `amount` still scales the whole blend.
+    pub blend: Vec<StyleWeight>,
+}
+
+/// One style's share of a fusion blend; weights are normalised when applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StyleWeight {
+    pub id: String,
+    pub weight: f32,
 }
 
 impl Default for StyleRef {
@@ -403,13 +451,14 @@ impl Default for StyleRef {
             id: String::new(),
             amount: 100.0,
             skin_protection: 0.0,
+            blend: Vec::new(),
         }
     }
 }
 
 impl StyleRef {
     pub fn is_none(&self) -> bool {
-        self.id.is_empty() || self.amount <= 0.0
+        (self.id.is_empty() && self.blend.iter().all(|b| b.weight <= 0.0)) || self.amount <= 0.0
     }
 }
 

@@ -59,6 +59,34 @@ impl ColorParams {
         self
     }
 
+    /// Sum of already-scaled grades (a style fusion). Wheel tints add as vectors on
+    /// the colour wheel, so warm + cool partly cancel instead of averaging hues.
+    pub(crate) fn sum(parts: &[ColorParams]) -> Self {
+        let mut out = ColorParams::default();
+        let mut tint = [(0.0f32, 0.0f32); 3];
+        for p in parts {
+            for (o, v) in out.hsl.iter_mut().flatten().zip(p.hsl.iter().flatten()) {
+                *o += v;
+            }
+            for (i, w) in p.wheels.iter().enumerate() {
+                let h = w[0].to_radians();
+                tint[i].0 += w[1] * h.cos();
+                tint[i].1 += w[1] * h.sin();
+                out.wheels[i][2] += w[2];
+            }
+            out.saturation += p.saturation;
+            out.vibrance += p.vibrance;
+            out.contrast += p.contrast;
+            out.mono += p.mono;
+        }
+        for (w, (x, y)) in out.wheels.iter_mut().zip(tint) {
+            w[0] = y.atan2(x).to_degrees().rem_euclid(360.0);
+            w[1] = x.hypot(y).min(1.0);
+        }
+        out.mono = out.mono.clamp(0.0, 1.0);
+        out
+    }
+
     pub(crate) fn prepare(&self) -> Prepared {
         Prepared {
             p: *self,
@@ -216,6 +244,17 @@ mod tests {
         let out = p.prepare().apply([0.8, 0.0, 0.0], 1.0);
         let h = hue_of(out);
         assert!(out[1].hypot(out[2]) > 0.02 && (60.0..100.0).contains(&h), "{out:?} hue {h}");
+    }
+
+    #[test]
+    fn fused_wheels_add_as_vectors() {
+        let warm = ColorParams { wheels: [[0.0; 3], [0.0; 3], [40.0, 0.6, 0.1]], ..Default::default() };
+        let cool = ColorParams { wheels: [[0.0; 3], [0.0; 3], [220.0, 0.6, 0.1]], ..Default::default() };
+        let both = ColorParams::sum(&[warm, cool]);
+        assert!(both.wheels[2][1] < 0.01, "opposite tints cancel: {:?}", both.wheels[2]);
+        assert!((both.wheels[2][2] - 0.2).abs() < 1e-6, "luminance adds");
+        let same = ColorParams::sum(&[warm, warm]);
+        assert!((same.wheels[2][0] - 40.0).abs() < 1e-3 && (same.wheels[2][1] - 1.0).abs() < 1e-6);
     }
 
     #[test]

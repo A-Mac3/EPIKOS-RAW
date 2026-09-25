@@ -20,6 +20,12 @@ interface Props {
   marker?: { x: number; y: number } | null;
   /** When set, a click on the image reports its 0–1 position instead. */
   onPick?: ((x: number, y: number) => void) | null;
+  /** 3D virtual lights: draggable markers, smaller the farther away. */
+  lights?: { x: number; y: number; depth: number }[];
+  selectedLight?: number | null;
+  onSelectLight?: (i: number) => void;
+  onMoveLight?: (i: number, x: number, y: number) => void;
+  onMoveLightEnd?: () => void;
 }
 
 export function Viewer({
@@ -32,6 +38,11 @@ export function Viewer({
   onResize,
   marker,
   onPick,
+  lights = [],
+  selectedLight = null,
+  onSelectLight,
+  onMoveLight,
+  onMoveLightEnd,
 }: Props) {
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -104,6 +115,31 @@ export function Viewer({
           className="viewer-overlay"
           style={{ display: overlay && !showingBefore ? "block" : "none" }}
         />
+        {!showingBefore &&
+          lights.map((l, i) => {
+            const size = 26 - 14 * l.depth;
+            return (
+              <span
+                key={i}
+                className={`viewer-light${i === selectedLight ? " is-selected" : ""}`}
+                style={{ left: `${l.x * 100}%`, top: `${l.y * 100}%`, width: size, height: size }}
+                title={`Light ${i + 1}: drag to move; depth ${Math.round(l.depth * 100)}%`}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  onSelectLight?.(i);
+                }}
+                onPointerMove={(e) => {
+                  if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+                  const box = e.currentTarget.parentElement!.getBoundingClientRect();
+                  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+                  onMoveLight?.(i, clamp((e.clientX - box.left) / box.width), clamp((e.clientY - box.top) / box.height));
+                }}
+                onPointerUp={() => onMoveLightEnd?.()}
+                onClick={(e) => e.stopPropagation()}
+              />
+            );
+          })}
         {marker && !showingBefore && (
           <span
             className="viewer-marker"

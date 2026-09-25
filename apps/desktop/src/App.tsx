@@ -9,11 +9,18 @@ import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
 import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
-import { useDepth } from "./hooks/useDepth";
+import { depthAt, useDepth } from "./hooks/useDepth";
 import { useMasks } from "./hooks/useMasks";
 import { usePreview } from "./hooks/usePreview";
 import { useStyles } from "./hooks/useStyles";
-import { defaultAdjustments, type Adjustments, type FileEntry, type ImageInfo } from "./types";
+import {
+  defaultAdjustments,
+  defaultLight,
+  type Adjustments,
+  type FileEntry,
+  type ImageInfo,
+  type PickTarget,
+} from "./types";
 
 const AUTOSAVE_MS = 600;
 const MAX_PREVIEW_SIDE = 4096;
@@ -51,20 +58,43 @@ export default function App() {
 
   const masks = useMasks(info?.path ?? null, adjustments);
   const { styles, thumbs } = useStyles(info?.path ?? null, adjustments);
-  const depth = useDepth(info?.path ?? null, adjustments);
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState<PickTarget>(null);
+  const depth = useDepth(info?.path ?? null, adjustments, picking === "light");
+  const [selectedLight, setSelectedLight] = useState<number | null>(null);
   const at = adjustments.atmosphere;
-  const lightMarker =
-    at.shafts > 0 && !at.shaftAuto ? { x: at.shaftX, y: at.shaftY } : null;
-  const placeLight = useCallback(
+  const lightMarker = at.shafts > 0 && !at.shaftAuto ? { x: at.shaftX, y: at.shaftY } : null;
+  const placeShaftLight = useCallback(
     (x: number, y: number) => {
       history.commit((a) => ({
         ...a,
         atmosphere: { ...a.atmosphere, shaftAuto: false, shaftX: x, shaftY: y, shafts: a.atmosphere.shafts || 50 },
       }));
-      setPicking(false);
+      setPicking(null);
     },
     [history.commit],
+  );
+  const depthMap = depth.map;
+  const addLight = useCallback(
+    (x: number, y: number) => {
+      // Just in front of whatever was clicked, so it lights that surface.
+      const surface = depthAt(depthMap, x, y);
+      const light = { ...defaultLight(x, y), depth: surface === null ? 0.4 : Math.max(0, surface - 0.08) };
+      history.commit((a) => ({ ...a, atmosphere: { ...a.atmosphere, lights: [...a.atmosphere.lights, light] } }));
+      setSelectedLight(adjustments.atmosphere.lights.length);
+      setPicking(null);
+    },
+    [history.commit, depthMap, adjustments.atmosphere.lights.length],
+  );
+  const moveLight = useCallback(
+    (i: number, x: number, y: number) =>
+      history.edit((a) => ({
+        ...a,
+        atmosphere: {
+          ...a.atmosphere,
+          lights: a.atmosphere.lights.map((l, k) => (k === i ? { ...l, x, y } : l)),
+        },
+      })),
+    [history.edit],
   );
 
   // ---- Saving -------------------------------------------------------------------------
@@ -173,12 +203,15 @@ export default function App() {
 
   // ---- Keyboard -----------------------------------------------------------------------
 
-  useEffect(() => setPicking(false), [info?.path]);
+  useEffect(() => {
+    setPicking(null);
+    setSelectedLight(null);
+  }, [info?.path]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (exportOpen) return; // the modal owns the keyboard
-      if (e.key === "Escape") setPicking(false);
+      if (e.key === "Escape") setPicking(null);
       const mod = e.metaKey || e.ctrlKey;
       const inField = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
       if (mod && e.key.toLowerCase() === "z") {
@@ -301,7 +334,12 @@ export default function App() {
                   overlay={depth.depth ?? masks.overlayMask}
                   onResize={onResize}
                   marker={lightMarker}
-                  onPick={picking ? placeLight : null}
+                  onPick={picking === "shafts" ? placeShaftLight : picking === "light" ? addLight : null}
+                  lights={at.lights}
+                  selectedLight={selectedLight}
+                  onSelectLight={setSelectedLight}
+                  onMoveLight={moveLight}
+                  onMoveLightEnd={history.endEdit}
                 />
               </ErrorBoundary>
             )}
@@ -312,6 +350,7 @@ export default function App() {
               <ErrorBoundary area="the side panel">
                 {info && (
                   <StylePanel
+                    path={info.path}
                     styles={styles}
                     thumbs={thumbs}
                     adjustments={adjustments}
@@ -331,6 +370,8 @@ export default function App() {
                     depth={depth}
                     picking={picking}
                     setPicking={setPicking}
+                    selectedLight={selectedLight}
+                    setSelectedLight={setSelectedLight}
                   />
                 ) : (
                   <p className="note pad">Select a photo to start editing.</p>

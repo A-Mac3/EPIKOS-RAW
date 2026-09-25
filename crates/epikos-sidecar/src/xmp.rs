@@ -6,7 +6,7 @@ use epikos_core::{Error, Result};
 use crate::document::{
     Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
-    NoiseReduction, SourceRef, SplitToning, StyleRef, Texture, ToneCurve, WbMode, WhiteBalance,
+    NoiseReduction, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, ToneCurve, VirtualLight, WbMode, WhiteBalance,
 };
 
 /// XMP namespace that marks a sidecar as written by EPIKOS RAW.
@@ -178,6 +178,15 @@ fn render_look(a: &Adjustments) -> String {
         at.shafts, at.shaft_length, at.shaft_warmth,
         if at.shaft_auto { "auto" } else { "manual" }, at.shaft_x, at.shaft_y
     );
+    // Virtual lights: "x,y,depth,intensity,reach,warmth,halo;…".
+    if !at.lights.is_empty() {
+        let lights: Vec<String> = at
+            .lights
+            .iter()
+            .map(|l| format!("{},{},{},{},{},{},{}", l.x, l.y, l.depth, l.intensity, l.reach, l.warmth, l.halo))
+            .collect();
+        out += &format!("\n    epikos:lights=\"{}\"", lights.join(";"));
+    }
     let c = &a.curves;
     for (name, curve) in [
         ("Rgb", &c.rgb),
@@ -215,6 +224,10 @@ fn render_look(a: &Adjustments) -> String {
         a.style.amount,
         a.style.skin_protection
     );
+    if !a.style.blend.is_empty() {
+        let blend: Vec<String> = a.style.blend.iter().map(|b| format!("{}:{}", esc(&b.id), b.weight)).collect();
+        out += &format!("\n    epikos:styleBlend=\"{}\"", blend.join(";"));
+    }
     out
 }
 
@@ -377,7 +390,24 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                 });
                 let (shaft_auto, shaft_x, shaft_y) =
                     light.unwrap_or((d.shaft_auto, d.shaft_x, d.shaft_y));
+                let lights = get("epikos:lights")
+                    .map(|v| {
+                        v.split(';')
+                            .filter_map(numbers::<7>)
+                            .map(|[x, y, depth, intensity, reach, warmth, halo]| VirtualLight {
+                                x,
+                                y,
+                                depth,
+                                intensity,
+                                reach,
+                                warmth,
+                                halo,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 Atmosphere {
+                    lights,
                     glow,
                     glow_size,
                     glow_warmth,
@@ -455,6 +485,16 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                 amount: num("epikos:styleAmount").unwrap_or(defaults.style.amount),
                 skin_protection: num("epikos:styleSkinProtection")
                     .unwrap_or(defaults.style.skin_protection),
+                blend: get("epikos:styleBlend")
+                    .map(|v| {
+                        v.split(';')
+                            .filter_map(|b| {
+                                let (id, w) = b.rsplit_once(':')?;
+                                Some(StyleWeight { id: unescape(id), weight: w.parse().ok()? })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             },
             lens: LensCorrections {
                 distortion: DistortionCoeffs {
@@ -537,6 +577,11 @@ mod tests {
         doc.adjustments.curves.rgb.black = 12.5;
         doc.adjustments.curves.blue.highlights = -8.0;
         doc.adjustments.finishing.grain = 35.0;
+        doc.adjustments.atmosphere.lights = vec![VirtualLight { x: 0.7, depth: 0.8, ..Default::default() }];
+        doc.adjustments.style.blend = vec![
+            StyleWeight { id: "silver-charcoal".into(), weight: 0.5 },
+            StyleWeight { id: "volumetric-golden-hour".into(), weight: 0.3 },
+        ];
         doc.adjustments.finishing.vignette = -22.5;
         doc.adjustments.finishing.vignette_roundness = 40.0;
         doc.adjustments.curves.red.points = vec![[0.0, 0.05], [0.4, 0.35], [1.0, 1.0]];

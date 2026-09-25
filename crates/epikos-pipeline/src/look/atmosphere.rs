@@ -109,7 +109,7 @@ const FOG_DENSITY: f32 = 3.0;
 const SHAFT_SIDE: f32 = 640.0;
 const SHAFT_SAMPLES: usize = 64;
 
-fn tint(warmth: f32) -> [f32; 3] {
+pub(crate) fn tint(warmth: f32) -> [f32; 3] {
     let w = warmth.clamp(-1.0, 1.0);
     let target = if w >= 0.0 { GOLD } else { COOL };
     target.map(|t| 1.0 + (t - 1.0) * w.abs())
@@ -123,7 +123,7 @@ fn luminance(rgb: &ImageRgbF32) -> Vec<f32> {
 }
 
 /// `p`-th percentile (0–1) from a strided sample.
-fn percentile(v: &[f32], p: f32) -> f32 {
+pub(crate) fn percentile(v: &[f32], p: f32) -> f32 {
     let stride = (v.len() / 65_536).max(1);
     let mut s: Vec<f32> = v.iter().step_by(stride).copied().filter(|x| x.is_finite()).collect();
     if s.is_empty() {

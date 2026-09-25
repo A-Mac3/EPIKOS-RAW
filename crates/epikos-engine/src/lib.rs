@@ -25,10 +25,12 @@ use serde::Serialize;
 
 mod dng;
 mod export;
+mod prompt;
 mod psd;
 pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportFormat, ExportOptions, ExportReport};
+pub use prompt::{interpret_look, LookPrompt, PromptMatch};
 
 /// A RAW/DNG file found while browsing a folder.
 #[derive(Debug, Clone, Serialize)]
@@ -411,6 +413,26 @@ impl Engine {
             });
         }
         Ok(aux)
+    }
+
+    /// Turn a written description into settings (PRD Section 4). Lights are placed on
+    /// the subject, found as the centre of the detected skin.
+    pub fn interpret_look(&self, path: &Path, prompt: &str, adjustments: &Adjustments) -> Result<LookPrompt> {
+        let loaded = self.load(path)?;
+        let base = loaded.base(256, 256);
+        let rgb = develop_rgb_with((*base).clone(), &loaded.raw.profile, &scene_only(adjustments), &LookInputs::default())?;
+        let skin = skin_likelihood(&rgb);
+        let (mut sx, mut sy, mut sw) = (0.0f32, 0.0f32, 0.0f32);
+        for (i, &s) in skin.iter().enumerate() {
+            if s > 0.5 {
+                sx += s * ((i as u32 % rgb.width) as f32 + 0.5) / rgb.width as f32;
+                sy += s * ((i as u32 / rgb.width) as f32 + 0.5) / rgb.height as f32;
+                sw += s;
+            }
+        }
+        // Enough skin to be a subject (≥ 0.3 % of the frame), else no hint.
+        let subject = (sw > 0.003 * skin.len() as f32).then(|| (sx / sw, sy / sw));
+        Ok(interpret_look(prompt, adjustments, subject))
     }
 
     /// Skin likelihood of the scene (Steps 1–2) at mask resolution.

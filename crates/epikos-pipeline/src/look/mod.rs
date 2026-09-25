@@ -11,6 +11,7 @@ mod atmosphere;
 mod blur;
 mod finish;
 mod grade;
+mod lights;
 mod oklab;
 mod skin;
 mod style;
@@ -52,7 +53,7 @@ pub struct DepthPlane<'a> {
 
 /// Whether the look for `adj` would use a depth map (fog or light shafts).
 pub fn look_needs_depth(adj: &Adjustments) -> bool {
-    Look::from_adjustments(adj).atmosphere.needs_depth()
+    Look::from_adjustments(adj).needs_depth()
 }
 
 /// Skin likelihood (0–1 per pixel) of a scene-linear Rec.2020 image, as used by
@@ -75,6 +76,7 @@ struct Look {
     curves: Curves,
     split: SplitToning,
     finishing: Finishing,
+    lights: Vec<epikos_sidecar::VirtualLight>,
 }
 
 impl Look {
@@ -90,19 +92,39 @@ impl Look {
             curves: adj.curves.clone(),
             split: adj.split_toning,
             finishing: adj.finishing,
+            lights: adj.atmosphere.lights.clone(),
         };
         if adj.style.is_none() {
             return look;
         }
-        // Unknown ids (a sidecar from a newer version) are ignored, not an error.
-        if let Some(s) = style::find(&adj.style.id) {
-            let k = pct(adj.style.amount);
+        // One style, or a fusion blend with weights normalised to 1. Unknown ids (a
+        // sidecar from a newer version) are ignored, not an error.
+        let entries: Vec<(style::Style, f32)> = if adj.style.blend.is_empty() {
+            style::find(&adj.style.id).map(|s| (s, 1.0)).into_iter().collect()
+        } else {
+            let total: f32 = adj.style.blend.iter().map(|b| b.weight.max(0.0)).sum();
+            adj.style
+                .blend
+                .iter()
+                .filter(|b| b.weight > 0.0 && total > 0.0)
+                .filter_map(|b| style::find(&b.id).map(|s| (s, b.weight / total)))
+                .collect()
+        };
+        if entries.is_empty() {
+            return look;
+        }
+        let amount = pct(adj.style.amount);
+        let (mut skins, mut scenes) = (Vec::new(), Vec::new());
+        for (s, weight) in entries {
+            let k = amount * weight;
             look.texture = look.texture.plus(s.texture.scaled(k));
-            look.style_skin = s.skin.scaled(k);
-            look.style_scene = s.scene.scaled(k);
-            look.style_protection = pct(adj.style.skin_protection);
+            skins.push(s.skin.scaled(k));
+            scenes.push(s.scene.scaled(k));
             look.atmosphere = look.atmosphere.plus(s.atmosphere.scaled(k));
         }
+        look.style_skin = ColorParams::sum(&skins);
+        look.style_scene = ColorParams::sum(&scenes);
+        look.style_protection = pct(adj.style.skin_protection);
         look
     }
 
@@ -120,9 +142,14 @@ impl Look {
             || (self.style_protection > 0.0 && !self.style_scene.is_neutral())
     }
 
+    fn needs_depth(&self) -> bool {
+        self.atmosphere.needs_depth() || self.lights.iter().any(|l| l.intensity > 0.0)
+    }
+
     fn is_neutral(&self) -> bool {
         !self.needs_lab()
             && self.atmosphere.is_neutral()
+            && !self.lights.iter().any(|l| l.intensity > 0.0)
             && self.curves.is_identity()
             && self.split.is_neutral()
     }
@@ -152,12 +179,12 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         ok.planes_to_rec2020(rgb);
     }
     let depth = look
-        .atmosphere
         .needs_depth()
         .then_some(inputs.depth)
         .flatten()
         .map(|d| fit_depth(rgb, d));
     apply_atmosphere(rgb, &look.atmosphere, depth.as_deref());
+    lights::apply_lights(rgb, &look.lights, depth.as_deref());
     tone::apply_tone(rgb, &look.curves, &look.split);
     finish::apply_finishing(rgb, &look.finishing);
 }

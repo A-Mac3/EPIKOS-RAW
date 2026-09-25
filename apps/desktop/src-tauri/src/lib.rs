@@ -124,6 +124,19 @@ async fn detect_depth(engine: EngineState<'_>, path: String, adjustments: Adjust
     Ok(Response::new(out))
 }
 
+/// Natural Language Look Prompting: a description → settings, plus what matched.
+#[tauri::command]
+async fn interpret_look(
+    engine: EngineState<'_>,
+    path: String,
+    prompt: String,
+    adjustments: Adjustments,
+) -> CmdResult<epikos_engine::LookPrompt> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.interpret_look(&path, &prompt, &adjustments)).await
+}
+
 /// Photo editors installed on this computer, for "Export & open in…".
 #[tauri::command]
 async fn handoff_apps() -> CmdResult<Vec<handoff::HandoffApp>> {
@@ -271,7 +284,8 @@ pub fn run() {
             detect_depth,
             list_styles,
             handoff_apps,
-            open_in_app
+            open_in_app,
+            interpret_look
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

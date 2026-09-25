@@ -58,6 +58,30 @@ fn main() {
     step7.split_toning.shadow_saturation = 40.0;
     looks.push(("step7".into(), step7));
 
+    // Section 4: a rim light behind the subject's head plus a soft key light in front.
+    let mut lights = base.clone();
+    lights.atmosphere.lights = vec![
+        epikos_sidecar::VirtualLight { x: 0.47, y: 0.18, depth: 0.75, intensity: 80.0, reach: 45.0, warmth: 70.0, halo: 70.0 },
+        epikos_sidecar::VirtualLight { x: 0.35, y: 0.3, depth: 0.05, intensity: 35.0, reach: 50.0, warmth: 20.0, halo: 0.0 },
+    ];
+    looks.push(("lights".into(), lights));
+    let mut fusion = base.clone();
+    fusion.style.blend = vec![
+        epikos_sidecar::StyleWeight { id: "silver-charcoal".into(), weight: 0.5 },
+        epikos_sidecar::StyleWeight { id: "volumetric-golden-hour".into(), weight: 0.5 },
+    ];
+    fusion.style.skin_protection = 68.0;
+    looks.push(("fusion".into(), fusion));
+    let prompt = engine
+        .interpret_look(&raw, "an eerie, foggy 1970s Scandinavian film scene with subtle golden light on the face", &base)
+        .unwrap();
+    println!("prompt matched: {:?}", prompt.matched.iter().map(|m| &m.phrase).collect::<Vec<_>>());
+    looks.push(("prompt".into(), prompt.adjustments));
+    let mut finish = base.clone();
+    finish.finishing.grain = 60.0;
+    finish.finishing.vignette = -60.0;
+    looks.push(("finish".into(), finish));
+
     // Depth map (Step 6), if the model is installed.
     if engine.mask_models().depth.available {
         let t = Instant::now();

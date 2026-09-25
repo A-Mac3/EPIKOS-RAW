@@ -34,7 +34,7 @@ export function useStyles(path: string | null, adjustments: Adjustments) {
     const timer = window.setTimeout(async () => {
       for (const s of styles) {
         if (token !== latest.current) return;
-        const adj: Adjustments = { ...base, style: { id: s.id, amount: 100, skinProtection: s.skinProtection } };
+        const adj: Adjustments = { ...base, style: { id: s.id, amount: 100, skinProtection: s.skinProtection, blend: [] } };
         try {
           const p = await renderPreview(path, adj, THUMB_W, THUMB_H);
           if (token === latest.current) setThumbs((t) => ({ ...t, [s.id]: p }));

@@ -9,6 +9,7 @@ import type {
   FileEntry,
   HandoffApp,
   ImageInfo,
+  LookPrompt,
   Mask,
   MaskKind,
   MaskModels,
@@ -113,3 +114,7 @@ export const listStyles = () => invoke<StyleInfo[]>("list_styles");
 export const handoffApps = () => invoke<HandoffApp[]>("handoff_apps");
 
 export const openInApp = (app: string, file: string) => invoke<void>("open_in_app", { app, file });
+
+/** Natural Language Look Prompting: description → settings (engine-side, offline). */
+export const interpretLook = (path: string, prompt: string, adjustments: Adjustments) =>
+  invoke<LookPrompt>("interpret_look", { path, prompt, adjustments });

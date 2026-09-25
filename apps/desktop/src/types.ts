@@ -86,6 +86,27 @@ export interface Atmosphere {
   /** Light position, 0–1 across and down the upright frame. */
   shaftX: number;
   shaftY: number;
+  /** 3D Light Sculptor: virtual lights placed in the scene's depth. */
+  lights: VirtualLight[];
+}
+
+/** A light placed in 3D: x, y 0–1 on the frame; depth 0 (camera) … 1 (far). */
+export interface VirtualLight {
+  x: number;
+  y: number;
+  depth: number;
+  intensity: number;
+  reach: number;
+  /** −100 cool … 100 warm. */
+  warmth: number;
+  halo: number;
+}
+
+/** What a click on the image does in Step 6: place the shafts' light, or a 3D light. */
+export type PickTarget = "shafts" | "light" | null;
+
+export function defaultLight(x = 0.5, y = 0.4): VirtualLight {
+  return { x, y, depth: 0.5, intensity: 50, reach: 50, warmth: 40, halo: 40 };
 }
 
 /**
@@ -133,6 +154,20 @@ export interface StyleRef {
   id: string;
   amount: number;
   skinProtection: number;
+  /** Style Fusion Matrix: up to four styles by weight; replaces `id` when set. */
+  blend: StyleWeight[];
+}
+
+export interface StyleWeight {
+  id: string;
+  weight: number;
+}
+
+/** Natural Language Look Prompting result. */
+export interface LookPrompt {
+  adjustments: Adjustments;
+  matched: { phrase: string; effect: string; strength: number }[];
+  unknown: string[];
 }
 
 export interface StyleInfo {
@@ -332,7 +367,7 @@ export function defaultAdjustments(): Adjustments {
       vignetteFeather: 50,
       vignetteRoundness: 0,
     },
-    style: { id: "", amount: 100, skinProtection: 0 },
+    style: { id: "", amount: 100, skinProtection: 0, blend: [] },
   };
 }
 
@@ -354,6 +389,7 @@ export function defaultAtmosphere(): Atmosphere {
     shaftAuto: true,
     shaftX: 0.5,
     shaftY: 0.15,
+    lights: [],
   };
 }
 
