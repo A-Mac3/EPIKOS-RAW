@@ -9,7 +9,7 @@ mod metadata;
 use std::path::Path;
 use std::sync::Arc;
 
-use epikos_core::{CameraFormat, Orientation, Result};
+use epikos_core::{CameraFormat, CaptureMetadata, Orientation, Result};
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 use sha2::{Digest, Sha256};
@@ -42,6 +42,19 @@ pub fn decode_file(path: impl AsRef<Path>) -> Result<DecodedRaw> {
     let mut decoded = convert::from_rawler(path, raw, digest, orientation)?;
     decoded.metadata = capture;
     Ok(decoded)
+}
+
+/// Capture metadata (camera, lens, exposure, time, GPS) without decoding the image
+/// data: cheap enough to run over a whole shoot.
+pub fn read_metadata(path: impl AsRef<Path>) -> Result<CaptureMetadata> {
+    let path = path.as_ref();
+    let src = RawSource::new(path)?;
+    let params = RawDecodeParams::default();
+    let meta = rawler::get_decoder(&src)
+        .and_then(|d| d.raw_metadata(&src, &params))
+        .map_err(decode_err)?;
+    let (make, model) = (meta.make.clone(), meta.model.clone());
+    Ok(metadata::read(&src, &params, &make, &model).1)
 }
 
 /// Camera-embedded JPEG preview, upright, downscaled so its longest side is at most

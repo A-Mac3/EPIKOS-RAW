@@ -961,6 +961,8 @@ dependencies = [
  "epikos-engine",
  "epikos-pipeline",
  "epikos-sidecar",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

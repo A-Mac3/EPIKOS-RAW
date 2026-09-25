@@ -29,8 +29,8 @@ pub use develop::{
 pub use display::{to_display_srgb, DisplayImage};
 pub use highlights::recover_highlights;
 pub use look::{
-    apply_look, bake_tone_curve, fit_to_image, look_is_active, look_needs_depth, skin_likelihood, styles, DepthPlane, LookInputs,
-    StyleInfo,
+    apply_look, bake_tone_curve, fit_to_image, look_is_active, look_needs_depth, oklab_planes,
+    skin_likelihood, styles, DepthPlane, LookInputs, StyleInfo,
 };
 pub use optics::{correct_chromatic_aberration, correct_distortion};
 pub use orient::apply_orientation;

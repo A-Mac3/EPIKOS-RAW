@@ -32,6 +32,10 @@ enum Commands {
         #[arg(long)]
         sidecar: Option<PathBuf>,
     },
+    /// Scene analysis of one photo (genre, lighting, skin, palette) as JSON.
+    Analyze { path: PathBuf },
+    /// Story-arc groups of the RAW files in a folder, with hero frames, as JSON.
+    Story { dir: PathBuf },
     /// Export a full-resolution 16-bit TIFF, layered PSD or enhanced DNG (by extension).
     Export {
         path: PathBuf,
@@ -78,6 +82,12 @@ fn run() -> Result<()> {
         Commands::Inspect { path } => inspect(&path),
         Commands::Sidecar { path } => init_sidecar(&path),
         Commands::Develop { path, out, sidecar } => develop_cmd(&path, out, sidecar),
+        Commands::Analyze { path } => {
+            let engine = Engine::new(1);
+            let adjustments = engine.open(&path)?.document.adjustments;
+            print_json(&engine.analyze(&path, &adjustments)?)
+        }
+        Commands::Story { dir } => print_json(&Engine::new(1).story_arc(&dir)?),
         Commands::Export {
             path,
             out,
@@ -167,6 +177,13 @@ fn develop_cmd(path: &Path, out: Option<PathBuf>, sidecar: Option<PathBuf>) -> R
         rgb.space,
         dest.display()
     );
+    Ok(())
+}
+
+fn print_json(value: &impl serde::Serialize) -> Result<()> {
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|e| epikos_core::Error::Decode(e.to_string()))?;
+    println!("{text}");
     Ok(())
 }
 

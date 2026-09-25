@@ -14,8 +14,8 @@ use epikos_core::{CameraFormat, Error, ImageRgbF32, Result, SensorLayout};
 use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
 use epikos_masks::{DepthMap, RgbImage};
 use epikos_pipeline::{
-    bin_mosaic, block_for_size, develop_rgb_with, look_needs_depth, skin_likelihood, temperature_for_gains,
-    to_display_srgb, DepthPlane, DisplayImage, LookInputs,
+    bin_mosaic, block_for_size, develop_rgb_with, look_needs_depth, oklab_planes, skin_likelihood,
+    temperature_for_gains, to_display_srgb, DepthPlane, DisplayImage, LookInputs,
 };
 use epikos_sidecar::{
     load_json, load_xmp, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, Adjustments,
@@ -23,14 +23,18 @@ use epikos_sidecar::{
 };
 use serde::Serialize;
 
+mod analysis;
 mod dng;
 mod export;
 mod prompt;
 mod psd;
+mod story;
+pub use analysis::SceneAnalysis;
 pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportFormat, ExportOptions, ExportReport};
 pub use prompt::{interpret_look, LookPrompt, PromptMatch};
+pub use story::{ShotGroup, StoryArc, SyncReport};
 
 /// A RAW/DNG file found while browsing a folder.
 #[derive(Debug, Clone, Serialize)]
@@ -433,6 +437,177 @@ impl Engine {
         // Enough skin to be a subject (≥ 0.3 % of the frame), else no hint.
         let subject = (sw > 0.003 * skin.len() as f32).then(|| (sx / sw, sy / sw));
         Ok(interpret_look(prompt, adjustments, subject))
+    }
+
+    /// PRD Section 2.1: genre, lighting, skin and palette of one photo, measured on its
+    /// Steps 1–2 develop with the masks and depth map when their models are installed.
+    pub fn analyze(&self, path: &Path, adjustments: &Adjustments) -> Result<SceneAnalysis> {
+        let started = std::time::Instant::now();
+        let loaded = self.load(path)?;
+        let base = loaded.base(768, 768);
+        let rgb = develop_rgb_with(
+            (*base).clone(),
+            &loaded.raw.profile,
+            &scene_only(adjustments),
+            &LookInputs::default(),
+        )?;
+        let lab = oklab_planes(&rgb);
+        let skin = skin_likelihood(&rgb);
+        let (w, h) = (rgb.width, rgb.height);
+        let status = self.masker.status();
+        let mask = |kind: MaskKind| {
+            status
+                .iter()
+                .any(|s| s.kind == kind && s.available)
+                .then(|| {
+                    self.segment(&loaded, adjustments, kind).ok().map(|m| {
+                        let a: Vec<f32> = m.alpha.iter().map(|&v| v as f32 / 255.0).collect();
+                        analysis::fit(&a, m.width, m.height, w, h)
+                    })
+                })?
+        };
+        let planes = analysis::Planes {
+            subject: mask(MaskKind::Subject),
+            sky: mask(MaskKind::Sky),
+            depth: self
+                .masker
+                .depth_available()
+                .then(|| self.depth_for(&loaded, adjustments).ok())
+                .flatten()
+                .map(|d| analysis::fit(&d.depth, d.width, d.height, w, h)),
+        };
+        let p = &loaded.raw.profile;
+        let kelvin = (!matches!(p.layout, SensorLayout::Monochrome))
+            .then(|| temperature_for_gains(&p.xyz_to_cam, p.as_shot_wb))
+            .flatten()
+            .map(|(t, _)| t);
+        Ok(analysis::analyze(
+            &rgb,
+            &lab,
+            &skin,
+            &planes,
+            &loaded.raw.metadata,
+            kelvin,
+            started,
+        ))
+    }
+
+    /// PRD Section 2.2: split the RAW files in `dir` into story-arc groups with a hero
+    /// frame and palette each. Uses embedded previews and EXIF only, so it is fast.
+    pub fn story_arc(&self, dir: &Path) -> Result<StoryArc> {
+        let files: Vec<PathBuf> = self
+            .list_folder(dir)?
+            .into_iter()
+            .map(|f| PathBuf::from(f.path))
+            .collect();
+        Ok(story::story_arc(&files))
+    }
+
+    /// Copy the hero's look to `targets` with per-frame calibration, writing each
+    /// target's sidecar (the previous one is kept for [`Engine::undo_sync`]).
+    pub fn sync_look(
+        &self,
+        hero: &Path,
+        hero_adjustments: &Adjustments,
+        targets: &[PathBuf],
+    ) -> Result<SyncReport> {
+        let hero_stats = self.frame_stats(hero, hero_adjustments)?;
+        let mut report = SyncReport {
+            frames: Vec::new(),
+            skipped: Vec::new(),
+        };
+        for target in targets {
+            if target == hero {
+                continue;
+            }
+            let result = (|| -> Result<story::SyncedFrame> {
+                let info = self.open(target)?;
+                let stats = self.frame_stats(target, &info.document.adjustments)?;
+                let (adjustments, mut frame) = story::synced_adjustments(
+                    hero_adjustments,
+                    &hero_stats,
+                    &info.document.adjustments,
+                    &stats,
+                );
+                story::back_up(target)?;
+                let document = DevelopDocument {
+                    adjustments,
+                    ..info.document
+                };
+                self.save(target, &document)?;
+                frame.path = target.to_string_lossy().into_owned();
+                Ok(frame)
+            })();
+            match result {
+                Ok(f) => report.frames.push(f),
+                Err(e) => report.skipped.push(story::SkippedFrame {
+                    path: target.to_string_lossy().into_owned(),
+                    reason: e.to_string(),
+                }),
+            }
+        }
+        Ok(report)
+    }
+
+    /// Put back the sidecars a [`Engine::sync_look`] replaced. Returns the paths restored.
+    pub fn undo_sync(&self, targets: &[PathBuf]) -> Result<Vec<String>> {
+        let mut restored = Vec::new();
+        for target in targets {
+            match story::restore(target)? {
+                None => continue,
+                Some(previous) if previous == "none" => {
+                    let _ = fs::remove_file(sidecar_json_path(target));
+                    story::remove_own_xmp(target);
+                }
+                Some(previous) => {
+                    let json = sidecar_json_path(target);
+                    fs::write(&json, previous)?;
+                    let document = load_json(&json)?;
+                    self.save(target, &document)?;
+                }
+            }
+            restored.push(target.to_string_lossy().into_owned());
+        }
+        Ok(restored)
+    }
+
+    fn frame_stats(&self, path: &Path, adjustments: &Adjustments) -> Result<story::FrameStats> {
+        let loaded = self.load(path)?;
+        let base = loaded.base(384, 384);
+        let rgb = develop_rgb_with(
+            (*base).clone(),
+            &loaded.raw.profile,
+            &scene_only(adjustments),
+            &LookInputs::default(),
+        )?;
+        let lab = oklab_planes(&rgb);
+        let skin = skin_likelihood(&rgb);
+        let n = rgb.len();
+        let ev = |i: usize| {
+            (0.2627 * rgb.r[i] + 0.678 * rgb.g[i] + 0.0593 * rgb.b[i])
+                .max(1e-6)
+                .log2()
+        };
+        let on_skin: Vec<usize> = (0..n).filter(|&i| skin[i] > 0.5).collect();
+        let mut key: Vec<f32> = if on_skin.len() > n / 100 {
+            on_skin.iter().map(|&i| ev(i)).collect()
+        } else {
+            (0..n).map(ev).collect()
+        };
+        let mid = key.len() / 2;
+        let key_ev = *key.select_nth_unstable_by(mid, f32::total_cmp).1;
+        let fine = analysis::box_mean(&lab.r, rgb.width as usize, rgb.height as usize, 1);
+        let detail = (0..n).map(|i| (lab.r[i] - fine[i]).abs()).sum::<f32>() / n as f32;
+        let p = &loaded.raw.profile;
+        let as_shot = (!matches!(p.layout, SensorLayout::Monochrome))
+            .then(|| temperature_for_gains(&p.xyz_to_cam, p.as_shot_wb))
+            .flatten();
+        Ok(story::FrameStats {
+            key_ev,
+            detail,
+            skin: 100.0 * on_skin.len() as f32 / n as f32,
+            as_shot,
+        })
     }
 
     /// Skin likelihood of the scene (Steps 1–2) at mask resolution.

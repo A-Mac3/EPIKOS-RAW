@@ -57,6 +57,13 @@ pub fn look_needs_depth(adj: &Adjustments) -> bool {
     Look::from_adjustments(adj).needs_depth()
 }
 
+/// The image in Oklab (planes r, g, b hold L, a, b), for analysis.
+pub fn oklab_planes(rgb: &ImageRgbF32) -> ImageRgbF32 {
+    let mut lab = rgb.clone();
+    Oklab::new().planes_to_lab(&mut lab);
+    lab
+}
+
 /// Skin likelihood (0–1 per pixel) of a scene-linear Rec.2020 image, as used by
 /// retouching and skin protection.
 pub fn skin_likelihood(rgb: &ImageRgbF32) -> Vec<f32> {

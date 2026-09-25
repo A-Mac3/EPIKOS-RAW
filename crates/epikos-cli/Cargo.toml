@@ -16,3 +16,5 @@ epikos-decode.workspace = true
 epikos-pipeline.workspace = true
 epikos-sidecar.workspace = true
 epikos-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
