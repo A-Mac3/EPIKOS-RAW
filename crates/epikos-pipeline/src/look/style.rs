@@ -133,7 +133,12 @@ fn dark_melanin_glow() -> Style {
             wheels: wheels(&[(MIDTONES, [30.0, 14.0, 0.0])]),
             ..Default::default()
         },
-        atmosphere: AtmosphereParams { glow: 0.12, warmth: 0.4, haze: 0.0 },
+        atmosphere: AtmosphereParams {
+            glow: 0.12,
+            glow_radius: 0.015,
+            glow_warmth: 0.4,
+            ..Default::default()
+        },
     }
 }
 
@@ -215,7 +220,20 @@ fn volumetric_golden_hour() -> Style {
             wheels: wheels(&[(HIGHLIGHTS, [38.0, 6.0, 2.0])]),
             ..Default::default()
         },
-        atmosphere: AtmosphereParams { glow: 0.45, warmth: 0.85, haze: 0.3 },
+        // Bloom, a warm veil and soft rays from the brightest part of the sky. No depth
+        // fog: gold airlight over a blue sky reads mauve, not golden.
+        atmosphere: AtmosphereParams {
+            glow: 0.45,
+            glow_radius: 0.02,
+            glow_warmth: 0.85,
+            shafts: 0.2,
+            shaft_length: 0.6,
+            shaft_warmth: 0.85,
+            light: None,
+            haze: 0.2,
+            haze_warmth: 0.85,
+            ..Default::default()
+        },
     }
 }
 

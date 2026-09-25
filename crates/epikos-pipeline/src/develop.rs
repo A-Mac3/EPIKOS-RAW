@@ -5,7 +5,7 @@ use crate::color_transform::{apply_white_balance, camera_to_linear_rec2020, wb_m
 use crate::demosaic::{demosaic, DemosaicAlgorithm};
 use crate::denoise::{self, reduce_noise};
 use crate::highlights::recover_highlights;
-use crate::look::apply_look;
+use crate::look::{apply_look, LookInputs};
 use crate::optics::{correct_chromatic_aberration, correct_distortion};
 use crate::orient::apply_orientation;
 use crate::white_balance::gains_for_temperature;
@@ -25,19 +25,35 @@ pub fn develop_adjustments(
     profile: &SensorProfile,
     adj: &Adjustments,
 ) -> Result<ImageRgbF32> {
+    develop_adjustments_with(mosaic, profile, adj, &LookInputs::default())
+}
+
+/// [`develop_adjustments`] with model outputs (depth) for the look.
+pub fn develop_adjustments_with(
+    mosaic: &MosaicF32,
+    profile: &SensorProfile,
+    adj: &Adjustments,
+    inputs: &LookInputs,
+) -> Result<ImageRgbF32> {
     let rgb = demosaic(mosaic, map_demosaic(adj, profile));
-    develop_rgb(rgb, profile, adj)
+    develop_rgb_with(rgb, profile, adj, inputs)
 }
 
 /// Everything after demosaic: highlights → WB → noise reduction → optics → camera RGB → Rec.2020 →
-/// exposure → Steps 4–5 and style → orientation.
+/// exposure → orientation → Steps 4–6 and style.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
 /// interactive preview share one code path.
-pub fn develop_rgb(
+pub fn develop_rgb(rgb: ImageRgbF32, profile: &SensorProfile, adj: &Adjustments) -> Result<ImageRgbF32> {
+    develop_rgb_with(rgb, profile, adj, &LookInputs::default())
+}
+
+/// [`develop_rgb`] with model outputs (depth) for the look.
+pub fn develop_rgb_with(
     mut rgb: ImageRgbF32,
     profile: &SensorProfile,
     adj: &Adjustments,
+    inputs: &LookInputs,
 ) -> Result<ImageRgbF32> {
     rgb.validate()?;
 
@@ -81,11 +97,12 @@ pub fn develop_rgb(
         }
     }
 
-    // Steps 4–5 and the style. Radii scale with image size, so the preview matches.
-    apply_look(&mut rgb, adj);
+    // After the optics above, which work in the sensor's own frame.
+    let mut rgb = apply_orientation(rgb, profile.orientation);
 
-    // Last, so lens corrections above work in the sensor's own frame.
-    let rgb = apply_orientation(rgb, profile.orientation);
+    // Steps 4–6 and the style, on the upright frame (depth and light positions are
+    // upright). Radii scale with image size, so the preview matches the export.
+    apply_look(&mut rgb, adj, inputs);
     rgb.validate()?;
     Ok(rgb)
 }

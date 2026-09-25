@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import type { DepthState } from "../hooks/useDepth";
 import { MASK_KINDS, type MaskState } from "../hooks/useMasks";
 import {
   HSL_BANDS,
@@ -28,6 +29,10 @@ interface Props {
   /** Discrete change: one undo step. */
   commit: Update;
   masks: MaskState;
+  depth: DepthState;
+  /** Waiting for a click on the image to place the light source. */
+  picking: boolean;
+  setPicking: (on: boolean) => void;
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
@@ -37,7 +42,7 @@ const STEPS: { title: string; planned: string }[] = [
   { title: "AI Subject & Semantic Masking", planned: "Skin, eyes, hair and foreground masks; masks driving local adjustments in later steps" },
   { title: "Micro-Texture & Retouching", planned: "Character line sculpting; retouching confined to the subject mask" },
   { title: "Base Color Grading & HSL", planned: "Foliage shift and background re-coloration through the Step 3 masks" },
-  { title: "Atmospheric & Light Sculpting", planned: "Volumetric light shafts, localized glow, depth-based fog and haze (styles already add glow and haze)" },
+  { title: "Atmospheric & Light Sculpting", planned: "3D light placement on the depth map; glow confined to the subject mask" },
   { title: "Creative Split-Toning & Curves", planned: "Highlight warmth, shadow cooling, black point and matte" },
   { title: "Final Finishing & Handoff", planned: "Analog grain, vignette, PSD / DNG export. 16-bit TIFF export is available now (Export… / ⌘E)" },
 ];
@@ -81,7 +86,19 @@ function hslTrack(band: HslBand, mode: HslMode) {
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 
-export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks }: Props) {
+const WARMTH_TRACK = "linear-gradient(90deg, #6f9be0, #d8d8d8 50%, #e6a73a)";
+
+export function StepsPanel({
+  info,
+  adjustments: a,
+  edit,
+  endEdit,
+  commit,
+  masks,
+  depth,
+  picking,
+  setPicking,
+}: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const [hslMode, setHslMode] = useState<HslMode>("saturation");
   const toggle = (i: number) =>
@@ -152,6 +169,33 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks 
       wheels: { ...x.color.wheels, [range]: { ...x.color.wheels[range], ...patch } },
     },
   });
+
+  const at = a.atmosphere;
+  const setAt = (patch: Partial<Adjustments["atmosphere"]>) => (x: Adjustments) => ({
+    ...x,
+    atmosphere: { ...x.atmosphere, ...patch },
+  });
+  const atSlider = (
+    label: string,
+    key: keyof Adjustments["atmosphere"],
+    def: number,
+    opts?: { warmth?: boolean; disabled?: boolean },
+  ) => (
+    <Slider
+      label={label}
+      value={at[key] as number}
+      min={opts?.warmth ? -100 : 0}
+      max={100}
+      step={1}
+      defaultValue={def}
+      format={opts?.warmth ? fmtSigned(0) : (v) => v.toFixed(0)}
+      track={opts?.warmth ? WARMTH_TRACK : undefined}
+      disabled={opts?.disabled}
+      onChange={(v) => edit(setAt({ [key]: v }))}
+      onCommit={endEdit}
+    />
+  );
+  const depthAvailable = masks.models?.depth.available ?? false;
 
   const content: Record<number, ReactNode> = {
     0: (
@@ -407,6 +451,66 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks 
           onCommit={endEdit}
         />
         <p className="hint">Shields detected skin from the HSL and wheel changes above.</p>
+      </>
+    ),
+    5: (
+      <>
+        <span className="field-label">Glow</span>
+        {atSlider("Amount", "glow", 0)}
+        {atSlider("Size", "glowSize", 50, { disabled: at.glow === 0 })}
+        {atSlider("Warmth", "glowWarmth", 0, { warmth: true, disabled: at.glow === 0 })}
+
+        <span className="field-label">Depth fog</span>
+        {atSlider("Amount", "fog", 0)}
+        {atSlider("Starts at distance", "fogStart", 30, { disabled: at.fog === 0 })}
+        {atSlider("Warmth", "fogWarmth", 0, { warmth: true, disabled: at.fog === 0 })}
+
+        <span className="field-label">Light shafts</span>
+        {atSlider("Amount", "shafts", 0)}
+        {atSlider("Length", "shaftLength", 60, { disabled: at.shafts === 0 })}
+        {atSlider("Warmth", "shaftWarmth", 40, { warmth: true, disabled: at.shafts === 0 })}
+        <div className="field-row">
+          <span className="field-label">Light source</span>
+          <Segmented<"auto" | "manual">
+            label="Light source"
+            value={at.shaftAuto ? "auto" : "manual"}
+            options={[
+              { value: "auto", label: "Auto" },
+              { value: "manual", label: "Placed" },
+            ]}
+            onChange={(v) => {
+              if (v === "auto") {
+                setPicking(false);
+                commit(setAt({ shaftAuto: true }));
+              } else {
+                setPicking(true);
+              }
+            }}
+          />
+        </div>
+        <button
+          type="button"
+          className={`btn${picking ? " is-active" : ""}`}
+          onClick={() => setPicking(!picking)}
+        >
+          {picking ? "Click the image… (Esc to cancel)" : at.shaftAuto ? "Place light on the image" : "Move light"}
+        </button>
+
+        {depthAvailable ? (
+          <>
+            <Toggle label="Show depth" checked={depth.show} onChange={depth.setShow} />
+            {depth.busy && <p className="hint">Estimating depth…</p>}
+            {depth.error && <p className="hint error">{depth.error}</p>}
+            <p className="hint">
+              Depth Anything V2 estimates distance on this computer&apos;s CPU the first time fog or shafts are used.
+              Fog thickens with it, and rays stay behind near subjects.
+            </p>
+          </>
+        ) : (
+          <p className="hint">
+            Depth model not installed, so fog is a uniform haze. Run <code>scripts/fetch-models.sh</code>.
+          </p>
+        )}
       </>
     ),
   };

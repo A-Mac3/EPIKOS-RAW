@@ -8,6 +8,7 @@ import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
 import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
+import { useDepth } from "./hooks/useDepth";
 import { useMasks } from "./hooks/useMasks";
 import { usePreview } from "./hooks/usePreview";
 import { useStyles } from "./hooks/useStyles";
@@ -49,6 +50,21 @@ export default function App() {
 
   const masks = useMasks(info?.path ?? null, adjustments);
   const { styles, thumbs } = useStyles(info?.path ?? null, adjustments);
+  const depth = useDepth(info?.path ?? null, adjustments);
+  const [picking, setPicking] = useState(false);
+  const at = adjustments.atmosphere;
+  const lightMarker =
+    at.shafts > 0 && !at.shaftAuto ? { x: at.shaftX, y: at.shaftY } : null;
+  const placeLight = useCallback(
+    (x: number, y: number) => {
+      history.commit((a) => ({
+        ...a,
+        atmosphere: { ...a.atmosphere, shaftAuto: false, shaftX: x, shaftY: y, shafts: a.atmosphere.shafts || 50 },
+      }));
+      setPicking(false);
+    },
+    [history.commit],
+  );
 
   // ---- Saving -------------------------------------------------------------------------
 
@@ -156,9 +172,12 @@ export default function App() {
 
   // ---- Keyboard -----------------------------------------------------------------------
 
+  useEffect(() => setPicking(false), [info?.path]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (exportOpen) return; // the modal owns the keyboard
+      if (e.key === "Escape") setPicking(false);
       const mod = e.metaKey || e.ctrlKey;
       const inField = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
       if (mod && e.key.toLowerCase() === "z") {
@@ -275,8 +294,10 @@ export default function App() {
                 error={openError ?? renderError}
                 loading={loading}
                 showingBefore={before}
-                overlay={masks.overlayMask}
+                overlay={depth.depth ?? masks.overlayMask}
                 onResize={onResize}
+                marker={lightMarker}
+                onPick={picking ? placeLight : null}
               />
             )}
           </main>
@@ -301,6 +322,9 @@ export default function App() {
                   endEdit={history.endEdit}
                   commit={history.commit}
                   masks={masks}
+                  depth={depth}
+                  picking={picking}
+                  setPicking={setPicking}
                 />
               ) : (
                 <p className="note pad">Select a photo to start editing.</p>

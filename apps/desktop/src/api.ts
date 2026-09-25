@@ -83,7 +83,15 @@ export const maskModels = () => invoke<MaskModels>("mask_models");
 
 /** Layout: u32 width, u32 height, u32 inference ms, then one mask byte per pixel. */
 export async function detectMask(path: string, adjustments: Adjustments, kind: MaskKind): Promise<Mask> {
-  const buf = await invoke<ArrayBuffer>("detect_mask", { path, adjustments, kind });
+  return parseMask(await invoke<ArrayBuffer>("detect_mask", { path, adjustments, kind }), kind);
+}
+
+/** Step 6 depth map in the mask layout (255 = nearest). */
+export async function detectDepth(path: string, adjustments: Adjustments): Promise<Mask> {
+  return parseMask(await invoke<ArrayBuffer>("detect_depth", { path, adjustments }), "depth");
+}
+
+function parseMask(buf: ArrayBuffer, kind: Mask["kind"]): Mask {
   const view = new DataView(buf);
   const width = view.getUint32(0, true);
   const height = view.getUint32(4, true);

@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use epikos_core::{CaptureMetadata, Error, GpsInfo, Result};
-use epikos_pipeline::{develop_adjustments, encode_rgb16, OutputSpace};
+use epikos_masks::DepthMap;
+use epikos_pipeline::{develop_adjustments_with, encode_rgb16, OutputSpace};
 use epikos_sidecar::Adjustments;
 use serde::{Deserialize, Serialize};
 use tiff::encoder::compression::DeflateLevel;
@@ -57,6 +58,7 @@ pub(crate) fn export_tiff(
     adjustments: &Adjustments,
     dest: &Path,
     options: ExportOptions,
+    depth: Option<&DepthMap>,
 ) -> Result<ExportReport> {
     let space = options.color_space;
     let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -72,7 +74,8 @@ pub(crate) fn export_tiff(
     }
 
     let t = Instant::now();
-    let rgb = develop_adjustments(&loaded.raw.mosaic, &loaded.raw.profile, adjustments)?;
+    let inputs = crate::look_inputs(depth);
+    let rgb = develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, &inputs)?;
     let (width, height) = (rgb.width, rgb.height);
     let pixels = encode_rgb16(&rgb, space);
     drop(rgb);

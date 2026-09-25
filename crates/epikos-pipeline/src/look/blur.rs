@@ -49,6 +49,32 @@ pub(crate) fn guided(p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f
         .collect()
 }
 
+/// Joint guided filter: smooths `p` while snapping its edges to those of `guide`
+/// (used to fit a low-resolution depth map to the photo's own edges).
+pub(crate) fn guided_joint(guide: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    let mean_i = box_blur(guide, w, h, r);
+    let mean_p = box_blur(p, w, h, r);
+    let ip: Vec<f32> = guide.par_iter().zip(p.par_iter()).map(|(i, p)| i * p).collect();
+    let ii: Vec<f32> = guide.par_iter().map(|i| i * i).collect();
+    let (mean_ip, mean_ii) = (box_blur(&ip, w, h, r), box_blur(&ii, w, h, r));
+    drop((ip, ii));
+    let (a, b): (Vec<f32>, Vec<f32>) = (0..p.len())
+        .into_par_iter()
+        .map(|k| {
+            let var = (mean_ii[k] - mean_i[k] * mean_i[k]).max(0.0);
+            let cov = mean_ip[k] - mean_i[k] * mean_p[k];
+            let a = cov / (var + eps);
+            (a, mean_p[k] - a * mean_i[k])
+        })
+        .unzip();
+    let (ma, mb) = (box_blur(&a, w, h, r), box_blur(&b, w, h, r));
+    guide
+        .par_iter()
+        .zip(ma.par_iter().zip(mb.par_iter()))
+        .map(|(&i, (&a, &b))| a * i + b)
+        .collect()
+}
+
 fn box_rows(src: &[f32], dst: &mut [f32], w: usize, r: usize) {
     let norm = 1.0 / (2 * r + 1) as f64;
     dst.par_chunks_mut(w)
@@ -121,6 +147,19 @@ mod tests {
                 assert!((a - b).abs() < 1e-4, "r={r}: {a} vs {b}");
             }
         }
+    }
+
+    #[test]
+    fn joint_guided_filter_snaps_a_blurry_edge_to_the_guide() {
+        let (w, h) = (64, 8);
+        // Guide has a hard edge at x = 32; p has the same step smeared over 16 px.
+        let guide: Vec<f32> = (0..w * h).map(|i| if i % w < 32 { 0.2 } else { 0.8 }).collect();
+        let p: Vec<f32> = (0..w * h)
+            .map(|i| ((i % w) as f32 - 24.0).clamp(0.0, 16.0) / 16.0)
+            .collect();
+        let q = guided_joint(&guide, &p, w, h, 6, 1e-4);
+        let at = |x: usize| q[4 * w + x];
+        assert!(at(34) - at(29) > 0.4, "edge not sharpened: {} {}", at(29), at(34));
     }
 
     #[test]

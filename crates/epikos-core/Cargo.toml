@@ -7,4 +7,5 @@ description = "32-bit floating-point image types and camera profiles for EPIKOS 
 
 [dependencies]
 thiserror.workspace = true
+rayon.workspace = true
 serde.workspace = true

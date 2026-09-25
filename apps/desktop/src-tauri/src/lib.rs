@@ -105,6 +105,22 @@ fn mask_models(engine: EngineState<'_>) -> MaskModels {
     engine.mask_models()
 }
 
+/// Step 6 depth map, same binary layout as [`detect_mask`] with one byte per pixel
+/// (255 = nearest, 0 = farthest).
+#[tauri::command]
+async fn detect_depth(engine: EngineState<'_>, path: String, adjustments: Adjustments) -> CmdResult<Response> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    let depth = blocking(move || engine.depth(&path, &adjustments)).await?;
+
+    let mut out = Vec::with_capacity(12 + depth.depth.len());
+    out.extend_from_slice(&depth.width.to_le_bytes());
+    out.extend_from_slice(&depth.height.to_le_bytes());
+    out.extend_from_slice(&(depth.infer_ms.min(u32::MAX as u64) as u32).to_le_bytes());
+    out.extend(depth.depth.iter().map(|d| (d.clamp(0.0, 1.0) * 255.0).round() as u8));
+    Ok(Response::new(out))
+}
+
 /// Built-in parametric styles for the preset panel.
 #[tauri::command]
 fn list_styles() -> Vec<StyleInfo> {
@@ -185,6 +201,7 @@ pub fn run() {
             export_tiff,
             mask_models,
             detect_mask,
+            detect_depth,
             list_styles
         ])
         .run(tauri::generate_context!())

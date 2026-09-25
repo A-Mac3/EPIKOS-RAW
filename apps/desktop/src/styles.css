@@ -322,6 +322,23 @@ code {
   color: var(--error);
 }
 
+.viewer-image.is-picking {
+  cursor: crosshair;
+}
+
+/* Light source for Step 6 shafts: a small sun. */
+.viewer-marker {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: radial-gradient(circle, #ffd27a 0 35%, rgb(255 210 122 / 0%) 36%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 60%), 0 0 12px rgb(255 200 100 / 70%);
+  pointer-events: none;
+}
+
 .viewer-tag {
   position: absolute;
   top: 8px;

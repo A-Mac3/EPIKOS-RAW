@@ -40,6 +40,25 @@ fn main() {
     manual.color.wheels.highlights = epikos_sidecar::ColorWheel { hue: 40.0, amount: 20.0, luminance: 0.0 };
     manual.color.skin_protection = 80.0;
     looks.push(("manual".into(), manual));
+    let mut step6 = base.clone();
+    step6.atmosphere.glow = 35.0;
+    step6.atmosphere.fog = 55.0;
+    step6.atmosphere.fog_start = 20.0;
+    step6.atmosphere.fog_warmth = 20.0;
+    step6.atmosphere.shafts = 70.0;
+    looks.push(("step6".into(), step6));
+
+    // Depth map (Step 6), if the model is installed.
+    if engine.mask_models().depth.available {
+        let t = Instant::now();
+        let d = engine.depth(&raw, &base).unwrap();
+        println!("depth {}×{} in {} ms ({} ms inference)", d.width, d.height, t.elapsed().as_millis(), d.infer_ms);
+        let px: Vec<u8> = d.depth.iter().map(|v| (v * 255.0).round() as u8).collect();
+        image::GrayImage::from_raw(d.width, d.height, px)
+            .unwrap()
+            .save(out.join(format!("{stem}_depth.png")))
+            .unwrap();
+    }
 
     // Skin map of the unstyled develop, for checking the detector.
     {

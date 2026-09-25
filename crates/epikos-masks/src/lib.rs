@@ -4,6 +4,7 @@
 //! |---------|-----------------------------------------|------------|
 //! | Subject | IS-Net (DIS), `isnet-general-use.onnx`  | 1024×1024  |
 //! | Sky     | U²-Net sky segmentation, `skyseg.onnx`  | 320×320    |
+//! | Depth   | Depth Anything V2 Small, `depth-anything-v2-small.onnx` | 518 long side, ×14 |
 //!
 //! Models are downloaded by `scripts/fetch-models.sh` (they are not committed) and loaded
 //! lazily on first use, then kept for the life of the [`Masker`]. Inputs are
@@ -14,11 +15,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use epikos_core::{Error, Result};
+use epikos_core::{resize_plane, Error, Result};
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -79,6 +79,28 @@ const SKYSEG: ModelSpec = ModelSpec {
     std: [0.229, 0.224, 0.225],
 };
 
+/// Depth Anything V2 Small (Apache-2.0), ImageNet normalisation. `side` is the long
+/// side; the input keeps the image's aspect ratio in multiples of the 14-px patch.
+const DEPTH: ModelSpec = ModelSpec {
+    file: "depth-anything-v2-small.onnx",
+    side: 518,
+    mean: [0.485, 0.456, 0.406],
+    std: [0.229, 0.224, 0.225],
+};
+
+/// Session slot of the depth model, after the two masks.
+const DEPTH_SLOT: usize = 2;
+
+/// Relative scene depth, row-major: 1 = nearest, 0 = farthest (the sky).
+#[derive(Debug, Clone)]
+pub struct DepthMap {
+    pub width: u32,
+    pub height: u32,
+    pub depth: Vec<f32>,
+    /// Inference time, excluding the one-off model load.
+    pub infer_ms: u64,
+}
+
 /// 8-bit RGB image, row-major, 3 bytes per pixel.
 #[derive(Debug, Clone)]
 pub struct RgbImage {
@@ -120,14 +142,14 @@ pub struct ModelStatus {
 /// Owns the ONNX sessions. Thread-safe; each model runs one inference at a time.
 pub struct Masker {
     dir: PathBuf,
-    sessions: [Mutex<Option<Session>>; 2],
+    sessions: [Mutex<Option<Session>>; 3],
 }
 
 impl Masker {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
-            sessions: [Mutex::new(None), Mutex::new(None)],
+            sessions: [Mutex::new(None), Mutex::new(None), Mutex::new(None)],
         }
     }
 
@@ -157,6 +179,56 @@ impl Masker {
                 available: self.dir.join(kind.model_file()).is_file(),
             })
             .collect()
+    }
+
+    pub fn depth_file(&self) -> PathBuf {
+        self.dir.join(DEPTH.file)
+    }
+
+    pub fn depth_available(&self) -> bool {
+        self.depth_file().is_file()
+    }
+
+    /// Estimate relative depth for `image`, returned at the image's size.
+    pub fn depth(&self, image: &RgbImage) -> Result<DepthMap> {
+        if image.width == 0 || image.height == 0 {
+            return Err(Error::InvalidImage {
+                reason: "cannot estimate depth of an empty image".into(),
+            });
+        }
+        let (w, h) = patch_size(image.width, image.height, DEPTH.side);
+        let input = to_nchw_sized(image, &DEPTH, w, h);
+
+        let mut slot = self.sessions[DEPTH_SLOT].lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(self.load_file(&self.depth_file(), "Depth")?);
+        }
+        let session = slot.as_mut().expect("session loaded above");
+        let t = Instant::now();
+        let tensor =
+            Tensor::from_array(([1usize, 3, h as usize, w as usize], input)).map_err(ml)?;
+        let outputs = session.run(ort::inputs![tensor]).map_err(ml)?;
+        // `predicted_depth`, [1, h, w]: relative inverse depth (larger = nearer).
+        let (shape, disparity) = outputs[0].try_extract_tensor::<f32>().map_err(ml)?;
+        let n = (w * h) as usize;
+        if shape.iter().rev().take(2).product::<i64>() as usize != n || disparity.len() < n {
+            return Err(Error::Decode(format!(
+                "{}: unexpected output shape {shape:?}",
+                DEPTH.file
+            )));
+        }
+        let disparity = disparity[..n].to_vec();
+        drop(outputs);
+        let infer_ms = t.elapsed().as_millis() as u64;
+        drop(slot);
+
+        let depth = normalise_depth(&disparity);
+        Ok(DepthMap {
+            width: image.width,
+            height: image.height,
+            depth: resize_plane(&depth, w, h, image.width, image.height),
+            infer_ms,
+        })
     }
 
     /// Segment `image` and return a mask of the same size.
@@ -209,13 +281,15 @@ impl Masker {
     }
 
     fn load(&self, kind: MaskKind) -> Result<Session> {
-        let path = self.dir.join(kind.model_file());
+        self.load_file(&self.dir.join(kind.model_file()), kind.label())
+    }
+
+    fn load_file(&self, path: &Path, label: &str) -> Result<Session> {
         if !path.is_file() {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!(
-                    "{} model not found at {} (run scripts/fetch-models.sh)",
-                    kind.label(),
+                    "{label} model not found at {} (run scripts/fetch-models.sh)",
                     path.display()
                 ),
             )));
@@ -228,12 +302,37 @@ impl Masker {
                 .map_err(ml)?
                 .with_intra_threads(threads)
                 .map_err(ml)?
-                .commit_from_file(&path)
+                .commit_from_file(path)
                 .map_err(ml)
         };
         // One retry: a model in a cloud-synced folder can transiently read short.
         commit().or_else(|_| commit())
     }
+}
+
+/// Aspect-preserving input size with the long side ≈ `long`, both sides multiples of 14
+/// (the ViT patch).
+fn patch_size(width: u32, height: u32, long: u32) -> (u32, u32) {
+    let scale = long as f32 / width.max(height) as f32;
+    let snap = |v: u32| (((v as f32 * scale) / 14.0).round().max(1.0) as u32) * 14;
+    (snap(width), snap(height))
+}
+
+/// Disparity → 0–1 depth (1 = near) using robust percentiles, so a few extreme pixels
+/// don't flatten the range.
+fn normalise_depth(disparity: &[f32]) -> Vec<f32> {
+    let mut sorted: Vec<f32> = disparity.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.is_empty() {
+        return vec![0.0; disparity.len()];
+    }
+    sorted.sort_unstable_by(f32::total_cmp);
+    let pct = |p: f32| sorted[((sorted.len() - 1) as f32 * p) as usize];
+    let (lo, hi) = (pct(0.02), pct(0.98));
+    let range = (hi - lo).max(1e-6);
+    disparity
+        .iter()
+        .map(|&d| if d.is_finite() { ((d - lo) / range).clamp(0.0, 1.0) } else { 0.0 })
+        .collect()
 }
 
 fn ml(e: impl std::fmt::Display) -> Error {
@@ -242,8 +341,11 @@ fn ml(e: impl std::fmt::Display) -> Error {
 
 /// Resize to the model's square input and normalise into planar NCHW floats.
 fn to_nchw(image: &RgbImage, spec: &ModelSpec) -> Vec<f32> {
-    let side = spec.side;
-    let n = (side * side) as usize;
+    to_nchw_sized(image, spec, spec.side, spec.side)
+}
+
+fn to_nchw_sized(image: &RgbImage, spec: &ModelSpec, w: u32, h: u32) -> Vec<f32> {
+    let n = (w * h) as usize;
     let mut out = vec![0.0f32; 3 * n];
     for c in 0..3 {
         let plane: Vec<f32> = image.data[c..]
@@ -251,7 +353,7 @@ fn to_nchw(image: &RgbImage, spec: &ModelSpec) -> Vec<f32> {
             .step_by(3)
             .map(|&v| v as f32 / 255.0)
             .collect();
-        let resized = resize_plane(&plane, image.width, image.height, side, side);
+        let resized = resize_plane(&plane, image.width, image.height, w, h);
         for (o, v) in out[c * n..(c + 1) * n].iter_mut().zip(resized) {
             *o = (v - spec.mean[c]) / spec.std[c];
         }
@@ -259,68 +361,9 @@ fn to_nchw(image: &RgbImage, spec: &ModelSpec) -> Vec<f32> {
     out
 }
 
-/// Separable resize: box-averages when shrinking (no aliasing), bilinear when enlarging.
-fn resize_plane(src: &[f32], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<f32> {
-    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
-    // Horizontal pass: sh rows of dw.
-    let mut tmp = vec![0.0f32; dw * sh];
-    tmp.par_chunks_mut(dw).enumerate().for_each(|(y, row)| {
-        let s = &src[y * sw..(y + 1) * sw];
-        for (x, o) in row.iter_mut().enumerate() {
-            *o = sample_1d(|i| s[i], sw, dw, x);
-        }
-    });
-    // Vertical pass.
-    let mut out = vec![0.0f32; dw * dh];
-    out.par_chunks_mut(dw).enumerate().for_each(|(y, row)| {
-        for (x, o) in row.iter_mut().enumerate() {
-            *o = sample_1d(|i| tmp[i * dw + x], sh, dh, y);
-        }
-    });
-    out
-}
-
-/// Output sample `i` of a length-`n` signal resampled to length `m`.
-fn sample_1d(at: impl Fn(usize) -> f32, n: usize, m: usize, i: usize) -> f32 {
-    let scale = n as f32 / m as f32;
-    if scale > 1.0 {
-        // Area average over [i·scale, (i+1)·scale).
-        let (a, b) = (i as f32 * scale, (i + 1) as f32 * scale);
-        let (first, last) = (a.floor() as usize, (b.ceil() as usize).min(n));
-        let (mut sum, mut weight) = (0.0, 0.0);
-        for j in first..last {
-            let w = (b.min(j as f32 + 1.0) - a.max(j as f32)).max(0.0);
-            sum += w * at(j);
-            weight += w;
-        }
-        sum / weight.max(1e-6)
-    } else {
-        // Pixel-centre aligned bilinear.
-        let x = ((i as f32 + 0.5) * scale - 0.5).clamp(0.0, (n - 1) as f32);
-        let x0 = x.floor() as usize;
-        let x1 = (x0 + 1).min(n - 1);
-        let t = x - x0 as f32;
-        at(x0) * (1.0 - t) + at(x1) * t
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resize_preserves_flat_fields_and_means() {
-        let src = vec![0.25f32; 37 * 23];
-        for (w, h) in [(10, 7), (80, 51), (37, 23)] {
-            let out = resize_plane(&src, 37, 23, w, h);
-            assert_eq!(out.len(), (w * h) as usize);
-            assert!(out.iter().all(|v| (v - 0.25).abs() < 1e-5));
-        }
-        // Shrinking a checkerboard averages it instead of aliasing.
-        let checker: Vec<f32> = (0..64 * 64).map(|i| ((i % 64 + i / 64) % 2) as f32).collect();
-        let out = resize_plane(&checker, 64, 64, 16, 16);
-        assert!(out.iter().all(|v| (v - 0.5).abs() < 1e-5));
-    }
 
     #[test]
     fn nchw_layout_and_normalisation() {
@@ -360,6 +403,58 @@ mod tests {
         assert_eq!(Masker::locate(&[empty.clone(), full.clone()]).dir(), full);
         assert_eq!(Masker::locate(std::slice::from_ref(&empty)).dir(), empty);
         std::fs::remove_dir_all(&full).unwrap();
+    }
+
+    #[test]
+    fn depth_input_keeps_aspect_in_patch_multiples() {
+        assert_eq!(patch_size(6000, 4000, 518), (518, 350));
+        assert_eq!(patch_size(4000, 6000, 518), (350, 518));
+        let (w, h) = patch_size(1000, 10, 518);
+        assert!(w % 14 == 0 && h == 14);
+    }
+
+    #[test]
+    fn depth_normalisation_is_robust_and_bounded() {
+        let mut d: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        d[0] = -1e9; // outliers
+        d[999] = 1e9;
+        d[500] = f32::NAN;
+        let n = normalise_depth(&d);
+        assert!(n.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!((n[250] - 0.24).abs() < 0.02, "{}", n[250]);
+        assert_eq!(n[500], 0.0);
+    }
+
+    /// Runs the real depth model when it's been fetched (skipped otherwise).
+    #[test]
+    fn real_depth_model_puts_the_ground_nearer_than_the_sky() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models");
+        let masker = Masker::new(&dir);
+        if !masker.depth_available() {
+            eprintln!("skipping: depth model not fetched");
+            return;
+        }
+        // Sky over a ground plane whose texture gets finer towards the horizon.
+        let (w, h) = (384u32, 256u32);
+        let mut data = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                if y < h / 2 {
+                    data.extend([120, 170, 230]);
+                } else {
+                    let d = (y - h / 2 + 4) as f32;
+                    let stripe = ((x as f32 - w as f32 / 2.0) / d * 8.0).floor() as i32 % 2 == 0;
+                    let v = if stripe { 90 } else { 60 };
+                    data.extend([v, v + 30, v / 2]);
+                }
+            }
+        }
+        let img = RgbImage { width: w, height: h, data };
+        let depth = masker.depth(&img).unwrap();
+        assert_eq!((depth.width, depth.height), (w, h));
+        let at = |x: u32, y: u32| depth.depth[(y * w + x) as usize];
+        eprintln!("sky {} horizon {} foreground {} ({} ms)", at(192, 20), at(192, 140), at(192, 250), depth.infer_ms);
+        assert!(at(192, 250) > at(192, 20) + 0.3, "foreground not nearer than sky");
     }
 
     /// Runs the real models when they've been fetched (skipped otherwise).

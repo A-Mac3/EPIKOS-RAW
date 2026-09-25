@@ -7,6 +7,5 @@ description = "Step 3 AI subject and sky masks: IS-Net and skyseg ONNX models on
 
 [dependencies]
 epikos-core.workspace = true
-rayon.workspace = true
 serde.workspace = true
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native", "api-22"] }

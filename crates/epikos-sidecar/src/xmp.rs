@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use epikos_core::{Error, Result};
 
 use crate::document::{
-    Adjustments, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, DemosaicMode,
-    DevelopDocument, DistortionCoeffs, HslBands, HslChannel, LensCorrections, NoiseReduction,
-    SourceRef, StyleRef, Texture, WbMode, WhiteBalance,
+    Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels,
+    DemosaicMode, DevelopDocument, DistortionCoeffs, HslBands, HslChannel, LensCorrections,
+    NoiseReduction, SourceRef, StyleRef, Texture, WbMode, WhiteBalance,
 };
 
 /// XMP namespace that marks a sidecar as written by EPIKOS RAW.
@@ -160,12 +160,24 @@ fn render_look(a: &Adjustments) -> String {
         );
     }
     let w = &a.color.wheels;
-    for (name, wheel) in [("Shadows", &w.shadows), ("Midtones", &w.midtones), ("Highlights", &w.highlights)] {
+    for (name, wheel) in [
+        ("Shadows", &w.shadows),
+        ("Midtones", &w.midtones),
+        ("Highlights", &w.highlights),
+    ] {
         out += &format!(
             "\n    epikos:wheel{name}=\"{},{},{}\"",
             wheel.hue, wheel.amount, wheel.luminance
         );
     }
+    let at = &a.atmosphere;
+    out += &format!(
+        "\n    epikos:glow=\"{},{},{}\"\n    epikos:fog=\"{},{},{}\"\n    epikos:shafts=\"{},{},{}\"\n    epikos:shaftLight=\"{},{},{}\"",
+        at.glow, at.glow_size, at.glow_warmth,
+        at.fog, at.fog_start, at.fog_warmth,
+        at.shafts, at.shaft_length, at.shaft_warmth,
+        if at.shaft_auto { "auto" } else { "manual" }, at.shaft_x, at.shaft_y
+    );
     out += &format!(
         "\n    epikos:skinProtection=\"{}\"\n    epikos:style=\"{}\"\n    epikos:styleAmount=\"{}\"\n    epikos:styleSkinProtection=\"{}\"",
         a.color.skin_protection,
@@ -261,8 +273,7 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
             // Camera Raw's LuminanceSmoothing / ColorNoiseReduction use a different
             // algorithm, so the numbers don't transfer; only EPIKOS values are read.
             noise_reduction: NoiseReduction {
-                luminance: num("epikos:nrLuminance")
-                    .unwrap_or(defaults.noise_reduction.luminance),
+                luminance: num("epikos:nrLuminance").unwrap_or(defaults.noise_reduction.luminance),
                 color: num("epikos:nrColor").unwrap_or(defaults.noise_reduction.color),
             },
             demosaic,
@@ -278,13 +289,21 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     if let Some([hue, saturation, luminance]) =
                         get(&format!("epikos:hsl{}", capitalise(name))).and_then(triple)
                     {
-                        *band = HslChannel { hue, saturation, luminance };
+                        *band = HslChannel {
+                            hue,
+                            saturation,
+                            luminance,
+                        };
                     }
                 }
                 let wheel = |name: &str| {
                     get(&format!("epikos:wheel{name}"))
                         .and_then(triple)
-                        .map(|[hue, amount, luminance]| ColorWheel { hue, amount, luminance })
+                        .map(|[hue, amount, luminance]| ColorWheel {
+                            hue,
+                            amount,
+                            luminance,
+                        })
                         .unwrap_or_default()
                 };
                 ColorGrade {
@@ -295,6 +314,45 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                         highlights: wheel("Highlights"),
                     },
                     skin_protection: num("epikos:skinProtection").unwrap_or(0.0),
+                }
+            },
+            atmosphere: {
+                let d = Atmosphere::default();
+                let [glow, glow_size, glow_warmth] = get("epikos:glow")
+                    .and_then(triple)
+                    .unwrap_or([d.glow, d.glow_size, d.glow_warmth]);
+                let [fog, fog_start, fog_warmth] = get("epikos:fog").and_then(triple).unwrap_or([
+                    d.fog,
+                    d.fog_start,
+                    d.fog_warmth,
+                ]);
+                let [shafts, shaft_length, shaft_warmth] = get("epikos:shafts")
+                    .and_then(triple)
+                    .unwrap_or([d.shafts, d.shaft_length, d.shaft_warmth]);
+                let light = get("epikos:shaftLight").and_then(|v| {
+                    let (mode, xy) = v.split_once(',')?;
+                    let (x, y) = xy.split_once(',')?;
+                    Some((
+                        mode == "auto",
+                        x.trim().parse().ok()?,
+                        y.trim().parse().ok()?,
+                    ))
+                });
+                let (shaft_auto, shaft_x, shaft_y) =
+                    light.unwrap_or((d.shaft_auto, d.shaft_x, d.shaft_y));
+                Atmosphere {
+                    glow,
+                    glow_size,
+                    glow_warmth,
+                    fog,
+                    fog_start,
+                    fog_warmth,
+                    shafts,
+                    shaft_length,
+                    shaft_warmth,
+                    shaft_auto,
+                    shaft_x,
+                    shaft_y,
                 }
             },
             style: StyleRef {
@@ -373,6 +431,13 @@ mod tests {
         doc.adjustments.color.wheels.highlights.amount = 18.0;
         doc.adjustments.color.wheels.shadows.luminance = -10.0;
         doc.adjustments.color.skin_protection = 60.0;
+        doc.adjustments.atmosphere.glow = 35.0;
+        doc.adjustments.atmosphere.fog = 42.5;
+        doc.adjustments.atmosphere.fog_warmth = -20.0;
+        doc.adjustments.atmosphere.shafts = 60.0;
+        doc.adjustments.atmosphere.shaft_auto = false;
+        doc.adjustments.atmosphere.shaft_x = 0.8;
+        doc.adjustments.atmosphere.shaft_y = 0.05;
         doc.adjustments.style.id = "silver-charcoal".into();
         doc.adjustments.style.amount = 70.0;
         doc.adjustments.style.skin_protection = 55.0;
@@ -407,10 +472,13 @@ mod tests {
         assert_eq!(doc.adjustments.white_balance.mode, WbMode::Custom);
         assert_eq!(doc.adjustments.white_balance.temperature, 5500.0);
         assert_eq!(doc.adjustments.white_balance.tint, 10.0);
-        assert_eq!(doc.adjustments, Adjustments {
-            white_balance: doc.adjustments.white_balance.clone(),
-            ..Adjustments::default()
-        });
+        assert_eq!(
+            doc.adjustments,
+            Adjustments {
+                white_balance: doc.adjustments.white_balance.clone(),
+                ..Adjustments::default()
+            }
+        );
     }
 
     #[test]

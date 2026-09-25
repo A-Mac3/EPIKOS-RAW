@@ -967,6 +967,7 @@ dependencies = [
 name = "epikos-core"
 version = "0.1.0"
 dependencies = [
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -1016,7 +1017,6 @@ version = "0.1.0"
 dependencies = [
  "epikos-core",
  "ort",
- "rayon",
  "serde",
 ]
 

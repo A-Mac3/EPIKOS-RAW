@@ -70,7 +70,25 @@ export interface ColorGrade {
   skinProtection: number;
 }
 
-/** Parametric style layered on the manual Step 4–5 settings. `id` empty = none. */
+/** Step 6. Strengths 0…100, warmth −100 (cool) … 100 (gold). */
+export interface Atmosphere {
+  glow: number;
+  glowSize: number;
+  glowWarmth: number;
+  fog: number;
+  /** Depth where fog begins, 0 (camera) … 100 (far background). */
+  fogStart: number;
+  fogWarmth: number;
+  shafts: number;
+  shaftLength: number;
+  shaftWarmth: number;
+  shaftAuto: boolean;
+  /** Light position, 0–1 across and down the upright frame. */
+  shaftX: number;
+  shaftY: number;
+}
+
+/** Parametric style layered on the manual Step 4–6 settings. `id` empty = none. */
 export interface StyleRef {
   id: string;
   amount: number;
@@ -98,6 +116,7 @@ export interface Adjustments {
   noiseReduction: NoiseReduction;
   texture: Texture;
   color: ColorGrade;
+  atmosphere: Atmosphere;
   style: StyleRef;
 }
 
@@ -195,11 +214,16 @@ export interface ModelStatus {
 export interface MaskModels {
   dir: string;
   models: ModelStatus[];
+  /** Step 6 depth model. */
+  depth: { file: string; available: boolean };
 }
 
-/** Upright soft mask in preview framing: one byte per pixel, 255 = inside. */
+/**
+ * Upright soft mask in preview framing: one byte per pixel, 255 = inside. The depth
+ * map uses the same shape, 255 = nearest.
+ */
 export interface Mask {
-  kind: MaskKind;
+  kind: MaskKind | "depth";
   width: number;
   height: number;
   alpha: Uint8Array<ArrayBuffer>;
@@ -230,7 +254,25 @@ export function defaultAdjustments(): Adjustments {
     noiseReduction: { luminance: 0, color: 25 },
     texture: { clarity: 0, microTexture: 0, blemishSmoothing: 0, specularBalance: 0 },
     color: defaultColorGrade(),
+    atmosphere: defaultAtmosphere(),
     style: { id: "", amount: 100, skinProtection: 0 },
+  };
+}
+
+export function defaultAtmosphere(): Atmosphere {
+  return {
+    glow: 0,
+    glowSize: 50,
+    glowWarmth: 0,
+    fog: 0,
+    fogStart: 30,
+    fogWarmth: 0,
+    shafts: 0,
+    shaftLength: 60,
+    shaftWarmth: 40,
+    shaftAuto: true,
+    shaftX: 0.5,
+    shaftY: 0.15,
   };
 }
 

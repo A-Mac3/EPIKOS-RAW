@@ -88,10 +88,14 @@ export function installMockBackend() {
             { kind: "subject", file: "/mock/models/isnet-general-use.onnx", available: true },
             { kind: "sky", file: "/mock/models/skyseg.onnx", available: true },
           ],
+          depth: { file: "/mock/models/depth-anything-v2-small.onnx", available: true },
         };
       case "detect_mask":
         await new Promise((r) => setTimeout(r, 700));
         return mask(a.kind as MaskKind);
+      case "detect_depth":
+        await new Promise((r) => setTimeout(r, 300));
+        return depthMap();
       case "save_document":
         saved.set(a.path as string, a.document as DevelopDocument);
         console.info("[mock] saved", a.path, a.document);
@@ -246,4 +250,22 @@ async function jpegThumb(path: string): Promise<ArrayBuffer> {
   canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(buf, 8 + 3 * 256 * 4), w, h), 0, 0);
   const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
   return blob.arrayBuffer();
+}
+
+/** Sky far (0), ground getting nearer towards the bottom, patches in between. */
+function depthMap(): ArrayBuffer {
+  const w = 1024;
+  const h = Math.round(w / 1.5);
+  const out = new ArrayBuffer(12 + w * h);
+  const view = new DataView(out);
+  view.setUint32(0, w, true);
+  view.setUint32(4, h, true);
+  view.setUint32(8, 150, true);
+  const d = new Uint8Array(out, 12);
+  for (let y = 0; y < h; y++) {
+    const v = y / h;
+    const near = v < 0.55 ? 0 : v > 0.55 && v < 0.75 ? 0.6 : Math.min(1, (v - 0.55) / 0.45);
+    d.fill(Math.round(near * 255), y * w, (y + 1) * w);
+  }
+  return out;
 }

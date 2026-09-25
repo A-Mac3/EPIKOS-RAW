@@ -12,9 +12,10 @@ use std::sync::{Arc, Mutex};
 
 use epikos_core::{CameraFormat, Error, ImageRgbF32, Result, SensorLayout};
 use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
-use epikos_masks::RgbImage;
+use epikos_masks::{DepthMap, RgbImage};
 use epikos_pipeline::{
-    bin_mosaic, block_for_size, develop_rgb, temperature_for_gains, to_display_srgb, DisplayImage,
+    bin_mosaic, block_for_size, develop_rgb_with, look_needs_depth, temperature_for_gains,
+    to_display_srgb, DepthPlane, DisplayImage, LookInputs,
 };
 use epikos_sidecar::{
     load_json, load_xmp, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, Adjustments,
@@ -23,7 +24,7 @@ use epikos_sidecar::{
 use serde::Serialize;
 
 mod export;
-pub use epikos_masks::{Mask, MaskKind, Masker, ModelStatus};
+pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportOptions, ExportReport};
 
@@ -84,6 +85,15 @@ const MASK_INPUT_SIDE: u32 = 1024;
 pub struct MaskModels {
     pub dir: String,
     pub models: Vec<ModelStatus>,
+    /// The Step 6 depth model.
+    pub depth: DepthModel,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepthModel {
+    pub file: String,
+    pub available: bool,
 }
 
 struct Loaded {
@@ -92,6 +102,8 @@ struct Loaded {
     bases: Mutex<Vec<(u32, Arc<ImageRgbF32>)>>,
     /// Most recent mask of each kind, upright, at up to [`MASK_INPUT_SIDE`].
     masks: Mutex<Vec<Arc<Mask>>>,
+    /// Depth map and the lens geometry it was estimated for.
+    depth: Mutex<Option<(String, Arc<DepthMap>)>>,
 }
 
 impl Loaded {
@@ -154,7 +166,49 @@ impl Engine {
         MaskModels {
             dir: self.masker.dir().to_string_lossy().into_owned(),
             models: self.masker.status(),
+            depth: DepthModel {
+                file: self.masker.depth_file().to_string_lossy().into_owned(),
+                available: self.masker.depth_available(),
+            },
         }
+    }
+
+    /// Relative depth (1 = near) of the image as framed by `adjustments`' Steps 1–2,
+    /// upright, at up to 1024 px. Estimated once per lens geometry and cached.
+    pub fn depth(&self, path: &Path, adjustments: &Adjustments) -> Result<Arc<DepthMap>> {
+        let loaded = self.load(path)?;
+        self.depth_for(&loaded, adjustments)
+    }
+
+    fn depth_for(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Arc<DepthMap>> {
+        // Only the geometry changes what the model sees in a way that matters.
+        let key = format!("{:?}", adjustments.lens);
+        if let Some((k, d)) = loaded.depth.lock().unwrap().as_ref() {
+            if *k == key {
+                return Ok(d.clone());
+            }
+        }
+        let display = render(loaded, &scene_only(adjustments), MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
+        let rgb = rgba_to_rgb(&display);
+        let image = RgbImage {
+            width: rgb.width(),
+            height: rgb.height(),
+            data: rgb.into_raw(),
+        };
+        let depth = Arc::new(self.masker.depth(&image)?);
+        *loaded.depth.lock().unwrap() = Some((key, depth.clone()));
+        Ok(depth)
+    }
+
+    /// Depth for the look when it needs one and the model is installed. Without it,
+    /// fog falls back to a uniform haze, so a failure here is not fatal.
+    fn look_depth(&self, loaded: &Loaded, adjustments: &Adjustments) -> Option<Arc<DepthMap>> {
+        if !look_needs_depth(adjustments) || !self.masker.depth_available() {
+            return None;
+        }
+        self.depth_for(loaded, adjustments)
+            .inspect_err(|e| eprintln!("depth estimation failed: {e}"))
+            .ok()
     }
 
     /// Run the `kind` model on the image as developed by `adjustments` (Steps 1–2
@@ -168,15 +222,7 @@ impl Engine {
         kind: MaskKind,
     ) -> Result<Arc<Mask>> {
         let loaded = self.load(path)?;
-        // Masks describe the scene, not the look: drop Steps 4+ (a black-and-white or
-        // golden style would only make the sky and subject harder to find).
-        let through_step2 = Adjustments {
-            texture: Default::default(),
-            color: Default::default(),
-            style: Default::default(),
-            ..adjustments.clone()
-        };
-        let display = render(&loaded, &through_step2, MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
+        let display = render(&loaded, &scene_only(adjustments), MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
         let rgb = rgba_to_rgb(&display);
         let image = RgbImage {
             width: rgb.width(),
@@ -280,7 +326,8 @@ impl Engine {
         max_h: u32,
     ) -> Result<DisplayImage> {
         let loaded = self.load(path)?;
-        render(&loaded, adjustments, max_w, max_h)
+        let depth = self.look_depth(&loaded, adjustments);
+        render_with(&loaded, adjustments, max_w, max_h, depth.as_deref())
     }
 
     /// Write the JSON sidecar (canonical) and, when safe, the XMP sidecar.
@@ -309,7 +356,8 @@ impl Engine {
         options: ExportOptions,
     ) -> Result<ExportReport> {
         let loaded = self.load(path)?;
-        export::export_tiff(&loaded, adjustments, dest, options)
+        let depth = self.look_depth(&loaded, adjustments);
+        export::export_tiff(&loaded, adjustments, dest, options, depth.as_deref())
     }
 
     /// JPEG thumbnail: the camera's embedded preview when available, otherwise a
@@ -340,6 +388,7 @@ impl Engine {
             raw: decode_file(path)?,
             bases: Mutex::new(Vec::new()),
             masks: Mutex::new(Vec::new()),
+            depth: Mutex::new(None),
         });
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|(p, _)| p != path);
@@ -349,15 +398,43 @@ impl Engine {
     }
 }
 
-fn render(
+fn render(loaded: &Loaded, adjustments: &Adjustments, max_w: u32, max_h: u32) -> Result<DisplayImage> {
+    render_with(loaded, adjustments, max_w, max_h, None)
+}
+
+fn render_with(
     loaded: &Loaded,
     adjustments: &Adjustments,
     max_w: u32,
     max_h: u32,
+    depth: Option<&DepthMap>,
 ) -> Result<DisplayImage> {
     let base = loaded.base(max_w, max_h);
-    let developed = develop_rgb((*base).clone(), &loaded.raw.profile, adjustments)?;
+    let inputs = look_inputs(depth);
+    let developed = develop_rgb_with((*base).clone(), &loaded.raw.profile, adjustments, &inputs)?;
     Ok(to_display_srgb(&developed))
+}
+
+pub(crate) fn look_inputs(depth: Option<&DepthMap>) -> LookInputs<'_> {
+    LookInputs {
+        depth: depth.map(|d| DepthPlane {
+            width: d.width,
+            height: d.height,
+            data: &d.depth,
+        }),
+    }
+}
+
+/// Steps 1–2 only. Models describe the scene, not the look: a black-and-white or
+/// golden style would only make sky, subject and depth harder to read.
+fn scene_only(adjustments: &Adjustments) -> Adjustments {
+    Adjustments {
+        texture: Default::default(),
+        color: Default::default(),
+        atmosphere: Default::default(),
+        style: Default::default(),
+        ..adjustments.clone()
+    }
 }
 
 fn source_ref(raw: &DecodedRaw) -> SourceRef {
@@ -441,6 +518,7 @@ mod tests {
             },
             bases: Mutex::new(Vec::new()),
             masks: Mutex::new(Vec::new()),
+            depth: Mutex::new(None),
         }
     }
 
@@ -529,7 +607,7 @@ mod tests {
         let dest = dir.join("out.tif");
         let loaded = synthetic_loaded(64, 48);
         let report =
-            export::export_tiff(&loaded, &Adjustments::default(), &dest, prophoto()).unwrap();
+            export::export_tiff(&loaded, &Adjustments::default(), &dest, prophoto(), None).unwrap();
         assert_eq!((report.width, report.height), (64, 48));
         assert!(!dir.join("out.tif.partial").exists());
 
@@ -575,7 +653,7 @@ mod tests {
                 ..ExportOptions::default()
             };
             let report =
-                export::export_tiff(&loaded, &Adjustments::default(), &dest, options).unwrap();
+                export::export_tiff(&loaded, &Adjustments::default(), &dest, options, None).unwrap();
             assert_eq!(report.wrote_location, include_location);
 
             let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
@@ -615,10 +693,10 @@ mod tests {
         loaded.raw.source_path = raw.to_string_lossy().into_owned();
         let adj = Adjustments::default();
         assert!(
-            export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default())
+            export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), None)
                 .is_err()
         );
-        assert!(export::export_tiff(&loaded, &adj, &raw, ExportOptions::default()).is_err());
+        assert!(export::export_tiff(&loaded, &adj, &raw, ExportOptions::default(), None).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -47,7 +47,9 @@ pub struct Adjustments {
     pub texture: Texture,
     /// Step 5: HSL and three-way colour grading.
     pub color: ColorGrade,
-    /// Parametric style layered on top of the manual Step 4–5 settings.
+    /// Step 6: glow, depth-based fog and light shafts.
+    pub atmosphere: Atmosphere,
+    /// Parametric style layered on top of the manual Step 4–6 settings.
     pub style: StyleRef,
 }
 
@@ -62,6 +64,7 @@ impl Default for Adjustments {
             noise_reduction: NoiseReduction::default(),
             texture: Texture::default(),
             color: ColorGrade::default(),
+            atmosphere: Atmosphere::default(),
             style: StyleRef::default(),
         }
     }
@@ -188,6 +191,51 @@ pub struct ColorGrade {
     pub wheels: ColorWheels,
     /// 0…100: how much of the HSL and wheel changes skin is shielded from.
     pub skin_protection: f32,
+}
+
+/// PRD Step 6: atmospheric light. Strengths 0…100, warmth −100 (cool) … 100 (gold).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Atmosphere {
+    /// Bloom around bright areas.
+    pub glow: f32,
+    /// Bloom radius, 0…100 (≈0.5–5% of the frame).
+    pub glow_size: f32,
+    pub glow_warmth: f32,
+    /// Aerial haze that thickens with distance (from the depth model; uniform without it).
+    pub fog: f32,
+    /// Depth at which fog begins, 0 (at the camera) … 100 (only the far background).
+    pub fog_start: f32,
+    pub fog_warmth: f32,
+    /// Volumetric rays streaming from a light source through the bright areas.
+    pub shafts: f32,
+    /// Ray length, 0…100 (fraction of the way to the light).
+    pub shaft_length: f32,
+    pub shaft_warmth: f32,
+    /// Find the light source automatically (the brightest part of the sky).
+    pub shaft_auto: bool,
+    /// Light position when not automatic, 0–1 across and down the upright frame.
+    pub shaft_x: f32,
+    pub shaft_y: f32,
+}
+
+impl Default for Atmosphere {
+    fn default() -> Self {
+        Self {
+            glow: 0.0,
+            glow_size: 50.0,
+            glow_warmth: 0.0,
+            fog: 0.0,
+            fog_start: 30.0,
+            fog_warmth: 0.0,
+            shafts: 0.0,
+            shaft_length: 60.0,
+            shaft_warmth: 40.0,
+            shaft_auto: true,
+            shaft_x: 0.5,
+            shaft_y: 0.15,
+        }
+    }
 }
 
 /// A parametric style from the style engine, applied on top of the manual settings.
