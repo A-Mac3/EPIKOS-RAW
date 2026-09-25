@@ -216,7 +216,7 @@ pub(crate) fn export(
         ExportFormat::Dng => {
             let develop_ms = t.elapsed().as_millis() as u64;
             let t = Instant::now();
-            let r = crate::dng::write_dng(&partial, &rgb, &channels, meta, gps.is_some());
+            let r = crate::dng::write_dng(&partial, &rgb, &channels, meta, gps);
             (develop_ms, t, r)
         }
     };
@@ -238,8 +238,7 @@ pub(crate) fn export(
         },
         bytes: fs::metadata(dest)?.len(),
         wrote_exif: true,
-        // The DNG writer carries capture EXIF only, no location.
-        wrote_location: gps.is_some() && format != ExportFormat::Dng,
+        wrote_location: gps.is_some(),
         alpha_channels: names,
         develop_ms,
         write_ms: t_write.elapsed().as_millis() as u64,

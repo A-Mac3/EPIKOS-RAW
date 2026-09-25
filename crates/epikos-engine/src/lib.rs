@@ -863,6 +863,30 @@ mod tests {
     }
 
     #[test]
+    fn dng_export_carries_gps_only_when_allowed() {
+        let dir = temp_dir("export-dng-gps");
+        let mut loaded = synthetic_loaded(32, 24);
+        loaded.raw.metadata = fuji_metadata();
+        for include_location in [true, false] {
+            let dest = dir.join(format!("gps-{include_location}.dng"));
+            let options = ExportOptions { format: ExportFormat::Dng, include_location, ..ExportOptions::default() };
+            let report = export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+            assert_eq!(report.wrote_location, include_location);
+            // Our own decoder reads the position back, as any reader following the link would.
+            let raw = epikos_decode::decode_file(&dest).unwrap();
+            let gps = raw.metadata.gps.as_ref().filter(|g| g.has_position());
+            assert_eq!(gps.is_some(), include_location, "{:?}", raw.metadata.gps);
+            if let Some(g) = gps {
+                assert_eq!(g.latitude_ref.as_deref(), Some("S"));
+                assert_eq!(g.latitude, Some([(33, 1), (52, 1), (1234, 100)]));
+                assert_eq!(g.longitude_ref.as_deref(), Some("E"));
+            }
+            assert_eq!(raw.metadata.make, "FUJIFILM");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn dng_export_reopens_as_linear_rgb() {
         let dir = temp_dir("export-dng");
         let dest = dir.join("enhanced.dng");

@@ -8,6 +8,8 @@
 //! Values are stored at a quarter of scene level (two stops of highlight headroom)
 //! and `BaselineExposure` +2 restores the brightness.
 //!
+//! Capture EXIF goes in, and the GPS position when the export allows location.
+//!
 //! Written with rawler's DNG writer (the same library that decodes our input), with
 //! the main image losslessly JPEG-compressed.
 
@@ -15,13 +17,13 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use epikos_core::{CaptureMetadata, Error, ImageRgbF32, Result};
+use epikos_core::{CaptureMetadata, Error, GpsInfo, ImageRgbF32, Result};
 use epikos_pipeline::to_display_srgb;
 use rawler::dng::writer::DngWriter;
 use rawler::dng::DngCompression;
-use rawler::formats::tiff::{Rational, SRational, Value};
+use rawler::formats::tiff::{DirectoryWriter, Rational, SRational, Value};
 use rawler::imgop::xyz::Illuminant;
-use rawler::tags::{DngTag, ExifTag, TiffCommonTag};
+use rawler::tags::{DngTag, ExifGpsTag, ExifTag, TiffCommonTag};
 
 /// Two stops of headroom above scene white.
 const HEADROOM_STOPS: i32 = 2;
@@ -48,7 +50,7 @@ pub(crate) fn write_dng(
     rgb: &ImageRgbF32,
     channels: &[(String, Vec<u16>)],
     meta: &CaptureMetadata,
-    _gps: bool,
+    gps: Option<&GpsInfo>,
 ) -> Result<()> {
     let (w, h) = (rgb.width as usize, rgb.height as usize);
     let scale = 0.25f32.powi(HEADROOM_STOPS / 2) * 65535.0; // 1 / 2^HEADROOM_STOPS
@@ -83,6 +85,9 @@ pub(crate) fn write_dng(
         .collect();
     dng.color_matrix(1, Illuminant::D65, matrix.as_slice());
     write_exif(&mut dng, meta);
+    if let Some(g) = gps {
+        write_gps(&mut dng, g)?;
+    }
 
     dng.thumbnail(&preview).map_err(dng_err)?;
     {
@@ -182,6 +187,64 @@ fn write_exif<W: std::io::Write + std::io::Seek>(dng: &mut DngWriter<W>, m: &Cap
     if let Some(v) = &m.lens_model {
         exif.add_tag(ExifTag::LensModel, v.as_str());
     }
+}
+
+/// GPS sub-IFD, linked from the main IFD as in a camera DNG.
+fn write_gps<W: std::io::Write + std::io::Seek>(dng: &mut DngWriter<W>, g: &GpsInfo) -> Result<()> {
+    let r = |(n, d): (u32, u32)| Rational::new(n, d);
+    let mut ifd = DirectoryWriter::new();
+    ifd.add_tag(ExifGpsTag::GPSVersionID, g.version.unwrap_or([2, 3, 0, 0]));
+    if let Some(v) = &g.latitude_ref {
+        ifd.add_tag(ExifGpsTag::GPSLatitudeRef, v.as_str());
+    }
+    if let Some(v) = g.latitude {
+        ifd.add_tag(ExifGpsTag::GPSLatitude, v.map(r));
+    }
+    if let Some(v) = &g.longitude_ref {
+        ifd.add_tag(ExifGpsTag::GPSLongitudeRef, v.as_str());
+    }
+    if let Some(v) = g.longitude {
+        ifd.add_tag(ExifGpsTag::GPSLongitude, v.map(r));
+    }
+    if let Some(v) = g.altitude_ref {
+        ifd.add_tag(ExifGpsTag::GPSAltitudeRef, v);
+    }
+    if let Some(v) = g.altitude {
+        ifd.add_tag(ExifGpsTag::GPSAltitude, r(v));
+    }
+    if let Some(v) = g.time_stamp {
+        ifd.add_tag(ExifGpsTag::GPSTimeStamp, v.map(r));
+    }
+    if let Some(v) = &g.date_stamp {
+        ifd.add_tag(ExifGpsTag::GPSDateStamp, v.as_str());
+    }
+    if let Some(v) = &g.satellites {
+        ifd.add_tag(ExifGpsTag::GPSSatellites, v.as_str());
+    }
+    if let Some(v) = &g.status {
+        ifd.add_tag(ExifGpsTag::GPSStatus, v.as_str());
+    }
+    if let Some(v) = &g.measure_mode {
+        ifd.add_tag(ExifGpsTag::GPSMeasureMode, v.as_str());
+    }
+    if let Some(v) = g.dop {
+        ifd.add_tag(ExifGpsTag::GPSDOP, r(v));
+    }
+    if let Some(v) = &g.img_direction_ref {
+        ifd.add_tag(ExifGpsTag::GPSImgDirectionRef, v.as_str());
+    }
+    if let Some(v) = g.img_direction {
+        ifd.add_tag(ExifGpsTag::GPSImgDirection, r(v));
+    }
+    if let Some(v) = &g.map_datum {
+        ifd.add_tag(ExifGpsTag::GPSMapDatum, v.as_str());
+    }
+    if let Some(v) = g.h_positioning_error {
+        ifd.add_tag(ExifGpsTag::GPSHPositioningError, r(v));
+    }
+    let offset = ifd.build(&mut dng.dng).map_err(dng_err)?;
+    dng.root_ifd_mut().add_tag(ExifTag::GPSInfo, [offset]);
+    Ok(())
 }
 
 fn dng_err(e: impl std::fmt::Display) -> Error {
