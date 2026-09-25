@@ -10,6 +10,7 @@ Cross-platform RAW/DNG editor. Product spec: [PRD.md](PRD.md).
 | `crates/epikos-decode` | RAW/DNG decode via `rawler`, crop, embedded thumbnails |
 | `crates/epikos-pipeline` | Demosaic, highlights, white balance, optics, colour, exposure, preview binning, display transform |
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
+| `crates/epikos-masks` | Step 3 AI masks: IS-Net (subject) and skyseg (sky) ONNX models on the CPU via ONNX Runtime |
 | `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy |
 | `crates/epikos-cli` | `epikos inspect / sidecar / develop` |
 | `apps/desktop` | Tauri 2 + React/TypeScript desktop app (`src-tauri` = Rust commands) |
@@ -20,6 +21,7 @@ Requires Rust (stable) and Node.js 20+.
 
 ```bash
 cargo test --workspace                 # engine tests
+scripts/fetch-models.sh                # once: ~355 MB of mask models into models/ (git-ignored)
 cd apps/desktop && npm install         # once
 npm run tauri dev                      # desktop app with hot reload
 ```

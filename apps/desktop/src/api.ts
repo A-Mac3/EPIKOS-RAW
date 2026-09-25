@@ -7,6 +7,9 @@ import type {
   ExportReport,
   FileEntry,
   ImageInfo,
+  Mask,
+  MaskKind,
+  MaskModels,
   Preview,
   SaveReport,
 } from "./types";
@@ -73,4 +76,19 @@ export async function renderPreview(
 export async function thumbnailUrl(path: string, maxSide: number): Promise<string> {
   const buf = await invoke<ArrayBuffer>("thumbnail", { path, maxSide });
   return URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
+}
+
+export const maskModels = () => invoke<MaskModels>("mask_models");
+
+/** Layout: u32 width, u32 height, u32 inference ms, then one mask byte per pixel. */
+export async function detectMask(path: string, adjustments: Adjustments, kind: MaskKind): Promise<Mask> {
+  const buf = await invoke<ArrayBuffer>("detect_mask", { path, adjustments, kind });
+  const view = new DataView(buf);
+  const width = view.getUint32(0, true);
+  const height = view.getUint32(4, true);
+  const inferMs = view.getUint32(8, true);
+  const alpha = new Uint8Array(buf, 12, width * height);
+  let sum = 0;
+  for (let i = 0; i < alpha.length; i++) sum += alpha[i];
+  return { kind, width, height, alpha, coverage: alpha.length ? sum / (255 * alpha.length) : 0, inferMs };
 }

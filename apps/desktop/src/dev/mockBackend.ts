@@ -3,7 +3,7 @@
 // chart and applies exposure / white balance approximately. Never shipped: main.tsx only
 // imports this behind `import.meta.env.DEV`.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { Adjustments, DevelopDocument, FileEntry, ImageInfo } from "../types";
+import type { Adjustments, DevelopDocument, FileEntry, ImageInfo, MaskKind } from "../types";
 import { defaultAdjustments } from "../types";
 
 const FOLDER = "/mock/Sydney shoot";
@@ -51,6 +51,17 @@ export function installMockBackend() {
         return render(a.adjustments as Adjustments, a.maxWidth as number, a.maxHeight as number, a.path as string);
       case "thumbnail":
         return jpegThumb(a.path as string);
+      case "mask_models":
+        return {
+          dir: "/mock/models",
+          models: [
+            { kind: "subject", file: "/mock/models/isnet-general-use.onnx", available: true },
+            { kind: "sky", file: "/mock/models/skyseg.onnx", available: true },
+          ],
+        };
+      case "detect_mask":
+        await new Promise((r) => setTimeout(r, 700));
+        return mask(a.kind as MaskKind);
       case "save_document":
         saved.set(a.path as string, a.document as DevelopDocument);
         console.info("[mock] saved", a.path, a.document);
@@ -165,6 +176,26 @@ function render(adj: Adjustments, maxW: number, maxH: number, path: string): Arr
     }
   }
   new Uint32Array(out, 8, 3 * 256).set(hist);
+  return out;
+}
+
+/** Sky = the synthetic sky gradient; subject = the colour-patch row. */
+function mask(kind: MaskKind): ArrayBuffer {
+  const w = 1024;
+  const h = Math.round(w / 1.5);
+  const out = new ArrayBuffer(12 + w * h);
+  const view = new DataView(out);
+  view.setUint32(0, w, true);
+  view.setUint32(4, h, true);
+  view.setUint32(8, kind === "sky" ? 380 : 900, true);
+  const alpha = new Uint8Array(out, 12);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const [u, v] = [x / w, y / h];
+      const inside = kind === "sky" ? v < 0.55 : v > 0.55 && v < 0.75 && u > 0.08 && u < 0.92;
+      alpha[y * w + x] = inside ? 255 : 0;
+    }
+  }
   return out;
 }
 

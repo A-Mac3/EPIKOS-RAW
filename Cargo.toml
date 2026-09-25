@@ -6,6 +6,7 @@ members = [
     "crates/epikos-pipeline",
     "crates/epikos-sidecar",
     "crates/epikos-engine",
+    "crates/epikos-masks",
     "crates/epikos-cli",
     "apps/desktop/src-tauri",
 ]
@@ -23,6 +24,7 @@ epikos-decode = { path = "crates/epikos-decode" }
 epikos-pipeline = { path = "crates/epikos-pipeline" }
 epikos-sidecar = { path = "crates/epikos-sidecar" }
 epikos-engine = { path = "crates/epikos-engine" }
+epikos-masks = { path = "crates/epikos-masks" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

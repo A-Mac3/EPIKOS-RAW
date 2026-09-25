@@ -3,6 +3,7 @@ use epikos_sidecar::{Adjustments, DemosaicMode, DevelopDocument};
 
 use crate::color_transform::{apply_white_balance, camera_to_linear_rec2020, wb_multipliers};
 use crate::demosaic::{demosaic, DemosaicAlgorithm};
+use crate::denoise::{self, reduce_noise};
 use crate::highlights::recover_highlights;
 use crate::optics::{correct_chromatic_aberration, correct_distortion};
 use crate::orient::apply_orientation;
@@ -27,7 +28,7 @@ pub fn develop_adjustments(
     develop_rgb(rgb, profile, adj)
 }
 
-/// Everything after demosaic: highlights → WB → optics → camera RGB → Rec.2020 →
+/// Everything after demosaic: highlights → WB → noise reduction → optics → camera RGB → Rec.2020 →
 /// exposure → orientation.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
@@ -50,6 +51,10 @@ pub fn develop_rgb(
     recover_highlights(&mut rgb, gains, adj.highlight_recovery);
     if !monochrome {
         apply_white_balance(&mut rgb, gains);
+    }
+    // Before any resampling below, while sensor noise is still uncorrelated per pixel.
+    if denoise::is_active(&adj.noise_reduction, monochrome) {
+        reduce_noise(&mut rgb, &adj.noise_reduction, monochrome);
     }
 
     // Each correction allocates a full-size copy, so skip them when disabled.

@@ -8,10 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use epikos_core::CameraFormat;
-use epikos_engine::{Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, SaveReport};
+use epikos_engine::{
+    dev_models_dir, env_models_dir, Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, MaskKind,
+    MaskModels, Masker, SaveReport,
+};
 use epikos_sidecar::{Adjustments, DevelopDocument};
 use tauri::ipc::Response;
-use tauri::State;
+use tauri::{Manager, State};
 
 type EngineState<'a> = State<'a, Arc<Engine>>;
 type CmdResult<T> = Result<T, String>;
@@ -97,6 +100,32 @@ async fn export_tiff(
     blocking(move || engine.export_tiff(&path, &adjustments, &dest, options)).await
 }
 
+#[tauri::command]
+fn mask_models(engine: EngineState<'_>) -> MaskModels {
+    engine.mask_models()
+}
+
+/// Binary layout (little-endian): `u32 width, u32 height, u32 inference ms,
+/// width×height mask bytes` (0 = outside, 255 = inside). Upright, preview framing.
+#[tauri::command]
+async fn detect_mask(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+    kind: MaskKind,
+) -> CmdResult<Response> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    let mask = blocking(move || engine.detect_mask(&path, &adjustments, kind)).await?;
+
+    let mut out = Vec::with_capacity(12 + mask.alpha.len());
+    out.extend_from_slice(&mask.width.to_le_bytes());
+    out.extend_from_slice(&mask.height.to_le_bytes());
+    out.extend_from_slice(&(mask.infer_ms.min(u32::MAX as u64) as u32).to_le_bytes());
+    out.extend_from_slice(&mask.alpha);
+    Ok(Response::new(out))
+}
+
 /// Only existing RAW/DNG files may be opened, and sidecars are only written next to them.
 fn raw_path(path: &str) -> CmdResult<PathBuf> {
     let p = PathBuf::from(path);
@@ -108,6 +137,17 @@ fn raw_path(path: &str) -> CmdResult<PathBuf> {
         return Err(format!("file not found: {path}"));
     }
     Ok(p)
+}
+
+/// Mask model search order: `$EPIKOS_MODELS_DIR`, the app data folder, models bundled
+/// as resources, then (debug builds) the workspace `models/` folder.
+fn model_dirs<R: tauri::Runtime>(paths: &tauri::path::PathResolver<R>) -> Vec<PathBuf> {
+    env_models_dir()
+        .into_iter()
+        .chain(paths.app_data_dir().ok().map(|d| d.join("models")))
+        .chain(paths.resource_dir().ok().map(|d| d.join("models")))
+        .chain(dev_models_dir())
+        .collect()
 }
 
 async fn blocking<T, F>(f: F) -> CmdResult<T>
@@ -125,14 +165,20 @@ where
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(Arc::new(Engine::default()))
+        .setup(|app| {
+            let masker = Masker::locate(&model_dirs(app.path()));
+            app.manage(Arc::new(Engine::default().with_masker(masker)));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_folder,
             open_image,
             render_preview,
             thumbnail,
             save_document,
-            export_tiff
+            export_tiff,
+            mask_models,
+            detect_mask
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

@@ -42,6 +42,7 @@ pub struct Adjustments {
     pub lens: LensCorrections,
     /// Global exposure in stops (EV), applied in scene-referred linear light.
     pub exposure: f32,
+    pub noise_reduction: NoiseReduction,
 }
 
 impl Default for Adjustments {
@@ -52,6 +53,25 @@ impl Default for Adjustments {
             demosaic: DemosaicMode::Auto,
             lens: LensCorrections::default(),
             exposure: 0.0,
+            noise_reduction: NoiseReduction::default(),
+        }
+    }
+}
+
+/// Sensor noise reduction strengths, 0–100. Like Camera Raw, colour noise reduction
+/// is on by default for RAW files and luminance smoothing is off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NoiseReduction {
+    pub luminance: f32,
+    pub color: f32,
+}
+
+impl Default for NoiseReduction {
+    fn default() -> Self {
+        Self {
+            luminance: 0.0,
+            color: 25.0,
         }
     }
 }

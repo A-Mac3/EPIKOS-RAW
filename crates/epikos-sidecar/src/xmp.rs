@@ -5,7 +5,7 @@ use epikos_core::{Error, Result};
 
 use crate::document::{
     Adjustments, ChromaticAberration, DemosaicMode, DevelopDocument, DistortionCoeffs, LensCorrections,
-    SourceRef, WbMode, WhiteBalance,
+    NoiseReduction, SourceRef, WbMode, WhiteBalance,
 };
 
 /// XMP namespace that marks a sidecar as written by EPIKOS RAW.
@@ -91,6 +91,8 @@ fn render_xmp(doc: &DevelopDocument) -> String {
     epikos:temperature="{temp}"
     epikos:tint="{tint}"
     epikos:exposure="{exposure}"
+    epikos:nrLuminance="{nr_luma}"
+    epikos:nrColor="{nr_color}"
     epikos:highlightRecovery="{hr}"
     epikos:demosaic="{demosaic}"
     epikos:distortionEnabled="{dist_on}"
@@ -120,6 +122,8 @@ fn render_xmp(doc: &DevelopDocument) -> String {
         make = esc(&doc.source.make),
         model = esc(&doc.source.model),
         exposure = a.exposure,
+        nr_luma = a.noise_reduction.luminance,
+        nr_color = a.noise_reduction.color,
         hr = a.highlight_recovery,
         demosaic = demosaic,
         dist_on = a.lens.distortion.enabled,
@@ -204,6 +208,13 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
             highlight_recovery: flag("epikos:highlightRecovery")
                 .unwrap_or(defaults.highlight_recovery),
             exposure: num("epikos:exposure").unwrap_or(defaults.exposure),
+            // Camera Raw's LuminanceSmoothing / ColorNoiseReduction use a different
+            // algorithm, so the numbers don't transfer; only EPIKOS values are read.
+            noise_reduction: NoiseReduction {
+                luminance: num("epikos:nrLuminance")
+                    .unwrap_or(defaults.noise_reduction.luminance),
+                color: num("epikos:nrColor").unwrap_or(defaults.noise_reduction.color),
+            },
             demosaic,
             lens: LensCorrections {
                 distortion: DistortionCoeffs {
@@ -254,6 +265,8 @@ mod tests {
         let mut doc = sample_doc();
         doc.adjustments.highlight_recovery = true;
         doc.adjustments.exposure = 0.75;
+        doc.adjustments.noise_reduction.luminance = 40.0;
+        doc.adjustments.noise_reduction.color = 10.0;
         doc.adjustments.white_balance.mode = WbMode::Custom;
         doc.adjustments.white_balance.temperature = 5200.5;
         doc.adjustments.white_balance.tint = 8.25;

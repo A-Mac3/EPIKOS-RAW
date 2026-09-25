@@ -27,6 +27,12 @@ export interface ChromaticAberration {
   blue: number;
 }
 
+/** 0–100. Colour NR is on by default for RAW files, luminance off. */
+export interface NoiseReduction {
+  luminance: number;
+  color: number;
+}
+
 export interface Adjustments {
   whiteBalance: WhiteBalance;
   highlightRecovery: boolean;
@@ -36,6 +42,7 @@ export interface Adjustments {
     chromaticAberration: ChromaticAberration;
   };
   exposure: number;
+  noiseReduction: NoiseReduction;
 }
 
 export interface SourceRef {
@@ -121,6 +128,30 @@ export interface ExportReport {
   writeMs: number;
 }
 
+export type MaskKind = "subject" | "sky";
+
+export interface ModelStatus {
+  kind: MaskKind;
+  file: string;
+  available: boolean;
+}
+
+export interface MaskModels {
+  dir: string;
+  models: ModelStatus[];
+}
+
+/** Upright soft mask in preview framing: one byte per pixel, 255 = inside. */
+export interface Mask {
+  kind: MaskKind;
+  width: number;
+  height: number;
+  alpha: Uint8Array<ArrayBuffer>;
+  /** Mean coverage of the frame, 0–1. */
+  coverage: number;
+  inferMs: number;
+}
+
 export interface Preview {
   width: number;
   height: number;
@@ -140,5 +171,6 @@ export function defaultAdjustments(): Adjustments {
       chromaticAberration: { enabled: false, red: 0, blue: 0 },
     },
     exposure: 0,
+    noiseReduction: { luminance: 0, color: 25 },
   };
 }

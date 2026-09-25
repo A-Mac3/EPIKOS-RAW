@@ -10,6 +10,7 @@ epikos-core.workspace = true
 epikos-decode.workspace = true
 epikos-pipeline.workspace = true
 epikos-sidecar.workspace = true
+epikos-masks.workspace = true
 serde.workspace = true
 image.workspace = true
 tiff = "0.11.3"

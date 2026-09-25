@@ -9,7 +9,7 @@ mod xmp;
 
 pub use document::{
     Adjustments, ChromaticAberration, DemosaicMode, DevelopDocument, DistortionCoeffs, LensCorrections,
-    SourceRef, WbMode, WhiteBalance,
+    NoiseReduction, SourceRef, WbMode, WhiteBalance,
 };
 pub use json::{load_json, save_json, sidecar_json_path};
 pub use xmp::{load_xmp, save_xmp, sidecar_xmp_path};

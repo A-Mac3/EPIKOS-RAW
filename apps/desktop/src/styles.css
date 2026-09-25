@@ -289,8 +289,21 @@ code {
   justify-content: center;
 }
 
-.viewer canvas {
+.viewer-image {
+  position: relative;
   box-shadow: 0 2px 24px rgb(0 0 0 / 45%);
+}
+
+.viewer-image canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-image .viewer-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .viewer-status {
@@ -719,6 +732,23 @@ input[type="range"]::-moz-range-thumb {
 
 .error {
   color: var(--error);
+}
+
+/* ---- Masks ----------------------------------------------------------------------- */
+
+.mask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mask-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 ::-webkit-scrollbar {

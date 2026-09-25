@@ -1,7 +1,8 @@
 //! Session layer shared by the desktop app and the CLI.
 //!
 //! Keeps recently opened RAW files decoded in memory, renders fast downsampled previews
-//! for interactive editing, and owns sidecar load/save policy. All methods are
+//! for interactive editing, runs the Step 3 AI masks, and owns sidecar load/save
+//! policy. All methods are
 //! synchronous and thread-safe; callers run them off the UI thread.
 
 use std::collections::VecDeque;
@@ -11,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use epikos_core::{CameraFormat, Error, ImageRgbF32, Result, SensorLayout};
 use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
+use epikos_masks::RgbImage;
 use epikos_pipeline::{
     bin_mosaic, block_for_size, develop_rgb, temperature_for_gains, to_display_srgb, DisplayImage,
 };
@@ -21,6 +23,7 @@ use epikos_sidecar::{
 use serde::Serialize;
 
 mod export;
+pub use epikos_masks::{Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::OutputSpace;
 pub use export::{ExportOptions, ExportReport};
 
@@ -71,10 +74,24 @@ pub struct SaveReport {
     pub warning: Option<String>,
 }
 
+/// Longest side of the image handed to the mask models. IS-Net works at 1024², so more
+/// detail wouldn't reach it.
+const MASK_INPUT_SIDE: u32 = 1024;
+
+/// Where the mask models are expected and which of them are present.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskModels {
+    pub dir: String,
+    pub models: Vec<ModelStatus>,
+}
+
 struct Loaded {
     raw: DecodedRaw,
     /// Binned camera-RGB preview bases, keyed by block size.
     bases: Mutex<Vec<(u32, Arc<ImageRgbF32>)>>,
+    /// Most recent mask of each kind, upright, at up to [`MASK_INPUT_SIDE`].
+    masks: Mutex<Vec<Arc<Mask>>>,
 }
 
 impl Loaded {
@@ -93,6 +110,7 @@ impl Loaded {
 pub struct Engine {
     capacity: usize,
     cache: Mutex<VecDeque<(PathBuf, Arc<Loaded>)>>,
+    masker: Masker,
 }
 
 impl Default for Engine {
@@ -101,13 +119,75 @@ impl Default for Engine {
     }
 }
 
+/// `$EPIKOS_MODELS_DIR`, if set.
+pub fn env_models_dir() -> Option<PathBuf> {
+    std::env::var_os("EPIKOS_MODELS_DIR").map(PathBuf::from)
+}
+
+/// Debug builds only: the workspace `models/` folder that `scripts/fetch-models.sh` fills.
+pub fn dev_models_dir() -> Option<PathBuf> {
+    cfg!(debug_assertions).then(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models"))
+}
+
+/// Model search order when the host has no folders of its own.
+pub fn default_model_dirs() -> Vec<PathBuf> {
+    env_models_dir().into_iter().chain(dev_models_dir()).collect()
+}
+
 impl Engine {
     /// `capacity` decoded images are kept in memory (≈ 4 bytes × sensor pixels each).
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
             cache: Mutex::new(VecDeque::new()),
+            masker: Masker::locate(&default_model_dirs()),
         }
+    }
+
+    /// Use `masker` (and its model directory) for AI masks.
+    pub fn with_masker(mut self, masker: Masker) -> Self {
+        self.masker = masker;
+        self
+    }
+
+    pub fn mask_models(&self) -> MaskModels {
+        MaskModels {
+            dir: self.masker.dir().to_string_lossy().into_owned(),
+            models: self.masker.status(),
+        }
+    }
+
+    /// Run the `kind` model on the image as developed by `adjustments` (Steps 1–2
+    /// precede masking) and keep the result for later steps.
+    ///
+    /// The mask is upright and matches the preview's framing, at up to 1024 px.
+    pub fn detect_mask(
+        &self,
+        path: &Path,
+        adjustments: &Adjustments,
+        kind: MaskKind,
+    ) -> Result<Arc<Mask>> {
+        let loaded = self.load(path)?;
+        let display = render(&loaded, adjustments, MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
+        let rgb = rgba_to_rgb(&display);
+        let image = RgbImage {
+            width: rgb.width(),
+            height: rgb.height(),
+            data: rgb.into_raw(),
+        };
+        let mask = Arc::new(self.masker.segment(kind, &image)?);
+        let mut masks = loaded.masks.lock().unwrap();
+        masks.retain(|m| m.kind != kind);
+        masks.push(mask.clone());
+        Ok(mask)
+    }
+
+    /// The last mask of `kind` detected for `path`, if the image is still cached.
+    pub fn mask(&self, path: &Path, kind: MaskKind) -> Option<Arc<Mask>> {
+        let cache = self.cache.lock().unwrap();
+        let (_, loaded) = cache.iter().find(|(p, _)| p == path)?;
+        let masks = loaded.masks.lock().unwrap();
+        masks.iter().find(|m| m.kind == kind).cloned()
     }
 
     /// Supported RAW/DNG files directly inside `dir`, sorted by name.
@@ -251,6 +331,7 @@ impl Engine {
         let loaded = Arc::new(Loaded {
             raw: decode_file(path)?,
             bases: Mutex::new(Vec::new()),
+            masks: Mutex::new(Vec::new()),
         });
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|(p, _)| p != path);
@@ -351,6 +432,7 @@ mod tests {
                 metadata: Default::default(),
             },
             bases: Mutex::new(Vec::new()),
+            masks: Mutex::new(Vec::new()),
         }
     }
 
@@ -367,6 +449,43 @@ mod tests {
         assert_eq!(d.rgba.len(), (d.width * d.height * 4) as usize);
         let _ = render(&loaded, &Adjustments::default(), 160, 160).unwrap();
         assert_eq!(loaded.bases.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn noise_reduction_reaches_the_preview() {
+        // Noisy flat field: colour NR must reduce pixel-to-pixel colour variation.
+        let mut loaded = synthetic_loaded(128, 128);
+        let mut seed = 1u32;
+        for v in loaded.raw.mosaic.data.iter_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *v += 0.05 * ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5);
+        }
+        let spread = |d: &DisplayImage| {
+            let diffs: Vec<f32> = d.rgba.chunks(4).map(|p| p[0] as f32 - p[1] as f32).collect();
+            let mean = diffs.iter().sum::<f32>() / diffs.len() as f32;
+            diffs.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / diffs.len() as f32
+        };
+        let mut off = Adjustments::default();
+        off.noise_reduction.color = 0.0;
+        let mut on = Adjustments::default();
+        on.noise_reduction.color = 100.0;
+        let (a, b) = (
+            render(&loaded, &off, 64, 64).unwrap(),
+            render(&loaded, &on, 64, 64).unwrap(),
+        );
+        assert!(spread(&b) < 0.5 * spread(&a), "{} vs {}", spread(&b), spread(&a));
+    }
+
+    #[test]
+    fn missing_mask_models_fail_cleanly() {
+        let dir = temp_dir("no-models");
+        let engine = Engine::default().with_masker(Masker::new(&dir));
+        assert!(engine.mask_models().models.iter().all(|m| !m.available));
+        let raw = dir.join("x.ARW");
+        assert!(engine
+            .detect_mask(&raw, &Adjustments::default(), MaskKind::Sky)
+            .is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

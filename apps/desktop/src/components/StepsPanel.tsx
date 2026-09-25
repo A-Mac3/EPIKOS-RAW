@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import type { Adjustments, DemosaicMode, ImageInfo, WbMode } from "../types";
+import { MASK_KINDS, type MaskState } from "../hooks/useMasks";
+import type { Adjustments, DemosaicMode, ImageInfo, MaskKind, WbMode } from "../types";
 import { Segmented, Slider, Toggle } from "./Slider";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
@@ -13,13 +14,14 @@ interface Props {
   endEdit: () => void;
   /** Discrete change: one undo step. */
   commit: Update;
+  masks: MaskState;
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
 const STEPS: { title: string; planned: string }[] = [
-  { title: "RAW Input & Optical Calibration", planned: "Lens profile database, auto-geometry, sensor noise reduction" },
+  { title: "RAW Input & Optical Calibration", planned: "Lens profile database, auto-geometry" },
   { title: "Global Exposure & Dynamic Range", planned: "Shadow lift, auto exposure" },
-  { title: "AI Subject & Semantic Masking", planned: "Subject, background, skin, eyes, hair, foreground and sky masks" },
+  { title: "AI Subject & Semantic Masking", planned: "Skin, eyes, hair and foreground masks; masks driving local adjustments in later steps" },
   { title: "Micro-Texture & Retouching", planned: "Blemish smoothing, specular balancing, character line sculpting" },
   { title: "Base Color Grading & HSL", planned: "Skin tone protection, foliage shift, background re-coloration" },
   { title: "Atmospheric & Light Sculpting", planned: "Volumetric light shafts, localized glow, depth-based fog and haze" },
@@ -36,7 +38,9 @@ const posToK = (p: number) => Math.round(K_MIN * Math.pow(K_MAX / K_MIN, p));
 const fmtSigned = (digits: number, unit = "") => (v: number) =>
   `${v > 0 ? "+" : ""}${v.toFixed(digits)}${unit}`;
 
-export function StepsPanel({ info, adjustments: a, edit, endEdit, commit }: Props) {
+const MASK_LABEL: Record<MaskKind, string> = { subject: "Subject", sky: "Sky" };
+
+export function StepsPanel({ info, adjustments: a, edit, endEdit, commit, masks }: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const toggle = (i: number) =>
     setOpen((s) => {
@@ -60,6 +64,12 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit }: Prop
         ...patch,
       },
     }));
+
+  const nr = a.noiseReduction;
+  const setNr = (patch: Partial<Adjustments["noiseReduction"]>) => (x: Adjustments) => ({
+    ...x,
+    noiseReduction: { ...x.noiseReduction, ...patch },
+  });
 
   const ca = a.lens.chromaticAberration;
   const dist = a.lens.distortion;
@@ -138,6 +148,34 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit }: Prop
           onChange={(v) => edit(setLens((l) => ({ ...l, distortion: { ...l.distortion, k2: v } })))}
           onCommit={endEdit}
         />
+        <span className="field-label">Noise reduction</span>
+        <Slider
+          label="Luminance"
+          value={nr.luminance}
+          min={0}
+          max={100}
+          step={1}
+          defaultValue={0}
+          format={(v) => v.toFixed(0)}
+          onChange={(v) => edit(setNr({ luminance: v }))}
+          onCommit={endEdit}
+        />
+        {!info.monochrome && (
+          <Slider
+            label="Color"
+            value={nr.color}
+            min={0}
+            max={100}
+            step={1}
+            defaultValue={25}
+            format={(v) => v.toFixed(0)}
+            onChange={(v) => edit(setNr({ color: v }))}
+            onCommit={endEdit}
+          />
+        )}
+        <p className="hint">
+          The preview is downsampled, which already hides most noise; judge noise reduction on the exported file.
+        </p>
       </>
     ),
     1: (
@@ -212,6 +250,7 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit }: Prop
         )}
       </>
     ),
+    2: <MaskControls masks={masks} />,
   };
 
   return (
@@ -244,6 +283,60 @@ export function StepsPanel({ info, adjustments: a, edit, endEdit, commit }: Prop
         );
       })}
     </div>
+  );
+}
+
+function MaskControls({ masks: m }: { masks: MaskState }) {
+  if (!m.models) return <p className="note">Checking for mask models…</p>;
+  const missing = m.models.models.filter((s) => !s.available);
+  const any = missing.length < m.models.models.length;
+  const detected = MASK_KINDS.filter((k) => m.masks[k]);
+
+  return (
+    <>
+      {missing.length > 0 && (
+        <p className="hint">
+          {missing.map((s) => MASK_LABEL[s.kind]).join(" and ")} model{missing.length > 1 ? "s" : ""} not installed.
+          Run <code>scripts/fetch-models.sh</code> or copy the <code>.onnx</code> files into <code>{m.models.dir}</code>.
+        </p>
+      )}
+      <button type="button" className="btn" disabled={!any || m.detecting !== null} onClick={() => void m.detect()}>
+        {m.detecting
+          ? `Detecting ${MASK_LABEL[m.detecting].toLowerCase()}…`
+          : detected.length > 0
+            ? "Re-detect subject & sky"
+            : "Detect subject & sky"}
+      </button>
+      {m.error && <p className="hint error">{m.error}</p>}
+      {detected.length > 0 && (
+        <>
+          <ul className="mask-list">
+            {detected.map((k) => (
+              <li key={k}>
+                <span>{MASK_LABEL[k]}</span>
+                <span className="hint">
+                  {(100 * m.masks[k]!.coverage).toFixed(0)}% of frame · {m.masks[k]!.inferMs} ms
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="field-row">
+            <span className="field-label">Overlay</span>
+            <Segmented<MaskKind | "off">
+              label="Mask overlay"
+              value={m.overlay ?? "off"}
+              options={[
+                { value: "off", label: "Off" },
+                ...detected.map((k) => ({ value: k, label: MASK_LABEL[k] })),
+              ]}
+              onChange={(v) => m.setOverlay(v === "off" ? null : v)}
+            />
+          </div>
+          {m.stale && <p className="hint">Lens corrections changed since detection. Re-detect to realign the masks.</p>}
+        </>
+      )}
+      <p className="note">Runs on this computer&apos;s CPU: IS-Net for the subject, U²-Net skyseg for the sky.</p>
+    </>
   );
 }
 

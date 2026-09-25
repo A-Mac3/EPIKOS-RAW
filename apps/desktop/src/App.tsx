@@ -7,6 +7,7 @@ import { Histogram } from "./components/Histogram";
 import { StepsPanel } from "./components/StepsPanel";
 import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
+import { useMasks } from "./hooks/useMasks";
 import { usePreview } from "./hooks/usePreview";
 import { defaultAdjustments, type Adjustments, type FileEntry, type ImageInfo } from "./types";
 
@@ -43,6 +44,8 @@ export default function App() {
     Math.min(viewSize.w, MAX_PREVIEW_SIDE),
     Math.min(viewSize.h, MAX_PREVIEW_SIDE),
   );
+
+  const masks = useMasks(info?.path ?? null, adjustments);
 
   // ---- Saving -------------------------------------------------------------------------
 
@@ -269,6 +272,7 @@ export default function App() {
                 error={openError ?? renderError}
                 loading={loading}
                 showingBefore={before}
+                overlay={masks.overlayMask}
                 onResize={onResize}
               />
             )}
@@ -282,6 +286,7 @@ export default function App() {
                 edit={history.edit}
                 endEdit={history.endEdit}
                 commit={history.commit}
+                masks={masks}
               />
             ) : (
               <p className="note pad">Select a photo to start editing.</p>
