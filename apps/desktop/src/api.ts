@@ -10,9 +10,11 @@ import type {
   HandoffApp,
   ImageInfo,
   LookPrompt,
+  AutoTone,
+  AutoUpright,
   Mask,
-  MaskKind,
   MaskModels,
+  MaskTarget,
   Preview,
   SaveReport,
   SceneAnalysis,
@@ -91,7 +93,7 @@ export async function thumbnailUrl(path: string, maxSide: number): Promise<strin
 export const maskModels = () => invoke<MaskModels>("mask_models");
 
 /** Layout: u32 width, u32 height, u32 inference ms, then one mask byte per pixel. */
-export async function detectMask(path: string, adjustments: Adjustments, kind: MaskKind): Promise<Mask> {
+export async function detectMask(path: string, adjustments: Adjustments, kind: MaskTarget): Promise<Mask> {
   return parseMask(await invoke<ArrayBuffer>("detect_mask", { path, adjustments, kind }), kind);
 }
 
@@ -135,3 +137,11 @@ export const syncLook = (hero: string, adjustments: Adjustments, targets: string
 
 /** Restore the sidecars the last sync replaced; returns the restored paths. */
 export const undoSync = (targets: string[]) => invoke<string[]>("undo_sync", { targets });
+
+/** Step 2 Auto: exposure and tone suggestions. */
+export const autoTone = (path: string, adjustments: Adjustments) =>
+  invoke<AutoTone>("auto_tone", { path, adjustments });
+
+/** Step 1 auto-geometry: straighten angle and vertical perspective. */
+export const autoUpright = (path: string, adjustments: Adjustments) =>
+  invoke<AutoUpright>("auto_upright", { path, adjustments });

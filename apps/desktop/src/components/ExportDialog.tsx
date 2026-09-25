@@ -35,7 +35,7 @@ const FORMATS: { value: ExportFormat; label: string; ext: string; hint: string }
     value: "psd",
     label: "Layered PSD",
     ext: "psd",
-    hint: "The finished look as a layer, plus one empty group per AI mask with that mask applied: drop adjustment layers into a group to confine them to the subject, sky or skin.",
+    hint: "The finished look as a layer, plus one empty group per AI mask with that mask applied: drop adjustment layers into a group to confine them to the subject, sky, skin, eyes or hair.",
   },
   {
     value: "dng",
@@ -88,7 +88,12 @@ type State =
  * the AI masks when asked, then opened in the next editor.
  */
 export function ExportDialog({ info, adjustments, onClose }: Props) {
-  const [format, setFormat] = useState<ExportFormat>(() => (stored(FORMAT_KEY) as ExportFormat | null) ?? "tiff");
+  // A JPEG or PNG has no sensor data to put in an enhanced DNG.
+  const formats = info.bitmap ? FORMATS.filter((f) => f.value !== "dng") : FORMATS;
+  const [format, setFormat] = useState<ExportFormat>(() => {
+    const last = stored(FORMAT_KEY) as ExportFormat | null;
+    return last && formats.some((f) => f.value === last) ? last : "tiff";
+  });
   const [space, setSpace] = useState<OutputSpace>(() => (stored(SPACE_KEY) as OutputSpace | null) ?? "srgb");
   const [includeLocation, setIncludeLocation] = useState(() => stored(LOCATION_KEY) !== "false");
   const [aiMasks, setAiMasks] = useState(() => stored(MASKS_KEY) === "true");
@@ -174,10 +179,13 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         <Segmented<ExportFormat>
           label="Format"
           value={format}
-          options={FORMATS.map(({ value, label }) => ({ value, label }))}
+          options={formats.map(({ value, label }) => ({ value, label }))}
           onChange={setFormat}
         />
         <span className="hint">{FORMATS.find((f) => f.value === format)!.hint}</span>
+        {info.bitmap && (
+          <span className="hint">Enhanced DNG is for RAW files: a JPEG or PNG has no sensor data to carry.</span>
+        )}
       </div>
 
       {format !== "dng" && (
@@ -204,10 +212,10 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         <Toggle
           label={
             format === "psd"
-              ? "Subject, sky and skin as masked layer groups"
+              ? "Subject, sky, skin, eyes and hair as masked layer groups"
               : format === "dng"
-                ? "Subject, sky and skin as semantic masks"
-                : "Subject, sky and skin masks as alpha channels"
+                ? "Subject, sky, skin, eyes and hair as semantic masks"
+                : "Subject, sky, skin, eyes and hair masks as alpha channels"
           }
           checked={aiMasks}
           onChange={setAiMasks}

@@ -434,7 +434,7 @@ export default function App() {
               </ErrorBoundary>
             )}
             {files.length === 0 ? (
-              <div className="viewer-status">No RAW or DNG files in this folder.</div>
+              <div className="viewer-status">No RAW, DNG, JPEG or PNG files in this folder.</div>
             ) : (
               <ErrorBoundary area="the viewer">
                 <Viewer
@@ -513,12 +513,14 @@ export default function App() {
           <h1>
             EPIKOS <span>RAW</span>
           </h1>
-          <p>Open a folder of RAW or DNG files to begin.</p>
+          <p>Open a folder of RAW, DNG, JPEG or PNG files to begin.</p>
           <button type="button" className="btn primary" onClick={() => void chooseFolder()}>
             Open folder…
           </button>
           {folderError && <p className="error">{folderError}</p>}
-          <p className="hint">Sony ARW · Canon CR3/CR2 · Nikon NEF · Fujifilm RAF · Leica DNG · Apple ProRAW</p>
+          <p className="hint">
+            Sony ARW · Canon CR3/CR2 · Nikon NEF · Fujifilm RAF · Leica DNG · Apple ProRAW · JPEG · PNG
+          </p>
         </div>
       )}
     </div>

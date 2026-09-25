@@ -8,7 +8,7 @@ import type {
   DevelopDocument,
   FileEntry,
   ImageInfo,
-  MaskKind,
+  MaskTarget,
   SceneAnalysis,
   StoryArc,
   StyleInfo,
@@ -17,14 +17,25 @@ import type {
 import { defaultAdjustments } from "../types";
 
 const FOLDER = "/mock/Sydney shoot";
-const FILES: FileEntry[] = ["DSCF0346.RAF", "DSCF0352.RAF", "L1000530.DNG", "L1000583.DNG", "IMG_0421.CR3"].map(
-  (name) => ({
-    path: `${FOLDER}/${name}`,
-    name,
-    format: name.endsWith("RAF") ? "Fujifilm RAF" : name.endsWith("DNG") ? "Leica DNG" : "Canon CR3",
-    hasEdits: false,
-  }),
-);
+const FILES: FileEntry[] = [
+  "DSCF0346.RAF",
+  "DSCF0352.RAF",
+  "L1000530.DNG",
+  "L1000583.DNG",
+  "IMG_0421.CR3",
+  "IMG_0433.JPG",
+].map((name) => ({
+  path: `${FOLDER}/${name}`,
+  name,
+  format: name.endsWith("RAF")
+    ? "Fujifilm RAF"
+    : name.endsWith("DNG")
+      ? "Leica DNG"
+      : name.endsWith("JPG")
+        ? "JPEG"
+        : "Canon CR3",
+  hasEdits: false,
+}));
 const saved = new Map<string, DevelopDocument>();
 const presync = new Map<string, DevelopDocument | null>();
 const AS_SHOT = { temperature: 5600, tint: 4 };
@@ -93,6 +104,9 @@ export function installMockBackend() {
       case "plugin:dialog|save":
         return (a.options as { defaultPath?: string } | undefined)?.defaultPath ?? `${FOLDER}/export.tif`;
       case "export_image":
+        if ((a.options as { format: string }).format === "dng" && String(a.path).endsWith(".JPG")) {
+          throw new Error("a JPEG or PNG has no sensor data for an enhanced DNG; export a TIFF or PSD");
+        }
         await new Promise((r) => setTimeout(r, 900));
         console.info("[mock] export", a);
         return {
@@ -184,10 +198,24 @@ export function installMockBackend() {
             { kind: "sky", file: "/mock/models/skyseg.onnx", available: true },
           ],
           depth: { file: "/mock/models/depth-anything-v2-small.onnx", available: true },
+          face: { file: "/mock/models/face-parsing-resnet18.onnx", available: true },
+          targets: (["subject", "background", "sky", "skin", "eyes", "hair", "foreground"] as MaskTarget[]).map(
+            (target) => ({ target, available: true, source: "mock" }),
+          ),
+          lensDatabase: 1569,
         };
       case "detect_mask":
-        await new Promise((r) => setTimeout(r, 700));
-        return mask(a.kind as MaskKind);
+        await new Promise((r) => setTimeout(r, 300));
+        return mask(a.kind as MaskTarget);
+      case "auto_tone":
+        await new Promise((r) => setTimeout(r, 200));
+        return {
+          exposure: 1.24,
+          tone: { contrast: 0, highlights: -66, shadows: 0, whites: 0, blacks: -13, vibrance: 10, saturation: 0 },
+        };
+      case "auto_upright":
+        await new Promise((r) => setTimeout(r, 200));
+        return { rotation: 0.69, vertical: 19 };
       case "detect_depth":
         await new Promise((r) => setTimeout(r, 300));
         return depthMap();
@@ -232,6 +260,14 @@ function info(path: string): ImageInfo {
       adjustments: defaultAdjustments(),
     },
     loadedFrom: saved.has(path) ? `${path}.epikos.json` : null,
+    lensProfile: f.name.endsWith("JPG")
+      ? null
+      : f.format.startsWith("Leica")
+        ? "Camera (DNG)"
+        : f.format.startsWith("Fuji")
+          ? "Lensfun: Fujifilm XF16-55mmF2.8 R LM WR"
+          : null,
+    bitmap: f.name.endsWith("JPG"),
   };
 }
 
@@ -318,7 +354,7 @@ function render(adj: Adjustments, maxW: number, maxH: number, path: string): Arr
 }
 
 /** Sky = the synthetic sky gradient; subject = the colour-patch row. */
-function mask(kind: MaskKind): ArrayBuffer {
+function mask(kind: MaskTarget): ArrayBuffer {
   const w = 1024;
   const h = Math.round(w / 1.5);
   const out = new ArrayBuffer(12 + w * h);
@@ -330,7 +366,21 @@ function mask(kind: MaskKind): ArrayBuffer {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const [u, v] = [x / w, y / h];
-      const inside = kind === "sky" ? v < 0.55 : v > 0.55 && v < 0.75 && u > 0.08 && u < 0.92;
+      const subject = v > 0.55 && v < 0.75 && u > 0.08 && u < 0.92;
+      const inside =
+        kind === "sky"
+          ? v < 0.55
+          : kind === "background"
+            ? !subject
+            : kind === "foreground"
+              ? v > 0.7
+              : kind === "eyes"
+                ? v > 0.6 && v < 0.62 && ((u > 0.45 && u < 0.47) || (u > 0.52 && u < 0.54))
+                : kind === "hair"
+                  ? v > 0.55 && v < 0.58 && u > 0.44 && u < 0.56
+                  : kind === "skin"
+                    ? v > 0.58 && v < 0.68 && u > 0.43 && u < 0.57
+                    : subject;
       alpha[y * w + x] = inside ? 255 : 0;
     }
   }

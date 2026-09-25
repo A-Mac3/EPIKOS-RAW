@@ -39,6 +39,46 @@ export interface Texture {
   microTexture: number;
   blemishSmoothing: number;
   specularBalance: number;
+  /** −100 (soften) … 100 (deepen) the lines of a face. */
+  characterLines: number;
+  /** Confine skin retouching and line sculpting to the subject mask. */
+  retouchSubjectOnly: boolean;
+}
+
+/** Step 2 tone controls, each −100…100. */
+export interface Tone {
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
+  vibrance: number;
+  saturation: number;
+}
+
+export const TONE_KEYS = ["contrast", "highlights", "shadows", "whites", "blacks", "vibrance", "saturation"] as const;
+
+/** A Step 3 region. */
+export type MaskTarget = "subject" | "background" | "sky" | "skin" | "eyes" | "hair" | "foreground";
+
+export const MASK_TARGETS: MaskTarget[] = ["subject", "background", "sky", "skin", "eyes", "hair", "foreground"];
+
+/** Step 3 edit inside a mask: exposure in EV (−3…3), the rest −100…100. */
+export interface LocalAdjustment {
+  mask: MaskTarget;
+  exposure: number;
+  contrast: number;
+  saturation: number;
+  warmth: number;
+  clarity: number;
+}
+
+/** Hue in degrees, amount 0…100, saturation and luminance −100…100. */
+export interface BackgroundTint {
+  hue: number;
+  amount: number;
+  saturation: number;
+  luminance: number;
 }
 
 /** −100…100 each. */
@@ -68,6 +108,10 @@ export interface ColorGrade {
   wheels: Record<WheelRange, ColorWheel>;
   /** 0…100. */
   skinProtection: number;
+  /** Greenery outside the subject: hue − teal … + autumn gold. */
+  foliage: HslChannel;
+  /** Everything outside the subject. */
+  background: BackgroundTint;
 }
 
 /** Step 6. Strengths 0…100, warmth −100 (cool) … 100 (gold). */
@@ -75,6 +119,8 @@ export interface Atmosphere {
   glow: number;
   glowSize: number;
   glowWarmth: number;
+  /** Only the subject glows (subject mask). */
+  glowSubjectOnly: boolean;
   fog: number;
   /** Depth where fog begins, 0 (camera) … 100 (far background). */
   fogStart: number;
@@ -184,11 +230,19 @@ export interface Adjustments {
   highlightRecovery: boolean;
   demosaic: DemosaicMode;
   lens: {
+    /** Apply the camera's (DNG) or Lensfun lens profile. */
+    profile: boolean;
     distortion: DistortionCoeffs;
     chromaticAberration: ChromaticAberration;
+    /** Straighten, degrees (+ = counter-clockwise). */
+    rotation: number;
+    /** Vertical perspective −100…100. */
+    vertical: number;
   };
   exposure: number;
+  tone: Tone;
   noiseReduction: NoiseReduction;
+  local: LocalAdjustment[];
   texture: Texture;
   color: ColorGrade;
   atmosphere: Atmosphere;
@@ -268,6 +322,10 @@ export interface ImageInfo {
   document: DevelopDocument;
   capture: CaptureMetadata;
   loadedFrom: string | null;
+  /** Source of the lens profile ("Camera (DNG)", "Lensfun: …"), if any. */
+  lensProfile: string | null;
+  /** JPEG or PNG: no enhanced-DNG export. */
+  bitmap: boolean;
 }
 
 export interface FileEntry {
@@ -299,12 +357,19 @@ export interface ExportReport {
   writeMs: number;
 }
 
-export type MaskKind = "subject" | "sky";
+/** A model-backed mask kind (the file-level status). */
+export type ModelKind = "subject" | "sky";
 
 export interface ModelStatus {
-  kind: MaskKind;
+  kind: ModelKind;
   file: string;
   available: boolean;
+}
+
+export interface TargetStatus {
+  target: MaskTarget;
+  available: boolean;
+  source: string;
 }
 
 export interface MaskModels {
@@ -312,6 +377,22 @@ export interface MaskModels {
   models: ModelStatus[];
   /** Step 6 depth model. */
   depth: { file: string; available: boolean };
+  /** Face parsing (eye and hair masks). */
+  face: { file: string; available: boolean };
+  /** Every Step 3 mask and whether the installed models can make it. */
+  targets: TargetStatus[];
+  /** Lenses in the built-in Lensfun database. */
+  lensDatabase: number;
+}
+
+export interface AutoTone {
+  exposure: number;
+  tone: Tone;
+}
+
+export interface AutoUpright {
+  rotation: number;
+  vertical: number;
 }
 
 /**
@@ -319,7 +400,7 @@ export interface MaskModels {
  * map uses the same shape, 255 = nearest.
  */
 export interface Mask {
-  kind: MaskKind | "depth";
+  kind: MaskTarget | "depth";
   width: number;
   height: number;
   alpha: Uint8Array<ArrayBuffer>;
@@ -343,12 +424,24 @@ export function defaultAdjustments(): Adjustments {
     highlightRecovery: true,
     demosaic: "auto",
     lens: {
+      profile: true,
       distortion: { enabled: false, k1: 0, k2: 0, k3: 0, p1: 0, p2: 0, cx: 0, cy: 0 },
       chromaticAberration: { enabled: false, red: 0, blue: 0 },
+      rotation: 0,
+      vertical: 0,
     },
     exposure: 0,
+    tone: defaultTone(),
     noiseReduction: { luminance: 0, color: 25 },
-    texture: { clarity: 0, microTexture: 0, blemishSmoothing: 0, specularBalance: 0 },
+    local: [],
+    texture: {
+      clarity: 0,
+      microTexture: 0,
+      blemishSmoothing: 0,
+      specularBalance: 0,
+      characterLines: 0,
+      retouchSubjectOnly: false,
+    },
     color: defaultColorGrade(),
     atmosphere: defaultAtmosphere(),
     curves: {
@@ -371,6 +464,14 @@ export function defaultAdjustments(): Adjustments {
   };
 }
 
+export function defaultTone(): Tone {
+  return { contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, vibrance: 0, saturation: 0 };
+}
+
+export function defaultLocal(mask: MaskTarget): LocalAdjustment {
+  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0 };
+}
+
 export function defaultToneCurve(): ToneCurve {
   return { shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0, points: [] };
 }
@@ -380,6 +481,7 @@ export function defaultAtmosphere(): Atmosphere {
     glow: 0,
     glowSize: 50,
     glowWarmth: 0,
+    glowSubjectOnly: false,
     fog: 0,
     fogStart: 30,
     fogWarmth: 0,
@@ -400,6 +502,8 @@ export function defaultColorGrade(): ColorGrade {
     hsl: Object.fromEntries(HSL_BANDS.map((b) => [b, zero()])) as HslBands,
     wheels: { shadows: wheel(), midtones: wheel(), highlights: wheel() },
     skinProtection: 0,
+    foliage: zero(),
+    background: { hue: 210, amount: 0, saturation: 0, luminance: 0 },
   };
 }
 

@@ -1,17 +1,17 @@
 # EPIKOS RAW
 
-Cross-platform RAW/DNG editor. Product spec: [PRD.md](PRD.md).
+Cross-platform RAW/DNG editor (JPEG and PNG too). Product spec: [PRD.md](PRD.md).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `crates/epikos-core` | 32-bit float image types, camera formats, sensor profiles |
-| `crates/epikos-decode` | RAW/DNG decode via `rawler`, crop, embedded thumbnails |
-| `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, optics, colour, exposure, Step 4 texture / retouching, Step 5 HSL and colour wheels, Step 6 glow / depth fog / light shafts, Step 7 parametric and point curves, split toning, Step 8 grain and vignette, 3D virtual lights, parametric styles and style fusion (`src/look`), preview binning, display transform |
+| `crates/epikos-core` | 32-bit float image types, camera formats, sensor profiles, lens-profile models |
+| `crates/epikos-decode` | RAW/DNG decode via `rawler` (plus the DNG's own lens corrections from `OpcodeList3`), JPEG/PNG decode, crop, embedded thumbnails |
+| `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, lens profiles and optics, colour, exposure, Step 2 tone and auto-tone, straighten / vertical perspective and auto-upright, Step 3 local mask adjustments, Step 4 texture / retouching, Step 5 HSL, colour wheels, foliage shift and background re-colouration, Step 6 glow / depth fog / light shafts, Step 7 parametric and point curves, split toning, Step 8 grain and vignette, 3D virtual lights, parametric styles and style fusion (`src/look`), preview binning, display transform |
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
-| `crates/epikos-masks` | On-device models via ONNX Runtime (CPU): IS-Net subject and skyseg sky masks (Step 3), Depth Anything V2 Small depth (Step 6) |
-| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy, TIFF / layered PSD / enhanced DNG export, natural-language look prompts |
+| `crates/epikos-masks` | On-device models via ONNX Runtime (CPU): IS-Net subject and skyseg sky masks, BiSeNet face parsing for eyes and hair (Step 3), Depth Anything V2 Small depth (Steps 3 and 6) |
+| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy, Step 3 masks (subject, background, sky, skin, eyes, hair, foreground), the Lensfun lens database (`data/lensfun`, CC BY-SA 3.0), TIFF / layered PSD / enhanced DNG export, natural-language look prompts, scene analysis and story-arc sync |
 | `crates/epikos-cli` | `epikos inspect / sidecar / develop` |
 | `apps/desktop` | Tauri 2 + React/TypeScript desktop app (`src-tauri` = Rust commands) |
 
@@ -41,7 +41,7 @@ Render a file with each built-in style and a Step 6 sample (plus its skin and de
 cargo run --release -p epikos-engine --example render_looks -- <RAW> <OUT_DIR> [--full]
 ```
 
-Export (format from the extension). With `--masks` / `--depth` the subject, sky and skin
+Export (format from the extension). With `--masks` / `--depth` the subject, sky, skin, eyes and hair
 masks and the depth map come along: named alpha channels in a TIFF, masked layer groups in
 a PSD, DNG 1.6 semantic masks and a DNG 1.5 depth map in an enhanced (linear) DNG:
 
@@ -76,6 +76,29 @@ survives an eviction but still waits for the download.
 
 Panics are logged with a backtrace to `~/Library/Logs/EPIKOS RAW/crash.log`; a panic in a
 command becomes an error message in the app instead of closing it.
+
+## Standalone app
+
+```bash
+scripts/fetch-models.sh                # the models are bundled into the app (~510 MB)
+cd apps/desktop && CI=true npm run tauri build
+```
+
+This writes `target/release/bundle/macos/EPIKOS RAW.app` and
+`target/release/bundle/dmg/EPIKOS RAW_0.1.0_aarch64.dmg` (about 480 MB). The models, ONNX
+Runtime (linked statically) and the lens database are inside the app, so it works offline
+with nothing else installed.
+
+- `CI=true` skips the Finder AppleScript that arranges the DMG window; without Automation
+  access to Finder that step times out and the DMG isn't written.
+- Apple Silicon only: `ort` has no prebuilt ONNX Runtime for Intel Macs, so an Intel or
+  universal build needs ONNX Runtime compiled for `x86_64-apple-darwin` first.
+- Not signed or notarised: on another Mac, the first launch needs right-click → Open (or
+  System Settings → Privacy & Security → Open Anyway).
+
+The face-parsing model (eyes and hair) is MIT-licensed, but it was trained on
+CelebAMask-HQ, whose images are licensed for non-commercial research only. Check that
+before distributing the app commercially.
 
 App icons are placeholders; regenerate the full set with
 `npm run tauri icon src-tauri/icons/app-icon-source.png`.

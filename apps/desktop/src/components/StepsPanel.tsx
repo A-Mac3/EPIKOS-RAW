@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from "react";
+import { autoTone, autoUpright } from "../api";
 import type { DepthState } from "../hooks/useDepth";
 import { DepthSideView } from "./DepthSideView";
-import { MASK_KINDS, type MaskState } from "../hooks/useMasks";
+import { MASK_KINDS, MASK_LABEL, type MaskState } from "../hooks/useMasks";
 import {
   CURVE_CHANNELS,
   HSL_BANDS,
+  defaultLocal,
   WHEEL_RANGES,
   type Adjustments,
   type ColorWheel as Wheel,
@@ -15,8 +17,10 @@ import {
   type HslBand,
   type HslChannel,
   type ImageInfo,
-  type MaskKind,
+  type LocalAdjustment,
+  type MaskTarget,
   type PickTarget,
+  type Tone,
   type WbMode,
   type WheelRange,
 } from "../types";
@@ -48,15 +52,25 @@ interface Props {
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
-const STEPS: { title: string; planned: string }[] = [
-  { title: "RAW Input & Optical Calibration", planned: "Lens profile database, auto-geometry" },
-  { title: "Global Exposure & Dynamic Range", planned: "Shadow lift, auto exposure" },
-  { title: "AI Subject & Semantic Masking", planned: "Skin, eyes, hair and foreground masks; masks driving local adjustments in later steps" },
-  { title: "Micro-Texture & Retouching", planned: "Character line sculpting; retouching confined to the subject mask" },
-  { title: "Base Color Grading & HSL", planned: "Foliage shift and background re-coloration through the Step 3 masks" },
-  { title: "Atmospheric & Light Sculpting", planned: "3D light placement on the depth map; glow confined to the subject mask" },
-  { title: "Creative Split-Toning & Curves", planned: "" },
-  { title: "Final Finishing & Handoff", planned: "" },
+const STEPS: string[] = [
+  "RAW Input & Optical Calibration",
+  "Global Exposure & Dynamic Range",
+  "AI Subject & Semantic Masking",
+  "Micro-Texture & Retouching",
+  "Base Color Grading & HSL",
+  "Atmospheric & Light Sculpting",
+  "Creative Split-Toning & Curves",
+  "Final Finishing & Handoff",
+];
+
+const TONE_SLIDERS: [keyof Tone, string][] = [
+  ["contrast", "Contrast"],
+  ["highlights", "Highlights"],
+  ["shadows", "Shadows"],
+  ["whites", "Whites"],
+  ["blacks", "Blacks"],
+  ["vibrance", "Vibrance"],
+  ["saturation", "Saturation"],
 ];
 
 // Temperature slider is logarithmic so the useful 2 000–10 000 K range gets most travel.
@@ -67,8 +81,6 @@ const posToK = (p: number) => Math.round(K_MIN * Math.pow(K_MAX / K_MIN, p));
 
 const fmtSigned = (digits: number, unit = "") => (v: number) =>
   `${v > 0 ? "+" : ""}${v.toFixed(digits)}${unit}`;
-
-const MASK_LABEL: Record<MaskKind, string> = { subject: "Subject", sky: "Sky" };
 
 type HslMode = keyof HslChannel;
 
@@ -122,6 +134,26 @@ export function StepsPanel({
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const [hslMode, setHslMode] = useState<HslMode>("saturation");
   const [curveChannel, setCurveChannel] = useState<CurveChannel>("rgb");
+  const [auto, setAuto] = useState<{ busy: "tone" | "upright" | null; error: string | null }>({
+    busy: null,
+    error: null,
+  });
+  const runAuto = async (kind: "tone" | "upright") => {
+    setAuto({ busy: kind, error: null });
+    try {
+      if (kind === "tone") {
+        const r = await autoTone(info.path, a);
+        commit((x) => ({ ...x, exposure: r.exposure, tone: r.tone }));
+      } else {
+        const r = await autoUpright(info.path, a);
+        commit((x) => ({ ...x, lens: { ...x.lens, rotation: r.rotation, vertical: r.vertical } }));
+      }
+      setAuto({ busy: null, error: null });
+    } catch (e) {
+      setAuto({ busy: null, error: String(e) });
+    }
+  };
+  const subjectAvailable = masks.available("subject");
   const toggle = (i: number) =>
     setOpen((s) => {
       const next = new Set(s);
@@ -161,7 +193,11 @@ export function StepsPanel({
     ...x,
     texture: { ...x.texture, ...patch },
   });
-  const texSlider = (label: string, key: keyof Adjustments["texture"], min: number) => (
+  const texSlider = (
+    label: string,
+    key: "clarity" | "microTexture" | "blemishSmoothing" | "specularBalance" | "characterLines",
+    min: number,
+  ) => (
     <Slider
       label={label}
       value={tex[key]}
@@ -182,6 +218,10 @@ export function StepsPanel({
       ...x.color,
       hsl: { ...x.color.hsl, [band]: { ...x.color.hsl[band], [hslMode]: v } },
     },
+  });
+  const setBg = (patch: Partial<Adjustments["color"]["background"]>) => (x: Adjustments) => ({
+    ...x,
+    color: { ...x.color, background: { ...x.color.background, ...patch } },
   });
   const setWheel = (range: WheelRange, patch: Partial<Wheel>) => (x: Adjustments) => ({
     ...x,
@@ -295,6 +335,52 @@ export function StepsPanel({
   const content: Record<number, ReactNode> = {
     0: (
       <>
+        <Toggle
+          label="Lens profile"
+          checked={a.lens.profile}
+          disabled={!info.lensProfile}
+          onChange={(v) => commit(setLens((l) => ({ ...l, profile: v })))}
+        />
+        <p className="hint">
+          {info.lensProfile
+            ? `${info.lensProfile}: distortion, lateral chromatic aberration and vignetting.`
+            : info.bitmap
+              ? "A JPEG or PNG is already corrected by the camera or editor that made it."
+              : `No profile for ${info.capture.lensModel ?? "this lens"} in the camera file or the built-in Lensfun database (${masks.models?.lensDatabase ?? "…"} lenses).`}
+        </p>
+        <div className="field-row">
+          <span className="field-label">Geometry</span>
+          <button type="button" className="btn" disabled={auto.busy !== null} onClick={() => void runAuto("upright")}>
+            {auto.busy === "upright" ? "Measuring…" : "Auto upright"}
+          </button>
+        </div>
+        <Slider
+          label="Straighten"
+          value={a.lens.rotation}
+          min={-15}
+          max={15}
+          step={0.05}
+          defaultValue={0}
+          format={fmtSigned(2, "°")}
+          onChange={(v) => edit(setLens((l) => ({ ...l, rotation: v })))}
+          onCommit={endEdit}
+        />
+        <Slider
+          label="Vertical perspective"
+          value={a.lens.vertical}
+          min={-100}
+          max={100}
+          step={1}
+          defaultValue={0}
+          format={fmtSigned(0)}
+          onChange={(v) => edit(setLens((l) => ({ ...l, vertical: v })))}
+          onCommit={endEdit}
+        />
+        {auto.error && <p className="hint error">{auto.error}</p>}
+        <p className="hint">
+          Auto upright levels the horizon and straightens converging verticals from the photo&apos;s own lines. The frame
+          is enlarged just enough to stay filled.
+        </p>
         <Field label="Demosaic" hint="Applies at full resolution; the preview uses a fast superpixel develop.">
           <select
             value={a.demosaic}
@@ -407,6 +493,27 @@ export function StepsPanel({
           onChange={(v) => edit((x) => ({ ...x, exposure: v }))}
           onCommit={endEdit}
         />
+        {TONE_SLIDERS.map(([key, label]) => (
+          <Slider
+            key={key}
+            label={label}
+            value={a.tone[key]}
+            min={-100}
+            max={100}
+            step={1}
+            defaultValue={0}
+            format={fmtSigned(0)}
+            onChange={(v) => edit((x) => ({ ...x, tone: { ...x.tone, [key]: v } }))}
+            onCommit={endEdit}
+          />
+        ))}
+        <button type="button" className="btn" disabled={auto.busy !== null} onClick={() => void runAuto("tone")}>
+          {auto.busy === "tone" ? "Measuring…" : "Auto exposure & tone"}
+        </button>
+        <p className="hint">
+          Auto sets mid-tones to mid-grey from the whole frame (not the skin, so deep skin keeps its depth), lifts
+          shadows when much of the frame is dark and pulls back highlights that would clip.
+        </p>
         <Toggle
           label="Highlight recovery"
           checked={a.highlightRecovery}
@@ -466,7 +573,18 @@ export function StepsPanel({
         )}
       </>
     ),
-    2: <MaskControls masks={masks} />,
+    2: (
+      <>
+        <MaskControls masks={masks} />
+        <LocalAdjustments
+          local={a.local}
+          masks={masks}
+          edit={edit}
+          endEdit={endEdit}
+          commit={commit}
+        />
+      </>
+    ),
     3: (
       <>
         {texSlider("Clarity", "clarity", -100)}
@@ -474,6 +592,18 @@ export function StepsPanel({
         <span className="field-label">Skin retouching</span>
         {texSlider("Blemish smoothing", "blemishSmoothing", 0)}
         {texSlider("Specular highlight balancing", "specularBalance", 0)}
+        {texSlider("Character lines", "characterLines", -100)}
+        <Toggle
+          label="Retouch the subject only"
+          checked={tex.retouchSubjectOnly}
+          disabled={!subjectAvailable}
+          onChange={(v) => commit(setTex({ retouchSubjectOnly: v }))}
+        />
+        <p className="hint">
+          Character lines deepen (+) or soften (−) the lines that give a face its character (smile lines, furrows)
+          without touching pores. With the subject only, skin-coloured wood, sand or brick behind the subject stays
+          untouched{subjectAvailable ? "" : " (needs the subject model)"}.
+        </p>
         <p className="hint">
           Retouching acts only where skin is detected. Micro-texture is cored against noise and eased off on skin, so
           hair, fabric and bark sharpen without making skin look dirty.
@@ -546,6 +676,78 @@ export function StepsPanel({
           onCommit={endEdit}
         />
         <p className="hint">Shields detected skin from the HSL and wheel changes above.</p>
+
+        <span className="field-label">Foliage</span>
+        {(["hue", "saturation", "luminance"] as const).map((key) => (
+          <Slider
+            key={key}
+            label={cap(key)}
+            value={color.foliage[key]}
+            min={-100}
+            max={100}
+            step={1}
+            defaultValue={0}
+            format={fmtSigned(0)}
+            track={key === "hue" ? "linear-gradient(90deg, #2f9c8f, #5c9a3a 50%, #c99a2e)" : undefined}
+            onChange={(v) => edit((x) => ({ ...x, color: { ...x.color, foliage: { ...x.color.foliage, [key]: v } } }))}
+            onCommit={endEdit}
+          />
+        ))}
+        <p className="hint">Turns greenery towards teal (−) or autumn gold (+), leaving the subject alone.</p>
+
+        <span className="field-label">Background</span>
+        {subjectAvailable ? (
+          <>
+            <Slider
+              label="Tint hue"
+              value={color.background.hue}
+              min={0}
+              max={360}
+              step={1}
+              defaultValue={210}
+              format={(v) => `${v.toFixed(0)}°`}
+              track={HUE_TRACK}
+              onChange={(v) => edit(setBg({ hue: v }))}
+              onCommit={endEdit}
+            />
+            <Slider
+              label="Tint amount"
+              value={color.background.amount}
+              min={0}
+              max={100}
+              step={1}
+              defaultValue={0}
+              format={(v) => v.toFixed(0)}
+              onChange={(v) => edit(setBg({ amount: v }))}
+              onCommit={endEdit}
+            />
+            <Slider
+              label="Saturation"
+              value={color.background.saturation}
+              min={-100}
+              max={100}
+              step={1}
+              defaultValue={0}
+              format={fmtSigned(0)}
+              onChange={(v) => edit(setBg({ saturation: v }))}
+              onCommit={endEdit}
+            />
+            <Slider
+              label="Luminance"
+              value={color.background.luminance}
+              min={-100}
+              max={100}
+              step={1}
+              defaultValue={0}
+              format={fmtSigned(0)}
+              onChange={(v) => edit(setBg({ luminance: v }))}
+              onCommit={endEdit}
+            />
+            <p className="hint">Re-colours everything outside the subject mask.</p>
+          </>
+        ) : (
+          <p className="hint">Background re-colouration needs the subject model (scripts/fetch-models.sh).</p>
+        )}
       </>
     ),
     5: (
@@ -554,6 +756,12 @@ export function StepsPanel({
         {atSlider("Amount", "glow", 0)}
         {atSlider("Size", "glowSize", 50, { disabled: at.glow === 0 })}
         {atSlider("Warmth", "glowWarmth", 0, { warmth: true, disabled: at.glow === 0 })}
+        <Toggle
+          label="Subject only"
+          checked={at.glowSubjectOnly}
+          disabled={!subjectAvailable || at.glow === 0}
+          onChange={(v) => commit(setAt({ glowSubjectOnly: v }))}
+        />
 
         <span className="field-label">Depth fog</span>
         {atSlider("Amount", "fog", 0)}
@@ -777,35 +985,18 @@ export function StepsPanel({
 
   return (
     <div className="steps">
-      {STEPS.map((step, i) => {
-        const available = i in content;
+      {STEPS.map((title, i) => {
         const isOpen = open.has(i);
         return (
-          <section key={step.title} className={`step${available ? "" : " is-planned"}`}>
-            <button
-              type="button"
-              className="step-head"
-              aria-expanded={isOpen}
-              onClick={() => toggle(i)}
-            >
+          <section key={title} className="step">
+            <button type="button" className="step-head" aria-expanded={isOpen} onClick={() => toggle(i)}>
               <span className="step-num">{i + 1}</span>
-              <span className="step-title">{step.title}</span>
-              {!available && <span className="badge">Planned</span>}
+              <span className="step-title">{title}</span>
               <span className="chevron" aria-hidden>
                 {isOpen ? "▾" : "▸"}
               </span>
             </button>
-            {isOpen && (
-              <div className="step-body">
-                {content[i]}
-                {step.planned && (
-                  <p className="note">
-                    {available ? "Coming next: " : ""}
-                    {step.planned}.
-                  </p>
-                )}
-              </div>
-            )}
+            {isOpen && <div className="step-body">{content[i]}</div>}
           </section>
         );
       })}
@@ -815,24 +1006,29 @@ export function StepsPanel({
 
 function MaskControls({ masks: m }: { masks: MaskState }) {
   if (!m.models) return <p className="note">Checking for mask models…</p>;
-  const missing = m.models.models.filter((s) => !s.available);
-  const any = missing.length < m.models.models.length;
+  const targets = m.models.targets;
+  const missing = targets.filter((t) => !t.available);
   const detected = MASK_KINDS.filter((k) => m.masks[k]);
 
   return (
     <>
       {missing.length > 0 && (
         <p className="hint">
-          {missing.map((s) => MASK_LABEL[s.kind]).join(" and ")} model{missing.length > 1 ? "s" : ""} not installed.
-          Run <code>scripts/fetch-models.sh</code> or copy the <code>.onnx</code> files into <code>{m.models.dir}</code>.
+          {missing.map((t) => MASK_LABEL[t.target]).join(", ")}: model not installed. Run{" "}
+          <code>scripts/fetch-models.sh</code> or copy the <code>.onnx</code> files into <code>{m.models.dir}</code>.
         </p>
       )}
-      <button type="button" className="btn" disabled={!any || m.detecting !== null} onClick={() => void m.detect()}>
+      <button
+        type="button"
+        className="btn"
+        disabled={missing.length === targets.length || m.detecting !== null}
+        onClick={() => void m.detect()}
+      >
         {m.detecting
           ? `Detecting ${MASK_LABEL[m.detecting].toLowerCase()}…`
           : detected.length > 0
-            ? "Re-detect subject & sky"
-            : "Detect subject & sky"}
+            ? "Re-detect masks"
+            : "Detect masks"}
       </button>
       {m.error && <p className="hint error">{m.error}</p>}
       {detected.length > 0 && (
@@ -842,27 +1038,132 @@ function MaskControls({ masks: m }: { masks: MaskState }) {
               <li key={k}>
                 <span>{MASK_LABEL[k]}</span>
                 <span className="hint">
-                  {(100 * m.masks[k]!.coverage).toFixed(0)}% of frame · {m.masks[k]!.inferMs} ms
+                  {(100 * m.masks[k]!.coverage).toFixed(k === "eyes" ? 1 : 0)}% of frame
+                  {m.masks[k]!.inferMs > 0 ? ` · ${m.masks[k]!.inferMs} ms` : ""}
                 </span>
               </li>
             ))}
           </ul>
-          <div className="field-row">
-            <span className="field-label">Overlay</span>
-            <Segmented<MaskKind | "off">
-              label="Mask overlay"
+          <Field label="Overlay">
+            <select
               value={m.overlay ?? "off"}
-              options={[
-                { value: "off", label: "Off" },
-                ...detected.map((k) => ({ value: k, label: MASK_LABEL[k] })),
-              ]}
-              onChange={(v) => m.setOverlay(v === "off" ? null : v)}
-            />
-          </div>
-          {m.stale && <p className="hint">Lens corrections changed since detection. Re-detect to realign the masks.</p>}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                m.setOverlay(v === "off" ? null : (v as MaskTarget));
+              }}
+            >
+              <option value="off">Off</option>
+              {detected.map((k) => (
+                <option key={k} value={k}>
+                  {MASK_LABEL[k]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {m.stale && <p className="hint">Lens or geometry changed since detection. Re-detect to realign the masks.</p>}
         </>
       )}
-      <p className="note">Runs on this computer&apos;s CPU: IS-Net for the subject, U²-Net skyseg for the sky.</p>
+      <p className="note">
+        Runs on this computer&apos;s CPU: IS-Net (subject), U²-Net skyseg (sky), BiSeNet face parsing (eyes, hair),
+        Depth Anything V2 (foreground) and a colour model (skin).
+      </p>
+    </>
+  );
+}
+
+const LOCAL_SLIDERS: [Exclude<keyof LocalAdjustment, "mask">, string][] = [
+  ["exposure", "Exposure"],
+  ["contrast", "Contrast"],
+  ["saturation", "Saturation"],
+  ["warmth", "Warmth"],
+  ["clarity", "Clarity"],
+];
+
+/** Step 3 edits confined to a mask. */
+function LocalAdjustments({
+  local,
+  masks,
+  edit,
+  endEdit,
+  commit,
+}: {
+  local: LocalAdjustment[];
+  masks: MaskState;
+  edit: Update;
+  endEdit: () => void;
+  commit: Update;
+}) {
+  const [target, setTarget] = useState<MaskTarget>("subject");
+  const usable = MASK_KINDS.filter((k) => masks.available(k));
+  const setLocal = (i: number, patch: Partial<LocalAdjustment>) => (x: Adjustments) => ({
+    ...x,
+    local: x.local.map((l, k) => (k === i ? { ...l, ...patch } : l)),
+  });
+
+  return (
+    <>
+      <span className="field-label">Local adjustments</span>
+      {local.map((l, i) => (
+        <div key={i} className="local-card">
+          <div className="field-row">
+            <select
+              aria-label={`Mask of adjustment ${i + 1}`}
+              value={l.mask}
+              onChange={(e) => commit(setLocal(i, { mask: e.currentTarget.value as MaskTarget }))}
+            >
+              {MASK_KINDS.map((k) => (
+                <option key={k} value={k} disabled={!masks.available(k)}>
+                  {MASK_LABEL[k]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn link"
+              onClick={() => commit((x) => ({ ...x, local: x.local.filter((_, k) => k !== i) }))}
+            >
+              Remove
+            </button>
+          </div>
+          {!masks.available(l.mask) && <p className="hint error">This mask&apos;s model isn&apos;t installed; the edit has no effect.</p>}
+          {LOCAL_SLIDERS.map(([key, label]) => (
+            <Slider
+              key={key}
+              label={label}
+              value={l[key]}
+              min={key === "exposure" ? -3 : -100}
+              max={key === "exposure" ? 3 : 100}
+              step={key === "exposure" ? 0.01 : 1}
+              defaultValue={0}
+              format={key === "exposure" ? fmtSigned(2, " EV") : fmtSigned(0)}
+              track={key === "warmth" ? WARMTH_TRACK : undefined}
+              onChange={(v) => edit(setLocal(i, { [key]: v }))}
+              onCommit={endEdit}
+            />
+          ))}
+        </div>
+      ))}
+      <div className="field-row">
+        <select aria-label="Mask for a new adjustment" value={target} onChange={(e) => setTarget(e.currentTarget.value as MaskTarget)}>
+          {MASK_KINDS.map((k) => (
+            <option key={k} value={k} disabled={!usable.includes(k)}>
+              {MASK_LABEL[k]}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="btn"
+          disabled={!usable.includes(target) || local.length >= 8}
+          onClick={() => commit((x) => ({ ...x, local: [...x.local, defaultLocal(target)] }))}
+        >
+          + Add
+        </button>
+      </div>
+      <p className="hint">
+        Each edit follows its mask, made on demand the first time it&apos;s used (a second or two on the CPU) and snapped to
+        the photo&apos;s edges. Brighten the eyes, cool the background, add clarity to hair.
+      </p>
     </>
   );
 }
