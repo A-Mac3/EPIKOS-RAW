@@ -50,7 +50,7 @@ enum Commands {
         /// Leave GPS location out of the exported metadata.
         #[arg(long)]
         no_location: bool,
-        /// Add the subject, sky and skin masks as named alpha channels (Photoshop).
+        /// Add the subject, sky, skin, eyes and hair masks as named alpha channels (Photoshop).
         #[arg(long)]
         masks: bool,
         /// Add the depth map as an alpha channel.

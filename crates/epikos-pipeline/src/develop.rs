@@ -5,8 +5,10 @@ use crate::color_transform::{apply_white_balance, camera_to_linear_rec2020, wb_m
 use crate::demosaic::{demosaic, DemosaicAlgorithm};
 use crate::denoise::{self, reduce_noise};
 use crate::highlights::recover_highlights;
+use crate::basic::apply_tone;
+use crate::geometry::apply_geometry;
 use crate::look::{apply_look, LookInputs};
-use crate::optics::{correct_chromatic_aberration, correct_distortion};
+use crate::optics::{apply_lens_profile, correct_chromatic_aberration, correct_distortion};
 use crate::orient::apply_orientation;
 use crate::white_balance::gains_for_temperature;
 
@@ -40,7 +42,7 @@ pub fn develop_adjustments_with(
 }
 
 /// Everything after demosaic: highlights → WB → noise reduction → optics → camera RGB → Rec.2020 →
-/// exposure → orientation → Steps 4–6 and style.
+/// exposure → Step 2 tone → orientation → straighten / perspective → Steps 3–8 and style.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
 /// interactive preview share one code path.
@@ -75,6 +77,11 @@ pub fn develop_rgb_with(
     }
 
     // Each correction allocates a full-size copy, so skip them when disabled.
+    if adj.lens.profile {
+        if let Some(profile) = inputs.lens {
+            rgb = apply_lens_profile(&rgb, profile);
+        }
+    }
     let ca = &adj.lens.chromatic_aberration;
     if ca.enabled && (ca.red != 0.0 || ca.blue != 0.0) {
         rgb = correct_chromatic_aberration(&rgb, ca);
@@ -97,8 +104,13 @@ pub fn develop_rgb_with(
         }
     }
 
+    apply_tone(&mut rgb, &adj.tone);
+
     // After the optics above, which work in the sensor's own frame.
     let mut rgb = apply_orientation(rgb, profile.orientation);
+    if adj.lens.has_transform() {
+        rgb = apply_geometry(&rgb, adj.lens.rotation, adj.lens.vertical);
+    }
 
     // Steps 4–6 and the style, on the upright frame (depth and light positions are
     // upright). Radii scale with image size, so the preview matches the export.

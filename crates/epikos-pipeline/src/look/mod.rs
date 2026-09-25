@@ -1,18 +1,22 @@
 //! Steps 4–6 plus the parametric style engine, run on upright scene-linear Rec.2020
 //! after exposure.
 //!
-//! Order inside: Oklab → skin map (from the image before any look) → Step 4 texture
-//! (manual + style) → Step 5 manual grade (manual skin protection) → style skin grade
-//! (skin only) → style scene grade (style skin protection) → linear → Step 6 fog, glow,
-//! light shafts (manual + style) → Step 7 curves and split toning → Step 8 vignette
-//! and grain.
+//! Order inside: Step 3 local adjustments through their masks → Oklab → skin map
+//! (from the image before any look, optionally confined to the subject) → Step 4
+//! texture and line sculpting (manual + style) → Step 5 manual grade (manual skin
+//! protection) → style skin grade (skin only) → style scene grade (style skin
+//! protection) → foliage shift and background re-colouration → linear → Step 6 fog,
+//! glow (optionally from the subject only), light shafts (manual + style) → Step 7
+//! curves and split toning → Step 8 vignette and grain.
 
 mod atmosphere;
 mod blur;
 mod finish;
 mod grade;
 mod lights;
+mod local;
 mod oklab;
+mod region;
 mod skin;
 mod style;
 mod texture;
@@ -20,8 +24,10 @@ mod tone;
 
 use epikos_core::resize_plane;
 use epikos_core::ImageRgbF32;
+use epikos_core::LensProfile;
 use epikos_sidecar::{
-    Adjustments, Atmosphere, ColorGrade, Curves, Finishing, SplitToning, Texture,
+    Adjustments, Atmosphere, BackgroundTint, ColorGrade, Curves, Finishing, HslChannel, LocalAdjustment,
+    MaskTarget, SplitToning, Texture,
 };
 use rayon::prelude::*;
 
@@ -38,11 +44,51 @@ pub fn styles() -> Vec<StyleInfo> {
     style::all().into_iter().map(|s| s.info).collect()
 }
 
-/// Extra per-image inputs for the look, from the engine's models.
+/// Extra per-image inputs for the develop, from the engine's models and databases.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LookInputs<'a> {
     /// Relative depth of the upright frame (1 = near, 0 = far), any resolution.
     pub depth: Option<DepthPlane<'a>>,
+    /// Step 3 masks of the upright frame (0–1), any resolution.
+    pub masks: &'a [MaskPlane<'a>],
+    /// Step 1 lens profile, applied when `adjustments.lens.profile` is on.
+    pub lens: Option<&'a LensProfile>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MaskPlane<'a> {
+    pub target: MaskTarget,
+    pub width: u32,
+    pub height: u32,
+    pub data: &'a [f32],
+}
+
+/// The Step 3 masks the look for `adj` would use, so the engine can prepare them.
+pub fn look_masks(adj: &Adjustments) -> Vec<MaskTarget> {
+    let look = Look::from_adjustments(adj);
+    let mut out: Vec<MaskTarget> = look.local.iter().map(|l| l.mask).collect();
+    if look.needs_subject() {
+        out.push(MaskTarget::Subject);
+    }
+    // Background is the subject's inverse: the subject model serves both.
+    for t in out.iter_mut() {
+        if *t == MaskTarget::Background {
+            *t = MaskTarget::Subject;
+        }
+    }
+    out.sort_by_key(|t| *t as u8);
+    out.dedup();
+    out
+}
+
+/// Box blur of a plane (radius `r`), for other modules.
+pub(crate) fn box_plane(p: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    blur::box_blur(p, w, h, r)
+}
+
+/// Edge-aware smoothing of a plane (guided filter), for other modules.
+pub(crate) fn guided_plane(p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    blur::guided(p, w, h, r, eps)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,6 +131,11 @@ struct Look {
     split: SplitToning,
     finishing: Finishing,
     lights: Vec<epikos_sidecar::VirtualLight>,
+    local: Vec<LocalAdjustment>,
+    retouch_subject_only: bool,
+    foliage: HslChannel,
+    background: BackgroundTint,
+    glow_subject_only: bool,
 }
 
 impl Look {
@@ -101,6 +152,11 @@ impl Look {
             split: adj.split_toning,
             finishing: adj.finishing,
             lights: adj.atmosphere.lights.clone(),
+            local: adj.local.iter().filter(|l| !l.is_neutral()).copied().collect(),
+            retouch_subject_only: adj.texture.retouch_subject_only,
+            foliage: adj.color.foliage,
+            background: adj.color.background,
+            glow_subject_only: adj.atmosphere.glow_subject_only,
         };
         if adj.style.is_none() {
             return look;
@@ -141,6 +197,16 @@ impl Look {
             || !self.manual.is_neutral()
             || !self.style_skin.is_neutral()
             || !self.style_scene.is_neutral()
+            || !region::foliage_is_neutral(&self.foliage)
+            || !self.background.is_neutral()
+    }
+
+    /// Whether any setting reads the subject mask (beyond local adjustments).
+    fn needs_subject(&self) -> bool {
+        (self.retouch_subject_only && self.texture.needs_skin())
+            || !self.background.is_neutral()
+            || !region::foliage_is_neutral(&self.foliage)
+            || (self.glow_subject_only && self.atmosphere.glow > 0.0)
     }
 
     fn needs_skin(&self) -> bool {
@@ -155,7 +221,8 @@ impl Look {
     }
 
     fn is_neutral(&self) -> bool {
-        !self.needs_lab()
+        self.local.is_empty()
+            && !self.needs_lab()
             && self.atmosphere.is_neutral()
             && !self.lights.iter().any(|l| l.intensity > 0.0)
             && self.curves.is_identity()
@@ -168,22 +235,53 @@ pub fn look_is_active(adj: &Adjustments) -> bool {
     !Look::from_adjustments(adj).is_neutral()
 }
 
-/// Apply Steps 4–6 and the style to upright scene-linear Rec.2020, in place.
+/// Apply Step 3 local adjustments, Steps 4–8 and the style to upright scene-linear
+/// Rec.2020, in place.
 pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs) {
     let look = Look::from_adjustments(adj);
     if look.is_neutral() {
         return;
     }
+    // Masks fitted to this image once, on the photo before any look.
+    let mut fitted: Vec<(MaskTarget, Option<Vec<f32>>)> = Vec::new();
+    let mut mask = |rgb: &ImageRgbF32, target: MaskTarget| -> Option<Vec<f32>> {
+        let base = if target == MaskTarget::Background { MaskTarget::Subject } else { target };
+        if !fitted.iter().any(|(t, _)| *t == base) {
+            let plane = inputs.masks.iter().find(|m| m.target == base).and_then(|m| {
+                fit_to_image(rgb, m.data, m.width, m.height, 0.004)
+            });
+            fitted.push((base, plane));
+        }
+        let plane = fitted.iter().find(|(t, _)| *t == base)?.1.clone()?;
+        Some(if target == MaskTarget::Background { plane.iter().map(|v| 1.0 - v).collect() } else { plane })
+    };
+    let subject = look.needs_subject().then(|| mask(rgb, MaskTarget::Subject)).flatten();
+
+    for l in &look.local {
+        // A mask whose model isn't installed does nothing, rather than everything.
+        if let Some(m) = mask(rgb, l.mask) {
+            local::apply_local(rgb, l, &m);
+        }
+    }
     if look.needs_lab() {
         let ok = Oklab::new();
         ok.planes_to_lab(rgb);
-        let skin = if look.needs_skin() {
+        let mut skin = if look.needs_skin() {
             skin::skin_map(rgb)
         } else {
             vec![0.0; rgb.len()]
         };
+        if look.retouch_subject_only {
+            if let Some(s) = &subject {
+                skin.iter_mut().zip(s).for_each(|(k, s)| *k *= s);
+            }
+        }
         apply_texture(rgb, &skin, &look.texture);
         grade_passes(rgb, &skin, &look);
+        region::apply_foliage(rgb, &look.foliage, subject.as_deref());
+        if let Some(s) = &subject {
+            region::apply_background(rgb, &look.background, s);
+        }
         ok.planes_to_rec2020(rgb);
     }
     let depth = look
@@ -191,7 +289,8 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         .then_some(inputs.depth)
         .flatten()
         .map(|d| fit_depth(rgb, d));
-    apply_atmosphere(rgb, &look.atmosphere, depth.as_deref());
+    let glow_mask = if look.glow_subject_only { subject.as_deref() } else { None };
+    apply_atmosphere(rgb, &look.atmosphere, depth.as_deref(), glow_mask);
     lights::apply_lights(rgb, &look.lights, depth.as_deref());
     tone::apply_tone(rgb, &look.curves, &look.split);
     finish::apply_finishing(rgb, &look.finishing);
@@ -276,6 +375,7 @@ fn texture_params(t: &Texture) -> TextureParams {
         micro: signed_pct(t.micro_texture),
         blemish: pct(t.blemish_smoothing),
         specular: pct(t.specular_balance),
+        lines: signed_pct(t.character_lines),
     }
 }
 
@@ -425,6 +525,7 @@ mod tests {
                 height: 32,
                 data: &depth,
             }),
+            ..Default::default()
         };
         let mut img = portrait();
         let before = img.clone();
@@ -436,6 +537,36 @@ mod tests {
             change(8),
             change(56)
         );
+    }
+
+    #[test]
+    fn local_adjustments_follow_their_mask_and_skip_missing_ones() {
+        let mut adj = Adjustments::default();
+        adj.local.push(LocalAdjustment { mask: MaskTarget::Background, exposure: 1.0, ..Default::default() });
+        adj.local.push(LocalAdjustment { mask: MaskTarget::Eyes, exposure: 2.0, ..Default::default() });
+        assert_eq!(look_masks(&adj), vec![MaskTarget::Subject, MaskTarget::Eyes]);
+        // Subject = left half; no eye mask available.
+        let subject: Vec<f32> = (0..64 * 32).map(|i| if i % 64 < 32 { 1.0 } else { 0.0 }).collect();
+        let masks = [MaskPlane { target: MaskTarget::Subject, width: 64, height: 32, data: &subject }];
+        let inputs = LookInputs { masks: &masks, ..Default::default() };
+        let mut img = portrait();
+        let before = img.clone();
+        apply_look(&mut img, &adj, &inputs);
+        let ratio = |x: u32| img.g[img.index(x, 16)] / before.g[before.index(x, 16)];
+        assert!((ratio(4) - 1.0).abs() < 0.05, "subject {}", ratio(4));
+        assert!((ratio(60) - 2.0).abs() < 0.1, "background {}", ratio(60));
+    }
+
+    #[test]
+    fn subject_settings_ask_for_the_subject_mask() {
+        let mut adj = Adjustments::default();
+        assert!(look_masks(&adj).is_empty());
+        adj.color.background.amount = 40.0;
+        assert_eq!(look_masks(&adj), vec![MaskTarget::Subject]);
+        let mut adj = Adjustments::default();
+        adj.atmosphere.glow = 50.0;
+        adj.atmosphere.glow_subject_only = true;
+        assert_eq!(look_masks(&adj), vec![MaskTarget::Subject]);
     }
 
     #[test]

@@ -8,32 +8,35 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use epikos_core::{CameraFormat, Error, ImageRgbF32, Result, SensorLayout};
+use epikos_core::{CameraFormat, Error, ImageRgbF32, LensProfile, Result, SensorLayout};
 use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
 use epikos_masks::{DepthMap, RgbImage};
 use epikos_pipeline::{
-    bin_mosaic, block_for_size, develop_rgb_with, look_needs_depth, oklab_planes, skin_likelihood,
-    temperature_for_gains, to_display_srgb, DepthPlane, DisplayImage, LookInputs,
+    bin_mosaic, block_for_size, develop_rgb_with, estimate_upright, look_masks, look_needs_depth, oklab_planes,
+    skin_likelihood, temperature_for_gains, to_display_srgb, DepthPlane, DisplayImage, LookInputs, MaskPlane,
 };
 use epikos_sidecar::{
     load_json, load_xmp, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, Adjustments,
-    DevelopDocument, SourceRef,
+    DevelopDocument, MaskTarget, SourceRef, Tone,
 };
 use serde::Serialize;
 
 mod analysis;
 mod dng;
 mod export;
+mod lensdb;
 mod prompt;
 mod psd;
+mod regions;
 mod story;
 pub use analysis::SceneAnalysis;
 pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportFormat, ExportOptions, ExportReport};
 pub use prompt::{interpret_look, LookPrompt, PromptMatch};
+pub use regions::{MaskData, TargetStatus};
 pub use story::{ShotGroup, StoryArc, SyncReport};
 
 /// A RAW/DNG file found while browsing a folder.
@@ -66,6 +69,11 @@ pub struct ImageInfo {
     pub capture: epikos_core::CaptureMetadata,
     /// Which sidecar the document was loaded from, if any.
     pub loaded_from: Option<String>,
+    /// Where the Step 1 lens profile comes from ("Camera (DNG)", "Lensfun: …"), if
+    /// there is one for this lens.
+    pub lens_profile: Option<String>,
+    /// A JPEG or PNG: no sensor data (and no enhanced-DNG export).
+    pub bitmap: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -95,6 +103,12 @@ pub struct MaskModels {
     pub models: Vec<ModelStatus>,
     /// The Step 6 depth model.
     pub depth: DepthModel,
+    /// The face-parsing model (eye and hair masks).
+    pub face: DepthModel,
+    /// Every Step 3 mask and whether it can be made with the installed models.
+    pub targets: Vec<TargetStatus>,
+    /// Lenses in the built-in Lensfun database.
+    pub lens_database: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,13 +122,36 @@ struct Loaded {
     raw: DecodedRaw,
     /// Binned camera-RGB preview bases, keyed by block size.
     bases: Mutex<Vec<(u32, Arc<ImageRgbF32>)>>,
-    /// Most recent mask of each kind, upright, at up to [`MASK_INPUT_SIDE`].
-    masks: Mutex<Vec<Arc<Mask>>>,
+    /// Step 3 masks, keyed by target and the geometry they were made for.
+    planes: Mutex<Vec<(String, Arc<regions::MaskData>)>>,
     /// Depth map and the lens geometry it was estimated for.
     depth: Mutex<Option<(String, Arc<DepthMap>)>>,
+    /// The lens profile: the camera's (DNG) or the database's, resolved once.
+    lens: OnceLock<Option<Arc<LensProfile>>>,
 }
 
 impl Loaded {
+    /// Steps 1–2 develop (lens profile included) at up to `side` px, for the models and
+    /// measurements.
+    fn develop_scene(&self, side: u32, adjustments: &Adjustments) -> Result<ImageRgbF32> {
+        let base = self.base(side, side);
+        let lens = self.lens_profile();
+        let inputs = LookInputs { lens: lens.as_deref(), ..Default::default() };
+        develop_rgb_with((*base).clone(), &self.raw.profile, &scene_only(adjustments), &inputs)
+    }
+
+    fn lens_profile(&self) -> Option<Arc<LensProfile>> {
+        self.lens
+            .get_or_init(|| {
+                self.raw
+                    .lens_profile
+                    .clone()
+                    .or_else(|| lensdb::lookup(&self.raw.metadata))
+                    .map(Arc::new)
+            })
+            .clone()
+    }
+
     fn base(&self, max_w: u32, max_h: u32) -> Arc<ImageRgbF32> {
         let block = block_for_size(&self.raw.mosaic, max_w, max_h);
         let mut bases = self.bases.lock().unwrap_or_else(PoisonError::into_inner);
@@ -181,6 +218,12 @@ impl Engine {
                 file: self.masker.depth_file().to_string_lossy().into_owned(),
                 available: self.masker.depth_available(),
             },
+            face: DepthModel {
+                file: self.masker.face_file().to_string_lossy().into_owned(),
+                available: self.masker.face_available(),
+            },
+            targets: self.mask_targets(),
+            lens_database: lensdb::lens_count(),
         }
     }
 
@@ -222,22 +265,27 @@ impl Engine {
             .ok()
     }
 
-    /// Run the `kind` model on the image as developed by `adjustments` (Steps 1–2
-    /// precede masking) and keep the result for later steps.
-    ///
-    /// The mask is upright and matches the preview's framing, at up to 1024 px.
-    pub fn detect_mask(
-        &self,
-        path: &Path,
-        adjustments: &Adjustments,
-        kind: MaskKind,
-    ) -> Result<Arc<Mask>> {
+    /// The Step 3 mask for `target` on the image as developed by `adjustments` (Steps
+    /// 1–2 precede masking), kept for later steps. Upright, matching the preview's
+    /// framing, at up to 1024 px.
+    pub fn detect_mask(&self, path: &Path, adjustments: &Adjustments, target: MaskTarget) -> Result<Arc<MaskData>> {
         let loaded = self.load(path)?;
-        let mask = Arc::new(self.segment(&loaded, adjustments, kind)?);
-        let mut masks = loaded.masks.lock().unwrap_or_else(PoisonError::into_inner);
-        masks.retain(|m| m.kind != kind);
-        masks.push(mask.clone());
-        Ok(mask)
+        let mask = self.mask_plane(&loaded, adjustments, target)?.ok_or_else(|| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("the {} mask needs a model that isn't installed (run scripts/fetch-models.sh)", target.label()),
+            ))
+        })?;
+        Ok(if target == MaskTarget::Background {
+            Arc::new(MaskData {
+                target,
+                data: mask.data.iter().map(|v| 1.0 - v).collect(),
+                infer_ms: 0,
+                ..(*mask).clone()
+            })
+        } else {
+            mask
+        })
     }
 
     fn segment(&self, loaded: &Loaded, adjustments: &Adjustments, kind: MaskKind) -> Result<Mask> {
@@ -251,15 +299,7 @@ impl Engine {
         self.masker.segment(kind, &image)
     }
 
-    /// The last mask of `kind` detected for `path`, if the image is still cached.
-    pub fn mask(&self, path: &Path, kind: MaskKind) -> Option<Arc<Mask>> {
-        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-        let (_, loaded) = cache.iter().find(|(p, _)| p == path)?;
-        let masks = loaded.masks.lock().unwrap_or_else(PoisonError::into_inner);
-        masks.iter().find(|m| m.kind == kind).cloned()
-    }
-
-    /// Supported RAW/DNG files directly inside `dir`, sorted by name.
+    /// Supported RAW, DNG, JPEG and PNG files directly inside `dir`, sorted by name.
     pub fn list_folder(&self, dir: &Path) -> Result<Vec<FileEntry>> {
         let mut entries = Vec::new();
         for entry in fs::read_dir(dir)? {
@@ -329,6 +369,8 @@ impl Engine {
             document,
             capture: raw.metadata.clone(),
             loaded_from: loaded_from.map(|p| p.to_string_lossy().into_owned()),
+            lens_profile: loaded.lens_profile().map(|l| l.source.clone()),
+            bitmap: p.format.is_bitmap(),
         })
     }
 
@@ -341,8 +383,42 @@ impl Engine {
         max_h: u32,
     ) -> Result<DisplayImage> {
         let loaded = self.load(path)?;
-        let depth = self.look_depth(&loaded, adjustments);
-        render_with(&loaded, adjustments, max_w, max_h, depth.as_deref())
+        let prepared = self.prepare(&loaded, adjustments)?;
+        render_with(&loaded, adjustments, max_w, max_h, &prepared)
+    }
+
+    /// Model outputs and the lens profile the develop of `adjustments` needs: depth for
+    /// fog and lights, and the Step 3 masks its settings refer to.
+    fn prepare(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Prepared> {
+        let depth = self.look_depth(loaded, adjustments);
+        let mut masks = Vec::new();
+        for target in look_masks(adjustments) {
+            if let Some(m) = self.mask_plane(loaded, adjustments, target)? {
+                masks.push(m);
+            }
+        }
+        Ok(Prepared { depth, masks, lens: loaded.lens_profile() })
+    }
+
+    /// Suggested exposure and Step 2 tone for the photo as it is set up in Step 1.
+    pub fn auto_tone(&self, path: &Path, adjustments: &Adjustments) -> Result<(f32, Tone)> {
+        let loaded = self.load(path)?;
+        let base = loaded.base(768, 768);
+        let neutral = Adjustments { exposure: 0.0, tone: Tone::default(), ..scene_only(adjustments) };
+        let lens = loaded.lens_profile();
+        let inputs = LookInputs { lens: lens.as_deref(), ..Default::default() };
+        let rgb = develop_rgb_with((*base).clone(), &loaded.raw.profile, &neutral, &inputs)?;
+        Ok(epikos_pipeline::auto_tone(&rgb))
+    }
+
+    /// Suggested straighten angle and vertical perspective (Step 1 auto-geometry).
+    pub fn auto_upright(&self, path: &Path, adjustments: &Adjustments) -> Result<(f32, f32)> {
+        let loaded = self.load(path)?;
+        let mut flat = adjustments.clone();
+        (flat.lens.rotation, flat.lens.vertical) = (0.0, 0.0);
+        let rgb = loaded.develop_scene(1024, &flat)?;
+        let lab = oklab_planes(&rgb);
+        Ok(estimate_upright(&lab.r, rgb.width as usize, rgb.height as usize))
     }
 
     /// Write the JSON sidecar (canonical) and, when safe, the XMP sidecar.
@@ -372,9 +448,14 @@ impl Engine {
         options: ExportOptions,
     ) -> Result<ExportReport> {
         let loaded = self.load(path)?;
-        let depth = self.look_depth(&loaded, adjustments);
-        let aux = self.export_channels(&loaded, adjustments, &options, depth.as_deref())?;
-        export::export(&loaded, adjustments, dest, options, depth.as_deref(), aux)
+        if options.format == ExportFormat::Dng && loaded.raw.profile.format.is_bitmap() {
+            return Err(Error::InvalidImage {
+                reason: "a JPEG or PNG has no sensor data for an enhanced DNG; export a TIFF or PSD".into(),
+            });
+        }
+        let prepared = self.prepare(&loaded, adjustments)?;
+        let aux = self.export_channels(&loaded, adjustments, &options, prepared.depth.as_deref())?;
+        export::export(&loaded, adjustments, dest, options, &prepared, aux)
     }
 
     /// Model outputs for the export's alpha channels (Step 8 handoff): subject and sky
@@ -388,21 +469,16 @@ impl Engine {
     ) -> Result<Vec<export::AuxPlane>> {
         let mut aux = Vec::new();
         if options.ai_masks {
-            let status = self.masker.status();
-            for kind in MaskKind::ALL {
-                if !status.iter().any(|s| s.kind == kind && s.available) {
-                    continue;
+            for target in [MaskTarget::Subject, MaskTarget::Sky, MaskTarget::Skin, MaskTarget::Eyes, MaskTarget::Hair] {
+                if let Some(mask) = self.mask_plane(loaded, adjustments, target)? {
+                    aux.push(export::AuxPlane {
+                        name: target.label().to_string(),
+                        width: mask.width,
+                        height: mask.height,
+                        data: mask.data.clone(),
+                    });
                 }
-                let mask = self.segment(loaded, adjustments, kind)?;
-                aux.push(export::AuxPlane {
-                    name: kind.label().to_string(),
-                    width: mask.width,
-                    height: mask.height,
-                    data: mask.alpha.iter().map(|&a| a as f32 / 255.0).collect(),
-                });
             }
-            let (w, h, skin) = self.skin_plane(loaded, adjustments)?;
-            aux.push(export::AuxPlane { name: "Skin".into(), width: w, height: h, data: skin });
         }
         if options.depth_channel && self.masker.depth_available() {
             let depth = match look_depth {
@@ -423,8 +499,7 @@ impl Engine {
     /// the subject, found as the centre of the detected skin.
     pub fn interpret_look(&self, path: &Path, prompt: &str, adjustments: &Adjustments) -> Result<LookPrompt> {
         let loaded = self.load(path)?;
-        let base = loaded.base(256, 256);
-        let rgb = develop_rgb_with((*base).clone(), &loaded.raw.profile, &scene_only(adjustments), &LookInputs::default())?;
+        let rgb = loaded.develop_scene(256, adjustments)?;
         let skin = skin_likelihood(&rgb);
         let (mut sx, mut sy, mut sw) = (0.0f32, 0.0f32, 0.0f32);
         for (i, &s) in skin.iter().enumerate() {
@@ -444,31 +519,19 @@ impl Engine {
     pub fn analyze(&self, path: &Path, adjustments: &Adjustments) -> Result<SceneAnalysis> {
         let started = std::time::Instant::now();
         let loaded = self.load(path)?;
-        let base = loaded.base(768, 768);
-        let rgb = develop_rgb_with(
-            (*base).clone(),
-            &loaded.raw.profile,
-            &scene_only(adjustments),
-            &LookInputs::default(),
-        )?;
+        let rgb = loaded.develop_scene(768, adjustments)?;
         let lab = oklab_planes(&rgb);
         let skin = skin_likelihood(&rgb);
         let (w, h) = (rgb.width, rgb.height);
-        let status = self.masker.status();
-        let mask = |kind: MaskKind| {
-            status
-                .iter()
-                .any(|s| s.kind == kind && s.available)
-                .then(|| {
-                    self.segment(&loaded, adjustments, kind).ok().map(|m| {
-                        let a: Vec<f32> = m.alpha.iter().map(|&v| v as f32 / 255.0).collect();
-                        analysis::fit(&a, m.width, m.height, w, h)
-                    })
-                })?
+        let mask = |target: MaskTarget| {
+            self.mask_plane(&loaded, adjustments, target)
+                .ok()
+                .flatten()
+                .map(|m| analysis::fit(&m.data, m.width, m.height, w, h))
         };
         let planes = analysis::Planes {
-            subject: mask(MaskKind::Subject),
-            sky: mask(MaskKind::Sky),
+            subject: mask(MaskTarget::Subject),
+            sky: mask(MaskTarget::Sky),
             depth: self
                 .masker
                 .depth_available()
@@ -573,13 +636,7 @@ impl Engine {
 
     fn frame_stats(&self, path: &Path, adjustments: &Adjustments) -> Result<story::FrameStats> {
         let loaded = self.load(path)?;
-        let base = loaded.base(384, 384);
-        let rgb = develop_rgb_with(
-            (*base).clone(),
-            &loaded.raw.profile,
-            &scene_only(adjustments),
-            &LookInputs::default(),
-        )?;
+        let rgb = loaded.develop_scene(384, adjustments)?;
         let lab = oklab_planes(&rgb);
         let skin = skin_likelihood(&rgb);
         let n = rgb.len();
@@ -612,8 +669,7 @@ impl Engine {
 
     /// Skin likelihood of the scene (Steps 1–2) at mask resolution.
     fn skin_plane(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<(u32, u32, Vec<f32>)> {
-        let base = loaded.base(MASK_INPUT_SIDE, MASK_INPUT_SIDE);
-        let rgb = develop_rgb_with((*base).clone(), &loaded.raw.profile, &scene_only(adjustments), &LookInputs::default())?;
+        let rgb = loaded.develop_scene(MASK_INPUT_SIDE, adjustments)?;
         Ok((rgb.width, rgb.height, skin_likelihood(&rgb)))
     }
 
@@ -644,8 +700,9 @@ impl Engine {
         let loaded = Arc::new(Loaded {
             raw: decode_file(path)?,
             bases: Mutex::new(Vec::new()),
-            masks: Mutex::new(Vec::new()),
+            planes: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
+            lens: OnceLock::new(),
         });
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         cache.retain(|(p, _)| p != path);
@@ -655,8 +712,10 @@ impl Engine {
     }
 }
 
+/// A develop with the lens profile but no model outputs (what the models themselves see).
 fn render(loaded: &Loaded, adjustments: &Adjustments, max_w: u32, max_h: u32) -> Result<DisplayImage> {
-    render_with(loaded, adjustments, max_w, max_h, None)
+    let prepared = Prepared { depth: None, masks: Vec::new(), lens: loaded.lens_profile() };
+    render_with(loaded, adjustments, max_w, max_h, &prepared)
 }
 
 fn render_with(
@@ -664,21 +723,40 @@ fn render_with(
     adjustments: &Adjustments,
     max_w: u32,
     max_h: u32,
-    depth: Option<&DepthMap>,
+    prepared: &Prepared,
 ) -> Result<DisplayImage> {
     let base = loaded.base(max_w, max_h);
-    let inputs = look_inputs(depth);
-    let developed = develop_rgb_with((*base).clone(), &loaded.raw.profile, adjustments, &inputs)?;
+    let developed = prepared.with_inputs(|inputs| {
+        develop_rgb_with((*base).clone(), &loaded.raw.profile, adjustments, inputs)
+    })?;
     Ok(to_display_srgb(&developed))
 }
 
-pub(crate) fn look_inputs(depth: Option<&DepthMap>) -> LookInputs<'_> {
-    LookInputs {
-        depth: depth.map(|d| DepthPlane {
-            width: d.width,
-            height: d.height,
-            data: &d.depth,
-        }),
+/// Per-image inputs for one develop.
+pub(crate) struct Prepared {
+    pub depth: Option<Arc<DepthMap>>,
+    pub masks: Vec<Arc<MaskData>>,
+    pub lens: Option<Arc<LensProfile>>,
+}
+
+impl Prepared {
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self { depth: None, masks: Vec::new(), lens: None }
+    }
+
+    pub(crate) fn with_inputs<R>(&self, f: impl FnOnce(&LookInputs) -> R) -> R {
+        let planes: Vec<MaskPlane> = self
+            .masks
+            .iter()
+            .map(|m| MaskPlane { target: m.target, width: m.width, height: m.height, data: &m.data })
+            .collect();
+        let inputs = LookInputs {
+            depth: self.depth.as_deref().map(|d| DepthPlane { width: d.width, height: d.height, data: &d.depth }),
+            masks: &planes,
+            lens: self.lens.as_deref(),
+        };
+        f(&inputs)
     }
 }
 
@@ -686,9 +764,13 @@ pub(crate) fn look_inputs(depth: Option<&DepthMap>) -> LookInputs<'_> {
 /// golden style would only make sky, subject and depth harder to read.
 pub(crate) fn scene_only(adjustments: &Adjustments) -> Adjustments {
     Adjustments {
+        local: Vec::new(),
         texture: Default::default(),
         color: Default::default(),
         atmosphere: Default::default(),
+        curves: Default::default(),
+        split_toning: Default::default(),
+        finishing: Default::default(),
         style: Default::default(),
         ..adjustments.clone()
     }
@@ -775,8 +857,9 @@ mod tests {
                 lens_profile: None,
             },
             bases: Mutex::new(Vec::new()),
-            masks: Mutex::new(Vec::new()),
+            planes: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
+            lens: OnceLock::new(),
         }
     }
 
@@ -827,7 +910,7 @@ mod tests {
         assert!(engine.mask_models().models.iter().all(|m| !m.available));
         let raw = dir.join("x.ARW");
         assert!(engine
-            .detect_mask(&raw, &Adjustments::default(), MaskKind::Sky)
+            .detect_mask(&raw, &Adjustments::default(), MaskTarget::Sky)
             .is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -865,7 +948,7 @@ mod tests {
         let dest = dir.join("out.tif");
         let loaded = synthetic_loaded(64, 48);
         let report =
-            export::export(&loaded, &Adjustments::default(), &dest, prophoto(), None, Vec::new()).unwrap();
+            export::export(&loaded, &Adjustments::default(), &dest, prophoto(), &Prepared::empty(), Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (64, 48));
         assert!(!dir.join("out.tif.partial").exists());
 
@@ -897,7 +980,7 @@ mod tests {
             &Adjustments::default(),
             &dest,
             ExportOptions::default(),
-            None,
+            &Prepared::empty(),
             aux,
         )
         .unwrap();
@@ -951,7 +1034,7 @@ mod tests {
         let loaded = synthetic_loaded(64, 48);
         let options = ExportOptions { format: ExportFormat::Psd, ..ExportOptions::default() };
         let report =
-            export::export(&loaded, &Adjustments::default(), &dest, options, None, subject_plane()).unwrap();
+            export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), subject_plane()).unwrap();
         assert_eq!(report.alpha_channels, ["Subject"]);
 
         let d = fs::read(&dest).unwrap();
@@ -1021,7 +1104,7 @@ mod tests {
         for include_location in [true, false] {
             let dest = dir.join(format!("meta-{include_location}.psd"));
             let options = ExportOptions { format: ExportFormat::Psd, include_location, ..ExportOptions::default() };
-            let report = export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+            let report = export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
             assert!(report.wrote_exif);
             assert_eq!(report.wrote_location, include_location);
             let d = fs::read(&dest).unwrap();
@@ -1046,7 +1129,7 @@ mod tests {
         for include_location in [true, false] {
             let dest = dir.join(format!("gps-{include_location}.dng"));
             let options = ExportOptions { format: ExportFormat::Dng, include_location, ..ExportOptions::default() };
-            let report = export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+            let report = export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
             assert_eq!(report.wrote_location, include_location);
             // Our own decoder reads the position back, as any reader following the link would.
             let raw = epikos_decode::decode_file(&dest).unwrap();
@@ -1069,7 +1152,7 @@ mod tests {
         let loaded = synthetic_loaded(64, 48);
         let options = ExportOptions { format: ExportFormat::Dng, ..ExportOptions::default() };
         let report =
-            export::export(&loaded, &Adjustments::default(), &dest, options, None, subject_plane()).unwrap();
+            export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), subject_plane()).unwrap();
         assert_eq!(report.format, ExportFormat::Dng);
         let raw = epikos_decode::decode_file(&dest).unwrap();
         assert_eq!((raw.mosaic.width, raw.mosaic.height), (64, 48));
@@ -1084,7 +1167,7 @@ mod tests {
         let dir = temp_dir("export-ext");
         let loaded = synthetic_loaded(16, 16);
         let options = ExportOptions { format: ExportFormat::Psd, ..ExportOptions::default() };
-        let err = export::export(&loaded, &Adjustments::default(), &dir.join("x.tif"), options, None, Vec::new())
+        let err = export::export(&loaded, &Adjustments::default(), &dir.join("x.tif"), options, &Prepared::empty(), Vec::new())
             .unwrap_err()
             .to_string();
         assert!(err.contains(".psd"), "{err}");
@@ -1098,7 +1181,7 @@ mod tests {
         let loaded = synthetic_loaded(64, 48);
         let options = ExportOptions { long_edge: Some(32), ..ExportOptions::default() };
         let report =
-            export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+            export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (32, 24));
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1136,7 +1219,7 @@ mod tests {
                 ..ExportOptions::default()
             };
             let report =
-                export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+                export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
             assert_eq!(report.wrote_location, include_location);
 
             let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
@@ -1178,10 +1261,10 @@ mod tests {
         loaded.raw.source_path = raw.to_string_lossy().into_owned();
         let adj = Adjustments::default();
         assert!(
-            export::export(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), None, Vec::new())
+            export::export(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), &Prepared::empty(), Vec::new())
                 .is_err()
         );
-        assert!(export::export(&loaded, &adj, &raw, ExportOptions::default(), None, Vec::new()).is_err());
+        assert!(export::export(&loaded, &adj, &raw, ExportOptions::default(), &Prepared::empty(), Vec::new()).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 

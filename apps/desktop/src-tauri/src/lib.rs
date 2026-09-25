@@ -11,10 +11,10 @@ mod handoff;
 
 use epikos_core::CameraFormat;
 use epikos_engine::{
-    dev_models_dir, env_models_dir, Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, MaskKind,
-    MaskModels, Masker, SaveReport, StyleInfo,
+    dev_models_dir, env_models_dir, Engine, ExportOptions, ExportReport, FileEntry, ImageInfo, MaskModels,
+    Masker, SaveReport, StyleInfo,
 };
-use epikos_sidecar::{Adjustments, DevelopDocument};
+use epikos_sidecar::{Adjustments, DevelopDocument, MaskTarget, Tone};
 use tauri::ipc::Response;
 use tauri::{Manager, State};
 
@@ -205,26 +205,60 @@ async fn detect_mask(
     engine: EngineState<'_>,
     path: String,
     adjustments: Adjustments,
-    kind: MaskKind,
+    kind: MaskTarget,
 ) -> CmdResult<Response> {
     let path = raw_path(&path)?;
     let engine = engine.inner().clone();
     let mask = blocking(move || engine.detect_mask(&path, &adjustments, kind)).await?;
+    let alpha = mask.alpha();
 
-    let mut out = Vec::with_capacity(12 + mask.alpha.len());
+    let mut out = Vec::with_capacity(12 + alpha.len());
     out.extend_from_slice(&mask.width.to_le_bytes());
     out.extend_from_slice(&mask.height.to_le_bytes());
     out.extend_from_slice(&(mask.infer_ms.min(u32::MAX as u64) as u32).to_le_bytes());
-    out.extend_from_slice(&mask.alpha);
+    out.extend_from_slice(&alpha);
     Ok(Response::new(out))
 }
 
-/// Only existing RAW/DNG files may be opened, and sidecars are only written next to them.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoTone {
+    exposure: f32,
+    tone: Tone,
+}
+
+/// Step 2 Auto: exposure and tone suggestions for the photo as set up in Step 1.
+#[tauri::command]
+async fn auto_tone(engine: EngineState<'_>, path: String, adjustments: Adjustments) -> CmdResult<AutoTone> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    let (exposure, tone) = blocking(move || engine.auto_tone(&path, &adjustments)).await?;
+    Ok(AutoTone { exposure, tone })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoUpright {
+    rotation: f32,
+    vertical: f32,
+}
+
+/// Step 1 auto-geometry: straighten angle and vertical perspective.
+#[tauri::command]
+async fn auto_upright(engine: EngineState<'_>, path: String, adjustments: Adjustments) -> CmdResult<AutoUpright> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    let (rotation, vertical) = blocking(move || engine.auto_upright(&path, &adjustments)).await?;
+    Ok(AutoUpright { rotation, vertical })
+}
+
+/// Only existing RAW, DNG, JPEG and PNG files may be opened, and sidecars are only
+/// written next to them.
 fn raw_path(path: &str) -> CmdResult<PathBuf> {
     let p = PathBuf::from(path);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
     if CameraFormat::from_extension(ext) == CameraFormat::Unknown {
-        return Err(format!("not a supported RAW/DNG file: {path}"));
+        return Err(format!("not a supported RAW, DNG, JPEG or PNG file: {path}"));
     }
     if !p.is_file() {
         return Err(format!("file not found: {path}"));
@@ -330,7 +364,9 @@ pub fn run() {
             analyze_image,
             story_arc,
             sync_look,
-            undo_sync
+            undo_sync,
+            auto_tone,
+            auto_upright
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

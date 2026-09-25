@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use epikos_core::{CaptureMetadata, Error, GpsInfo, Result};
-use epikos_masks::DepthMap;
 use epikos_core::{resize_plane, ImageRgbF32};
 use epikos_pipeline::{develop_adjustments_with, encode_rgb16, fit_to_image, OutputSpace};
 use epikos_sidecar::Adjustments;
@@ -93,8 +92,8 @@ pub(crate) struct AuxPlane {
     pub data: Vec<f32>,
 }
 
-/// At most this many extra channels (subject, sky, skin, depth).
-const MAX_EXTRA: usize = 4;
+/// At most this many extra channels (subject, sky, skin, eyes, hair, depth).
+const MAX_EXTRA: usize = 6;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,7 +118,7 @@ pub(crate) fn export(
     adjustments: &Adjustments,
     dest: &Path,
     options: ExportOptions,
-    depth: Option<&DepthMap>,
+    prepared: &crate::Prepared,
     aux: Vec<AuxPlane>,
 ) -> Result<ExportReport> {
     let format = options.format;
@@ -141,12 +140,15 @@ pub(crate) fn export(
     }
 
     let t = Instant::now();
-    // The DNG carries the scene, not the look (the reader applies its own rendering).
+    // The DNG carries the scene (lens-corrected, since it has no opcodes of its own),
+    // not the look: the reader applies its own rendering.
     let rgb = if format == ExportFormat::Dng {
-        develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &crate::scene_only(adjustments), &Default::default())?
+        let scene = crate::Prepared { depth: None, masks: Vec::new(), lens: prepared.lens.clone() };
+        scene.with_inputs(|inputs| {
+            develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &crate::scene_only(adjustments), inputs)
+        })?
     } else {
-        let inputs = crate::look_inputs(depth);
-        develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, &inputs)?
+        prepared.with_inputs(|inputs| develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, inputs))?
     };
     let rgb = match options.long_edge {
         Some(edge) => downsize(rgb, edge),

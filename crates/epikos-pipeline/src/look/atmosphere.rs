@@ -133,8 +133,15 @@ pub(crate) fn percentile(v: &[f32], p: f32) -> f32 {
     *s.select_nth_unstable_by(k, f32::total_cmp).1
 }
 
-/// `depth` (1 = near, 0 = far) is at the image's size when given.
-pub(crate) fn apply_atmosphere(rgb: &mut ImageRgbF32, p: &AtmosphereParams, depth: Option<&[f32]>) {
+/// `depth` (1 = near, 0 = far) is at the image's size when given. With `glow_mask`
+/// (the subject), only that region glows, and from a lower brightness so a subject in
+/// ordinary light still gets a bloom.
+pub(crate) fn apply_atmosphere(
+    rgb: &mut ImageRgbF32,
+    p: &AtmosphereParams,
+    depth: Option<&[f32]>,
+    glow_mask: Option<&[f32]>,
+) {
     let (w, h) = (rgb.width as usize, rgb.height as usize);
     if p.is_neutral() || w < 4 || h < 4 {
         return;
@@ -142,7 +149,10 @@ pub(crate) fn apply_atmosphere(rgb: &mut ImageRgbF32, p: &AtmosphereParams, dept
     let y = luminance(rgb);
 
     let bloom = (p.glow > 0.0).then(|| {
-        let bright: Vec<f32> = y.par_iter().map(|&v| v * smoothstep(0.25, 1.0, v)).collect();
+        let bright: Vec<f32> = match glow_mask {
+            Some(m) => y.par_iter().zip(m.par_iter()).map(|(&v, &m)| m * v * smoothstep(0.05, 0.6, v)).collect(),
+            None => y.par_iter().map(|&v| v * smoothstep(0.25, 1.0, v)).collect(),
+        };
         let r = (p.glow_radius * long_side(w, h)).round().max(2.0) as usize;
         smooth(&bright, w, h, r, 3)
     });
@@ -272,7 +282,7 @@ mod tests {
         }
         let near = img.index(110, 100);
         let p = AtmosphereParams { glow: 1.0, glow_warmth: 1.0, haze: 1.0, ..Default::default() };
-        apply_atmosphere(&mut img, &p, None);
+        apply_atmosphere(&mut img, &p, None, None);
         assert!(img.r[near] > 0.03, "no bloom: {}", img.r[near]);
         assert!(img.r[near] > img.b[near], "bloom not warm");
         assert!(img.g[img.index(0, 0)] > 0.02, "black not lifted");
@@ -289,7 +299,7 @@ mod tests {
         let depth: Vec<f32> = (0..img.len()).map(|i| if i % 64 < 32 { 1.0 } else { 0.0 }).collect();
         let p = AtmosphereParams { fog: 1.0, fog_start: 0.0, ..Default::default() };
         let (near, far) = (img.index(10, 20), img.index(50, 20));
-        apply_atmosphere(&mut img, &p, Some(&depth));
+        apply_atmosphere(&mut img, &p, Some(&depth), None);
         assert!((img.g[near] - 0.02).abs() < 1e-4, "near fogged: {}", img.g[near]);
         assert!(img.g[far] > 0.2, "far not fogged: {}", img.g[far]);
     }
@@ -315,7 +325,7 @@ mod tests {
             ..Default::default()
         };
         let before = img.clone();
-        apply_atmosphere(&mut img, &p, None);
+        apply_atmosphere(&mut img, &p, None, None);
         let gain = |x: u32, y: u32| img.g[img.index(x, y)] - before.g[before.index(x, y)];
         // Below the sky, rays light the ground either side of the post's shadow.
         assert!(gain(70, 120) > 0.02, "no rays: {}", gain(70, 120));

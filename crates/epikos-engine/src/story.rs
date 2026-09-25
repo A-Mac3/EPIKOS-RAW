@@ -5,9 +5,10 @@
 //!   group starts at a long time gap, a change of light (scene brightness from the
 //!   exposure settings, or colour cast), or a change of place (GPS). Each group gets a
 //!   hero frame (the one closest to the group's average) and a hero palette.
-//! - **Hero sync with per-frame calibration**: the hero's look (Steps 4–8 and style)
-//!   is copied to every frame in the group, while each frame keeps its own white
-//!   balance, lens and noise settings and is adapted individually: exposure is matched
+//! - **Hero sync with per-frame calibration**: the hero's look (Step 2 contrast and
+//!   colour, Step 3 mask edits, Steps 4–8 and style) is copied to every frame in the
+//!   group, while each frame keeps its own white balance, lens, framing and noise
+//!   settings and is adapted individually: exposure is matched
 //!   on skin (or the whole frame), the hero's white-balance *shift* is carried over,
 //!   skin protection rises for frames with more skin, and micro-contrast is scaled to
 //!   each frame's own detail. Every changed sidecar is backed up so a sync can be undone.
@@ -402,6 +403,15 @@ pub(crate) fn synced_adjustments(
     a.split_toning = hero.split_toning;
     a.finishing = hero.finishing;
     a.style = hero.style.clone();
+    // Step 2's look (contrast, ends, colour) travels; highlight and shadow recovery are
+    // about each frame's own light, and straightening about its own framing.
+    a.tone.contrast = hero.tone.contrast;
+    a.tone.whites = hero.tone.whites;
+    a.tone.blacks = hero.tone.blacks;
+    a.tone.vibrance = hero.tone.vibrance;
+    a.tone.saturation = hero.tone.saturation;
+    // Step 3 edits name a region ("eyes", "background"), which each frame finds itself.
+    a.local = hero.local.clone();
 
     // Exposure: bring the frame's key (skin, else the whole frame) to the hero's.
     let delta = (hero_stats.key_ev - target_stats.key_ev).clamp(-2.0, 2.0);

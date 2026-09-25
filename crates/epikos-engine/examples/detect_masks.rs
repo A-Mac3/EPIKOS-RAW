@@ -1,12 +1,13 @@
-//! Run the Step 3 subject and sky models on a RAW and write the preview plus each mask
-//! (as a greyscale PNG and a red overlay) to disk, with timings.
+//! Make every Step 3 mask the installed models allow (subject, background, sky, skin,
+//! eyes, hair, foreground) for a photo and write the preview plus each mask (as a
+//! greyscale PNG and a red overlay) to disk, with timings.
 //!
 //! cargo run --release -p epikos-engine --example detect_masks -- <RAW> <OUT_DIR>
 
 use std::path::PathBuf;
 use std::time::Instant;
 
-use epikos_engine::{Engine, MaskKind};
+use epikos_engine::Engine;
 use epikos_sidecar::Adjustments;
 
 fn main() {
@@ -27,14 +28,20 @@ fn main() {
         .unwrap();
     println!("{} {} {}×{}", info.make, info.model, info.width, info.height);
 
-    for kind in MaskKind::ALL {
+    println!("lens profile: {:?}", info.lens_profile);
+    for status in engine.mask_models().targets {
+        let kind = status.target;
+        if !status.available {
+            println!("{:<10} not available ({})", kind.label(), status.source);
+            continue;
+        }
         for run in ["first", "warm"] {
             let t = Instant::now();
             let mask = engine
                 .detect_mask(&raw, &adj, kind)
                 .unwrap_or_else(|e| panic!("{kind:?}: {e}"));
             println!(
-                "{:<8} {run:<5} {:>6} ms total  {:>5} ms inference  {}×{}  coverage {:.1}%",
+                "{:<10} {run:<5} {:>6} ms total  {:>5} ms inference  {}×{}  coverage {:.1}%",
                 kind.label(),
                 t.elapsed().as_millis(),
                 mask.infer_ms,
@@ -46,14 +53,14 @@ fn main() {
                 continue;
             }
             let name = kind.label().to_lowercase();
-            image::GrayImage::from_raw(mask.width, mask.height, mask.alpha.clone())
+            image::GrayImage::from_raw(mask.width, mask.height, mask.alpha())
                 .unwrap()
                 .save(out.join(format!("{stem}_{name}.png")))
                 .unwrap();
             // Red overlay on the preview, as the app shows it.
             if (mask.width, mask.height) == (preview.width, preview.height) {
                 let mut rgba = preview.rgba.clone();
-                for (px, &a) in rgba.chunks_mut(4).zip(&mask.alpha) {
+                for (px, &a) in rgba.chunks_mut(4).zip(&mask.alpha()) {
                     let t = 0.55 * a as f32 / 255.0;
                     px[0] = (px[0] as f32 * (1.0 - t) + 255.0 * t) as u8;
                     px[1] = (px[1] as f32 * (1.0 - t) + 40.0 * t) as u8;

@@ -79,6 +79,7 @@ fn texture(clarity: f32, micro: f32, blemish: f32, specular: f32) -> TexturePara
         micro: micro / 100.0,
         blemish: blemish / 100.0,
         specular: specular / 100.0,
+        lines: 0.0,
     }
 }
 
