@@ -271,7 +271,7 @@ export default function App() {
             className="btn primary-outline"
             disabled={!info}
             onClick={() => setExportOpen(true)}
-            title="Export full-resolution 16-bit TIFF (⌘E)"
+            title="Export TIFF, layered PSD or enhanced DNG (⌘E)"
           >
             Export…
           </button>

@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Adjustments,
   DevelopDocument,
+  ExportFormat,
   ExportOptions,
   ExportReport,
   FileEntry,
@@ -23,22 +24,25 @@ export async function pickFolder(): Promise<string | null> {
   return typeof dir === "string" ? dir : null;
 }
 
-/** Native save dialog for a TIFF export; `null` if cancelled. */
-export async function pickExportPath(defaultPath: string): Promise<string | null> {
-  const dest = await save({
-    title: "Export 16-bit TIFF",
-    defaultPath,
-    filters: [{ name: "TIFF image", extensions: ["tif", "tiff"] }],
-  });
+const SAVE_FILTER: Record<ExportFormat, { title: string; name: string; extensions: string[] }> = {
+  tiff: { title: "Export 16-bit TIFF", name: "TIFF image", extensions: ["tif", "tiff"] },
+  psd: { title: "Export layered PSD", name: "Photoshop document", extensions: ["psd"] },
+  dng: { title: "Export enhanced DNG", name: "DNG raw", extensions: ["dng"] },
+};
+
+/** Native save dialog for an export; `null` if cancelled. */
+export async function pickExportPath(defaultPath: string, format: ExportFormat): Promise<string | null> {
+  const f = SAVE_FILTER[format];
+  const dest = await save({ title: f.title, defaultPath, filters: [{ name: f.name, extensions: f.extensions }] });
   return dest ?? null;
 }
 
-export const exportTiff = (
+export const exportImage = (
   path: string,
   adjustments: Adjustments,
   dest: string,
   options: ExportOptions,
-) => invoke<ExportReport>("export_tiff", { path, adjustments, dest, options });
+) => invoke<ExportReport>("export_image", { path, adjustments, dest, options });
 
 export const listFolder = (dir: string) => invoke<FileEntry[]>("list_folder", { dir });
 

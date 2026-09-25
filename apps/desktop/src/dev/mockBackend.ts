@@ -57,11 +57,12 @@ export function installMockBackend() {
         return FOLDER;
       case "plugin:dialog|save":
         return (a.options as { defaultPath?: string } | undefined)?.defaultPath ?? `${FOLDER}/export.tif`;
-      case "export_tiff":
+      case "export_image":
         await new Promise((r) => setTimeout(r, 900));
         console.info("[mock] export", a);
         return {
           path: a.dest,
+          format: (a.options as { format: string }).format,
           width: 7728,
           height: 5152,
           colorSpace: (a.options as { colorSpace: string }).colorSpace,

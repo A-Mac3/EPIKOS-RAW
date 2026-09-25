@@ -9,7 +9,7 @@ mod xmp;
 
 pub use document::{
     Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
-    DemosaicMode, DevelopDocument, DistortionCoeffs, HslBands, HslChannel, LensCorrections,
+    DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
     NoiseReduction, SourceRef, SplitToning, StyleRef, Texture, ToneCurve, WbMode, WhiteBalance,
 };
 pub use json::{load_json, save_json, sidecar_json_path};

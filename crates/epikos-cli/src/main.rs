@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use epikos_core::{ImageRgbF32, Result};
 use epikos_decode::decode_file;
-use epikos_engine::{Engine, ExportOptions, OutputSpace};
+use epikos_engine::{Engine, ExportFormat, ExportOptions, OutputSpace};
 use epikos_pipeline::develop;
 use epikos_sidecar::{
     load_json, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, DevelopDocument, SourceRef,
@@ -32,7 +32,7 @@ enum Commands {
         #[arg(long)]
         sidecar: Option<PathBuf>,
     },
-    /// Export a full-resolution 16-bit TIFF with embedded ICC profile.
+    /// Export a full-resolution 16-bit TIFF, layered PSD or enhanced DNG (by extension).
     Export {
         path: PathBuf,
         #[arg(short, long)]
@@ -88,7 +88,14 @@ fn run() -> Result<()> {
             depth,
             long_edge,
         } => {
+            let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             let options = ExportOptions {
+                // From the output name: .psd (layered), .dng (enhanced), else TIFF.
+                format: match ext.as_str() {
+                    "psd" => ExportFormat::Psd,
+                    "dng" => ExportFormat::Dng,
+                    _ => ExportFormat::Tiff,
+                },
                 color_space: match space {
                     Space::Srgb => OutputSpace::Srgb,
                     Space::P3 => OutputSpace::DisplayP3,
@@ -169,9 +176,10 @@ fn export_cmd(path: &Path, out: &Path, ev: Option<f32>, options: ExportOptions) 
     if let Some(ev) = ev {
         adjustments.exposure = ev;
     }
-    let r = engine.export_tiff(path, &adjustments, out, options)?;
+    let r = engine.export(path, &adjustments, out, options)?;
     println!(
-        "exported {}×{} {} → {} ({:.1} MB; develop {} ms, write {} ms)",
+        "exported {} {}×{} {} → {} ({:.1} MB; develop {} ms, write {} ms)",
+        r.format.label(),
         r.width,
         r.height,
         r.color_space,

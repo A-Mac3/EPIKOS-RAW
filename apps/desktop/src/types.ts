@@ -99,6 +99,8 @@ export interface ToneCurve {
   highlights: number;
   black: number;
   white: number;
+  /** Free-form point curve after the parametric one: [input, output] in 0…1. */
+  points: [number, number][];
 }
 
 export const CURVE_CHANNELS = ["rgb", "red", "green", "blue"] as const;
@@ -112,6 +114,18 @@ export interface SplitToning {
   shadowHue: number;
   shadowSaturation: number;
   balance: number;
+}
+
+/** Step 8. Grain 0…100; vignette −100 (darken) … 100 (lighten). */
+export interface Finishing {
+  grain: number;
+  grainSize: number;
+  grainRoughness: number;
+  vignette: number;
+  vignetteMidpoint: number;
+  vignetteFeather: number;
+  /** −100 follows the frame … 100 circle. */
+  vignetteRoundness: number;
 }
 
 /** Parametric style layered on the manual Step 4–6 settings. `id` empty = none. */
@@ -145,6 +159,7 @@ export interface Adjustments {
   atmosphere: Atmosphere;
   curves: Curves;
   splitToning: SplitToning;
+  finishing: Finishing;
   style: StyleRef;
 }
 
@@ -184,7 +199,11 @@ export interface CaptureMetadata {
   gps: { latitude: Ratio[] | null; longitude: Ratio[] | null } | null;
 }
 
+export type ExportFormat = "tiff" | "psd" | "dng";
+
 export interface ExportOptions {
+  format: ExportFormat;
+  /** TIFF and PSD; a DNG is always linear Rec.2020. */
   colorSpace: OutputSpace;
   includeLocation: boolean;
   /** Subject, sky and skin masks as named alpha channels (Photoshop). */
@@ -233,6 +252,7 @@ export type OutputSpace = "srgb" | "displayP3" | "proPhoto";
 
 export interface ExportReport {
   path: string;
+  format: ExportFormat;
   width: number;
   height: number;
   colorSpace: string;
@@ -303,12 +323,21 @@ export function defaultAdjustments(): Adjustments {
       blue: defaultToneCurve(),
     },
     splitToning: { highlightHue: 40, highlightSaturation: 0, shadowHue: 215, shadowSaturation: 0, balance: 0 },
+    finishing: {
+      grain: 0,
+      grainSize: 25,
+      grainRoughness: 50,
+      vignette: 0,
+      vignetteMidpoint: 50,
+      vignetteFeather: 50,
+      vignetteRoundness: 0,
+    },
     style: { id: "", amount: 100, skinProtection: 0 },
   };
 }
 
 export function defaultToneCurve(): ToneCurve {
-  return { shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0 };
+  return { shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0, points: [] };
 }
 
 export function defaultAtmosphere(): Atmosphere {

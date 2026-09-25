@@ -51,16 +51,89 @@ fn shape(c: &ToneCurve, x: f32) -> f32 {
     lo + y.clamp(0.0, 1.0) * (hi - lo)
 }
 
-/// Monotonic lookup table of `c` on [0, 1].
+/// Lookup table of `c` on [0, 1]: the parametric curve, then the point curve.
 fn table(c: &ToneCurve) -> Vec<f32> {
     let mut out: Vec<f32> = (0..LUT_SIZE)
         .map(|i| shape(c, i as f32 / (LUT_SIZE - 1) as f32))
         .collect();
-    // A curve that turns back on itself would solarise; hold it flat instead.
+    // A parametric curve that turns back on itself would solarise; hold it flat.
     for i in 1..out.len() {
         out[i] = out[i].max(out[i - 1]);
     }
+    // The point curve is drawn by hand: a deliberate inversion is allowed.
+    if let Some(spline) = PointCurve::new(&c.points) {
+        out.iter_mut().for_each(|v| *v = spline.eval(*v));
+    }
     out
+}
+
+/// Free-form curve through control points: monotone cubic Hermite (Fritsch & Carlson
+/// 1980), so it never overshoots between points. Corners at (0, 0) and (1, 1) are
+/// implied when the points don't reach the ends.
+pub(crate) struct PointCurve {
+    xs: Vec<f32>,
+    ys: Vec<f32>,
+    ms: Vec<f32>,
+}
+
+impl PointCurve {
+    /// `None` for the identity (no points, or all on the diagonal).
+    pub(crate) fn new(points: &[[f32; 2]]) -> Option<Self> {
+        let mut pts: Vec<[f32; 2]> = points
+            .iter()
+            .filter(|p| p[0].is_finite() && p[1].is_finite())
+            .map(|p| p.map(|v| v.clamp(0.0, 1.0)))
+            .collect();
+        if pts.iter().all(|[x, y]| (x - y).abs() < 1e-6) {
+            return None;
+        }
+        pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        pts.dedup_by(|b, a| (b[0] - a[0]).abs() < 1e-4);
+        if pts[0][0] > 0.0 {
+            pts.insert(0, [0.0, 0.0]);
+        }
+        if pts[pts.len() - 1][0] < 1.0 {
+            pts.push([1.0, 1.0]);
+        }
+        let xs: Vec<f32> = pts.iter().map(|p| p[0]).collect();
+        let ys: Vec<f32> = pts.iter().map(|p| p[1]).collect();
+        let n = xs.len();
+        let d: Vec<f32> = (0..n - 1).map(|k| (ys[k + 1] - ys[k]) / (xs[k + 1] - xs[k])).collect();
+        let mut ms = vec![0.0; n];
+        ms[0] = d[0];
+        ms[n - 1] = d[n - 2];
+        for k in 1..n - 1 {
+            ms[k] = if d[k - 1] * d[k] <= 0.0 { 0.0 } else { 0.5 * (d[k - 1] + d[k]) };
+        }
+        for k in 0..n - 1 {
+            if d[k] == 0.0 {
+                ms[k] = 0.0;
+                ms[k + 1] = 0.0;
+                continue;
+            }
+            let (a, b) = (ms[k] / d[k], ms[k + 1] / d[k]);
+            let h = a * a + b * b;
+            if h > 9.0 {
+                let t = 3.0 / h.sqrt();
+                ms[k] = t * a * d[k];
+                ms[k + 1] = t * b * d[k];
+            }
+        }
+        Some(Self { xs, ys, ms })
+    }
+
+    pub(crate) fn eval(&self, x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
+        let k = self.xs.partition_point(|&v| v <= x).clamp(1, self.xs.len() - 1) - 1;
+        let h = self.xs[k + 1] - self.xs[k];
+        let t = (x - self.xs[k]) / h;
+        let (t2, t3) = (t * t, t * t * t);
+        let y = (2.0 * t3 - 3.0 * t2 + 1.0) * self.ys[k]
+            + (t3 - 2.0 * t2 + t) * h * self.ms[k]
+            + (-2.0 * t3 + 3.0 * t2) * self.ys[k + 1]
+            + (t3 - t2) * h * self.ms[k + 1];
+        y.clamp(0.0, 1.0)
+    }
 }
 
 fn lookup(lut: &[f32], e: f32) -> f32 {
@@ -190,6 +263,26 @@ mod tests {
             ..Default::default()
         };
         assert!((shape(&faded, 1.0) - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn point_curve_passes_through_its_points_without_overshoot() {
+        let pts = [[0.0, 0.0], [0.25, 0.15], [0.5, 0.5], [0.75, 0.85], [1.0, 1.0]];
+        let c = PointCurve::new(&pts).unwrap();
+        for [x, y] in pts {
+            assert!((c.eval(x) - y).abs() < 1e-5, "{x}: {}", c.eval(x));
+        }
+        let samples: Vec<f32> = (0..=100).map(|i| c.eval(i as f32 / 100.0)).collect();
+        assert!(samples.windows(2).all(|w| w[1] >= w[0] - 1e-6), "monotone data stays monotone");
+        assert!(PointCurve::new(&[[0.3, 0.3], [0.7, 0.7]]).is_none());
+        assert!(PointCurve::new(&[]).is_none());
+    }
+
+    #[test]
+    fn inverted_point_curve_is_honoured() {
+        let c = ToneCurve { points: vec![[0.0, 1.0], [1.0, 0.0]], ..Default::default() };
+        let lut = table(&c);
+        assert!((lut[0] - 1.0).abs() < 1e-4 && lut[LUT_SIZE - 1].abs() < 1e-4);
     }
 
     #[test]

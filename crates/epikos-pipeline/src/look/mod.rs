@@ -4,10 +4,12 @@
 //! Order inside: Oklab → skin map (from the image before any look) → Step 4 texture
 //! (manual + style) → Step 5 manual grade (manual skin protection) → style skin grade
 //! (skin only) → style scene grade (style skin protection) → linear → Step 6 fog, glow,
-//! light shafts (manual + style) → Step 7 curves and split toning.
+//! light shafts (manual + style) → Step 7 curves and split toning → Step 8 vignette
+//! and grain.
 
 mod atmosphere;
 mod blur;
+mod finish;
 mod grade;
 mod oklab;
 mod skin;
@@ -17,7 +19,9 @@ mod tone;
 
 use epikos_core::resize_plane;
 use epikos_core::ImageRgbF32;
-use epikos_sidecar::{Adjustments, Atmosphere, ColorGrade, Curves, SplitToning, Texture};
+use epikos_sidecar::{
+    Adjustments, Atmosphere, ColorGrade, Curves, Finishing, SplitToning, Texture,
+};
 use rayon::prelude::*;
 
 use atmosphere::{apply_atmosphere, AtmosphereParams};
@@ -70,6 +74,7 @@ struct Look {
     atmosphere: AtmosphereParams,
     curves: Curves,
     split: SplitToning,
+    finishing: Finishing,
 }
 
 impl Look {
@@ -82,8 +87,9 @@ impl Look {
             style_scene: ColorParams::default(),
             style_protection: 0.0,
             atmosphere: atmosphere_params(&adj.atmosphere),
-            curves: adj.curves,
+            curves: adj.curves.clone(),
             split: adj.split_toning,
+            finishing: adj.finishing,
         };
         if adj.style.is_none() {
             return look;
@@ -153,6 +159,7 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         .map(|d| fit_depth(rgb, d));
     apply_atmosphere(rgb, &look.atmosphere, depth.as_deref());
     tone::apply_tone(rgb, &look.curves, &look.split);
+    finish::apply_finishing(rgb, &look.finishing);
 }
 
 /// Resize the model's depth to the image and snap its edges to the photo's, so fog

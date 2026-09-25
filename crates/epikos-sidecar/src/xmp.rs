@@ -5,7 +5,7 @@ use epikos_core::{Error, Result};
 
 use crate::document::{
     Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
-    DemosaicMode, DevelopDocument, DistortionCoeffs, HslBands, HslChannel, LensCorrections,
+    DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
     NoiseReduction, SourceRef, SplitToning, StyleRef, Texture, ToneCurve, WbMode, WhiteBalance,
 };
 
@@ -180,14 +180,29 @@ fn render_look(a: &Adjustments) -> String {
     );
     let c = &a.curves;
     for (name, curve) in [
-        ("Rgb", c.rgb),
-        ("Red", c.red),
-        ("Green", c.green),
-        ("Blue", c.blue),
+        ("Rgb", &c.rgb),
+        ("Red", &c.red),
+        ("Green", &c.green),
+        ("Blue", &c.blue),
     ] {
         let v = curve.to_array().map(|x| x.to_string()).join(",");
         out += &format!("\n    epikos:curve{name}=\"{v}\"");
+        if !curve.points.is_empty() {
+            let pts: Vec<String> = curve.points.iter().map(|[x, y]| format!("{x} {y}")).collect();
+            out += &format!("\n    epikos:curvePoints{name}=\"{}\"", pts.join(";"));
+        }
     }
+    let f = &a.finishing;
+    out += &format!(
+        "\n    epikos:grain=\"{},{},{}\"\n    epikos:vignette=\"{},{},{},{}\"",
+        f.grain,
+        f.grain_size,
+        f.grain_roughness,
+        f.vignette,
+        f.vignette_midpoint,
+        f.vignette_feather,
+        f.vignette_roundness
+    );
     let st = &a.split_toning;
     out += &format!(
         "\n    epikos:splitToning=\"{},{},{},{},{}\"",
@@ -379,10 +394,22 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
             },
             curves: {
                 let curve = |name: &str| {
-                    get(&format!("epikos:curve{name}"))
+                    let mut c = get(&format!("epikos:curve{name}"))
                         .and_then(numbers::<6>)
                         .map(ToneCurve::from_array)
-                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    // "x y;x y;…"
+                    c.points = get(&format!("epikos:curvePoints{name}"))
+                        .map(|v| {
+                            v.split(';')
+                                .filter_map(|p| {
+                                    let (x, y) = p.trim().split_once(' ')?;
+                                    Some([x.parse().ok()?, y.parse().ok()?])
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    c
                 };
                 Curves {
                     rgb: curve("Rgb"),
@@ -401,6 +428,28 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     balance,
                 })
                 .unwrap_or_default(),
+            finishing: {
+                let d = Finishing::default();
+                let [grain, grain_size, grain_roughness] = get("epikos:grain")
+                    .and_then(triple)
+                    .unwrap_or([d.grain, d.grain_size, d.grain_roughness]);
+                let [vignette, vignette_midpoint, vignette_feather, vignette_roundness] =
+                    get("epikos:vignette").and_then(numbers::<4>).unwrap_or([
+                        d.vignette,
+                        d.vignette_midpoint,
+                        d.vignette_feather,
+                        d.vignette_roundness,
+                    ]);
+                Finishing {
+                    grain,
+                    grain_size,
+                    grain_roughness,
+                    vignette,
+                    vignette_midpoint,
+                    vignette_feather,
+                    vignette_roundness,
+                }
+            },
             style: StyleRef {
                 id: text("epikos:style"),
                 amount: num("epikos:styleAmount").unwrap_or(defaults.style.amount),
@@ -487,6 +536,10 @@ mod tests {
         doc.adjustments.curves.rgb.darks = -15.0;
         doc.adjustments.curves.rgb.black = 12.5;
         doc.adjustments.curves.blue.highlights = -8.0;
+        doc.adjustments.finishing.grain = 35.0;
+        doc.adjustments.finishing.vignette = -22.5;
+        doc.adjustments.finishing.vignette_roundness = 40.0;
+        doc.adjustments.curves.red.points = vec![[0.0, 0.05], [0.4, 0.35], [1.0, 1.0]];
         doc.adjustments.split_toning.highlight_saturation = 30.0;
         doc.adjustments.split_toning.shadow_hue = 190.0;
         doc.adjustments.split_toning.balance = -20.0;

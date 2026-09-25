@@ -957,6 +957,27 @@ input[type="range"]::-moz-range-thumb {
   stroke-width: 2;
 }
 
+.curve-graph {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.curve-graph:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.curve-handle {
+  fill: #1b1b1b;
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.curve-handle.is-active {
+  fill: var(--accent);
+  stroke: #fff;
+}
+
 .curve-other {
   stroke-width: 1;
   opacity: 0.45;

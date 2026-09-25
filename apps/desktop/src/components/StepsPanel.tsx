@@ -20,6 +20,7 @@ import {
 } from "../types";
 import { ColorWheel } from "./ColorWheel";
 import { CurveGraph } from "./CurveGraph";
+import { isIdentity } from "../curve";
 import { Segmented, Slider, Toggle } from "./Slider";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
@@ -48,8 +49,8 @@ const STEPS: { title: string; planned: string }[] = [
   { title: "Micro-Texture & Retouching", planned: "Character line sculpting; retouching confined to the subject mask" },
   { title: "Base Color Grading & HSL", planned: "Foliage shift and background re-coloration through the Step 3 masks" },
   { title: "Atmospheric & Light Sculpting", planned: "3D light placement on the depth map; glow confined to the subject mask" },
-  { title: "Creative Split-Toning & Curves", planned: "Free-form point curves" },
-  { title: "Final Finishing & Handoff", planned: "Analog grain, edge vignette, layered PSD and DNG handoff" },
+  { title: "Creative Split-Toning & Curves", planned: "" },
+  { title: "Final Finishing & Handoff", planned: "" },
 ];
 
 // Temperature slider is logarithmic so the useful 2 000–10 000 K range gets most travel.
@@ -98,7 +99,7 @@ const HUE_TRACK = `linear-gradient(90deg, ${[0, 60, 120, 180, 240, 300, 360].map
 const CURVE_LABEL: Record<CurveChannel, string> = { rgb: "RGB", red: "Red", green: "Green", blue: "Blue" };
 
 /** Slider rows of one tone curve, top to bottom as on the graph. */
-const CURVE_ROWS: { key: keyof ToneCurve; label: string }[] = [
+const CURVE_ROWS: { key: Exclude<keyof ToneCurve, "points">; label: string }[] = [
   { key: "highlights", label: "Highlights" },
   { key: "lights", label: "Lights" },
   { key: "darks", label: "Darks" },
@@ -222,6 +223,26 @@ export function StepsPanel({
     ...x,
     curves: { ...x.curves, [curveChannel]: { ...x.curves[curveChannel], ...patch } },
   });
+  const fin = a.finishing;
+  const finSlider = (
+    label: string,
+    key: keyof Adjustments["finishing"],
+    def: number,
+    opts?: { signed?: boolean; disabled?: boolean },
+  ) => (
+    <Slider
+      label={label}
+      value={fin[key]}
+      min={opts?.signed ? -100 : 0}
+      max={100}
+      step={1}
+      defaultValue={def}
+      format={opts?.signed ? fmtSigned(0) : (v) => v.toFixed(0)}
+      disabled={opts?.disabled}
+      onChange={(v) => edit((x) => ({ ...x, finishing: { ...x.finishing, [key]: v } }))}
+      onCommit={endEdit}
+    />
+  );
   const st = a.splitToning;
   const setSplit = (patch: Partial<SplitToning>) => (x: Adjustments) => ({
     ...x,
@@ -596,7 +617,16 @@ export function StepsPanel({
             onChange={setCurveChannel}
           />
         </div>
-        <CurveGraph curves={a.curves} channel={curveChannel} />
+        <CurveGraph
+          curves={a.curves}
+          channel={curveChannel}
+          onPoints={(points) => edit(setCurve({ points }))}
+          onCommit={endEdit}
+        />
+        <p className="hint">
+          Click the curve to add points and drag them; double-click or drag a point off the graph to remove it. The
+          sliders below shape the curve parametrically first.
+        </p>
         {CURVE_ROWS.map(({ key, label }) => (
           <Slider
             key={`${curveChannel}-${key}`}
@@ -614,9 +644,9 @@ export function StepsPanel({
         <button
           type="button"
           className="btn"
-          disabled={Object.values(curve).every((v) => v === 0)}
+          disabled={isIdentity(curve)}
           onClick={() =>
-            commit(setCurve({ shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0 }))
+            commit(setCurve({ shadows: 0, darks: 0, lights: 0, highlights: 0, black: 0, white: 0, points: [] }))
           }
         >
           Reset {CURVE_LABEL[curveChannel]} curve
@@ -637,6 +667,27 @@ export function StepsPanel({
           onCommit={endEdit}
         />
         <p className="hint">Positive balance gives more of the image the highlight tint.</p>
+      </>
+    ),
+    7: (
+      <>
+        <span className="field-label">Vignette</span>
+        {finSlider("Amount", "vignette", 0, { signed: true })}
+        {finSlider("Midpoint", "vignetteMidpoint", 50, { disabled: fin.vignette === 0 })}
+        {finSlider("Feather", "vignetteFeather", 50, { disabled: fin.vignette === 0 })}
+        {finSlider("Roundness", "vignetteRoundness", 0, { signed: true, disabled: fin.vignette === 0 })}
+
+        <span className="field-label">Film grain</span>
+        {finSlider("Amount", "grain", 0)}
+        {finSlider("Size", "grainSize", 25, { disabled: fin.grain === 0 })}
+        {finSlider("Roughness", "grainRoughness", 50, { disabled: fin.grain === 0 })}
+        <p className="hint">Grain scales with the frame, so the preview shows it softer than the full-size export.</p>
+
+        <span className="field-label">Handoff</span>
+        <p className="hint">
+          Export… (⌘E) writes a 16-bit TIFF, a layered PSD with the AI masks as masked groups, or an enhanced linear
+          DNG with semantic masks, and can open it in Photoshop, Lightroom, Capture One or DxO.
+        </p>
       </>
     ),
   };
@@ -664,7 +715,12 @@ export function StepsPanel({
             {isOpen && (
               <div className="step-body">
                 {content[i]}
-                <p className="note">{available ? "Coming next: " : ""}{step.planned}.</p>
+                {step.planned && (
+                  <p className="note">
+                    {available ? "Coming next: " : ""}
+                    {step.planned}.
+                  </p>
+                )}
               </div>
             )}
           </section>

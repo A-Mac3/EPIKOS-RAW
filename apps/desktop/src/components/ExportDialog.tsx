@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { exportTiff, handoffApps, maskModels, openInApp, pickExportPath } from "../api";
-import type { Adjustments, ExportReport, HandoffApp, ImageInfo, MaskModels, OutputSpace } from "../types";
+import { exportImage, handoffApps, maskModels, openInApp, pickExportPath } from "../api";
+import type {
+  Adjustments,
+  ExportFormat,
+  ExportReport,
+  HandoffApp,
+  ImageInfo,
+  MaskModels,
+  OutputSpace,
+} from "../types";
 import { hasLocation } from "../format";
 import { Segmented, Toggle } from "./Slider";
 
@@ -16,6 +24,28 @@ const SPACES: { value: OutputSpace; label: string; hint: string }[] = [
   { value: "proPhoto", label: "ProPhoto RGB", hint: "Widest gamut. Recommended for further editing in Photoshop or Lightroom." },
 ];
 
+const FORMATS: { value: ExportFormat; label: string; ext: string; hint: string }[] = [
+  {
+    value: "tiff",
+    label: "16-bit TIFF",
+    ext: "tif",
+    hint: "The finished look, lossless (ZIP). AI masks become named alpha channels in Photoshop.",
+  },
+  {
+    value: "psd",
+    label: "Layered PSD",
+    ext: "psd",
+    hint: "The finished look as a layer, plus one empty group per AI mask with that mask applied: drop adjustment layers into a group to confine them to the subject, sky or skin.",
+  },
+  {
+    value: "dng",
+    label: "Enhanced DNG",
+    ext: "dng",
+    hint: "Scene-referred linear DNG (demosaiced, denoised, lens-corrected, white balance and exposure applied; no creative look) for raw-style editing in Lightroom, Camera Raw or Capture One. AI masks become DNG 1.6 semantic masks.",
+  },
+];
+
+const FORMAT_KEY = "epikos.export.format";
 const SPACE_KEY = "epikos.export.space";
 const LOCATION_KEY = "epikos.export.includeLocation";
 const MASKS_KEY = "epikos.export.aiMasks";
@@ -54,10 +84,11 @@ type State =
   | { kind: "error"; message: string };
 
 /**
- * PRD Step 8 handoff: full-resolution 16-bit TIFF with embedded ICC profile, optionally
- * carrying the AI masks as named alpha channels, then opened in the next editor.
+ * PRD Step 8 handoff: full-resolution 16-bit TIFF, layered PSD or enhanced DNG, carrying
+ * the AI masks when asked, then opened in the next editor.
  */
 export function ExportDialog({ info, adjustments, onClose }: Props) {
+  const [format, setFormat] = useState<ExportFormat>(() => (stored(FORMAT_KEY) as ExportFormat | null) ?? "tiff");
   const [space, setSpace] = useState<OutputSpace>(() => (stored(SPACE_KEY) as OutputSpace | null) ?? "srgb");
   const [includeLocation, setIncludeLocation] = useState(() => stored(LOCATION_KEY) !== "false");
   const [aiMasks, setAiMasks] = useState(() => stored(MASKS_KEY) === "true");
@@ -82,6 +113,7 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
   const depthAvailable = models?.depth.available ?? false;
 
   const run = async () => {
+    store(FORMAT_KEY, format);
     store(SPACE_KEY, space);
     store(LOCATION_KEY, String(includeLocation));
     store(MASKS_KEY, String(aiMasks));
@@ -90,12 +122,15 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
     store(OPEN_KEY, openIn);
     const stem = info.name.replace(/\.[^.]+$/, "");
     const folder = info.path.slice(0, info.path.length - info.name.length);
-    const dest = await pickExportPath(`${folder}${stem}.tif`);
+    const fmt = FORMATS.find((f) => f.value === format)!;
+    const suffix = format === "dng" ? "-enhanced" : "";
+    const dest = await pickExportPath(`${folder}${stem}${suffix}.${fmt.ext}`, format);
     if (!dest) return;
     setState({ kind: "exporting", dest });
     try {
       // Snapshot of the current edits, including any not yet autosaved.
-      const report = await exportTiff(info.path, adjustments, dest, {
+      const report = await exportImage(info.path, adjustments, dest, {
+        format,
         colorSpace: space,
         includeLocation,
         aiMasks,
@@ -131,19 +166,32 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
     >
       <h2>Export</h2>
       <p className="modal-sub">
-        {info.name} · {info.width}×{info.height} · 16-bit TIFF (ZIP, lossless), 300 ppi
+        {info.name} · {info.width}×{info.height} · 16-bit, 300 ppi
       </p>
 
       <div className="field">
-        <span className="field-label">Colour space</span>
-        <Segmented<OutputSpace>
-          label="Colour space"
-          value={space}
-          options={SPACES.map(({ value, label }) => ({ value, label }))}
-          onChange={setSpace}
+        <span className="field-label">Format</span>
+        <Segmented<ExportFormat>
+          label="Format"
+          value={format}
+          options={FORMATS.map(({ value, label }) => ({ value, label }))}
+          onChange={setFormat}
         />
-        <span className="hint">{hint} The ICC profile is embedded.</span>
+        <span className="hint">{FORMATS.find((f) => f.value === format)!.hint}</span>
       </div>
+
+      {format !== "dng" && (
+        <div className="field">
+          <span className="field-label">Colour space</span>
+          <Segmented<OutputSpace>
+            label="Colour space"
+            value={space}
+            options={SPACES.map(({ value, label }) => ({ value, label }))}
+            onChange={setSpace}
+          />
+          <span className="hint">{hint} The ICC profile is embedded.</span>
+        </div>
+      )}
 
       <div className="field">
         <span className="field-label">Size</span>
@@ -153,18 +201,31 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
 
       <div className="field">
         <span className="field-label">AI layers</span>
-        <Toggle label="Subject, sky and skin masks as alpha channels" checked={aiMasks} onChange={setAiMasks} />
+        <Toggle
+          label={
+            format === "psd"
+              ? "Subject, sky and skin as masked layer groups"
+              : format === "dng"
+                ? "Subject, sky and skin as semantic masks"
+                : "Subject, sky and skin masks as alpha channels"
+          }
+          checked={aiMasks}
+          onChange={setAiMasks}
+        />
         {aiMasks && maskModelsMissing.length > 0 && (
           <span className="hint">
             {maskModelsMissing.join(" and ")} model not installed, so that mask is left out. Skin is always included.
           </span>
         )}
         {depthAvailable && (
-          <Toggle label="Depth map as an alpha channel" checked={depthChannel} onChange={setDepthChannel} />
+          <Toggle label="Depth map too" checked={depthChannel} onChange={setDepthChannel} />
         )}
         <span className="hint">
-          Photoshop opens these as named channels (Channels panel) for selections and Lens Blur. Other editors use
-          the colour image and ignore them.
+          {format === "tiff" &&
+            "Photoshop opens these as named channels (Channels panel) for selections and Lens Blur. Other editors use the colour image and ignore them."}
+          {format === "psd" && "Each mask becomes a group's mask in the Layers panel; the composite opens anywhere."}
+          {format === "dng" &&
+            "Stored as DNG 1.6 semantic masks and a DNG 1.5 depth map, as Apple ProRAW does; readers without DNG 1.6 support ignore them."}
         </span>
       </div>
 
@@ -201,7 +262,7 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
       )}
       {state.kind === "done" && (
         <p className="modal-status is-ok" title={state.report.path}>
-          Saved {state.report.path.split("/").pop()} · {state.report.width}×{state.report.height} ·{" "}
+          Saved {state.report.path.split("/").pop()} ({FORMATS.find((f) => f.value === state.report.format)?.label}) · {state.report.width}×{state.report.height} ·{" "}
           {(state.report.bytes / 1e6).toFixed(0)} MB · {((state.report.developMs + state.report.writeMs) / 1000).toFixed(1)} s
           {state.report.wroteLocation ? " · with location" : ""}
           {state.report.alphaChannels.length > 0 && ` · channels: ${state.report.alphaChannels.join(", ")}`}

@@ -23,10 +23,12 @@ use epikos_sidecar::{
 };
 use serde::Serialize;
 
+mod dng;
 mod export;
+mod psd;
 pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
-pub use export::{ExportOptions, ExportReport};
+pub use export::{ExportFormat, ExportOptions, ExportReport};
 
 /// A RAW/DNG file found while browsing a folder.
 #[derive(Debug, Clone, Serialize)]
@@ -354,8 +356,9 @@ impl Engine {
         })
     }
 
-    /// Develop at full resolution and write a 16-bit TIFF (with EXIF) to `dest`.
-    pub fn export_tiff(
+    /// Develop at full resolution and write a TIFF, layered PSD or enhanced DNG to
+    /// `dest` (Step 8 handoff), with the AI masks when asked for.
+    pub fn export(
         &self,
         path: &Path,
         adjustments: &Adjustments,
@@ -365,7 +368,7 @@ impl Engine {
         let loaded = self.load(path)?;
         let depth = self.look_depth(&loaded, adjustments);
         let aux = self.export_channels(&loaded, adjustments, &options, depth.as_deref())?;
-        export::export_tiff(&loaded, adjustments, dest, options, depth.as_deref(), aux)
+        export::export(&loaded, adjustments, dest, options, depth.as_deref(), aux)
     }
 
     /// Model outputs for the export's alpha channels (Step 8 handoff): subject and sky
@@ -484,7 +487,7 @@ pub(crate) fn look_inputs(depth: Option<&DepthMap>) -> LookInputs<'_> {
 
 /// Steps 1–2 only. Models describe the scene, not the look: a black-and-white or
 /// golden style would only make sky, subject and depth harder to read.
-fn scene_only(adjustments: &Adjustments) -> Adjustments {
+pub(crate) fn scene_only(adjustments: &Adjustments) -> Adjustments {
     Adjustments {
         texture: Default::default(),
         color: Default::default(),
@@ -664,7 +667,7 @@ mod tests {
         let dest = dir.join("out.tif");
         let loaded = synthetic_loaded(64, 48);
         let report =
-            export::export_tiff(&loaded, &Adjustments::default(), &dest, prophoto(), None, Vec::new()).unwrap();
+            export::export(&loaded, &Adjustments::default(), &dest, prophoto(), None, Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (64, 48));
         assert!(!dir.join("out.tif.partial").exists());
 
@@ -691,7 +694,7 @@ mod tests {
             export::AuxPlane { name: "Subject".into(), width: 32, height: 24, data: subject },
             export::AuxPlane { name: "Skin".into(), width: 32, height: 24, data: vec![0.25; 32 * 24] },
         ];
-        let report = export::export_tiff(
+        let report = export::export(
             &loaded,
             &Adjustments::default(),
             &dest,
@@ -738,6 +741,65 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    fn subject_plane() -> Vec<export::AuxPlane> {
+        let subject: Vec<f32> = (0..32 * 24).map(|i| if i % 32 < 16 { 1.0 } else { 0.0 }).collect();
+        vec![export::AuxPlane { name: "Subject".into(), width: 32, height: 24, data: subject }]
+    }
+
+    #[test]
+    fn psd_export_has_the_image_layer_and_a_masked_group() {
+        let dir = temp_dir("export-psd");
+        let dest = dir.join("layers.psd");
+        let loaded = synthetic_loaded(64, 48);
+        let options = ExportOptions { format: ExportFormat::Psd, ..ExportOptions::default() };
+        let report =
+            export::export(&loaded, &Adjustments::default(), &dest, options, None, subject_plane()).unwrap();
+        assert_eq!(report.alpha_channels, ["Subject"]);
+
+        let d = fs::read(&dest).unwrap();
+        assert_eq!(&d[..4], b"8BPS");
+        assert_eq!(u16::from_be_bytes([d[22], d[23]]), 16, "16-bit");
+        let find = |needle: &[u8]| d.windows(needle.len()).position(|w| w == needle);
+        let lr16 = find(b"8BIMLr16").expect("16-bit layer block");
+        let count = i16::from_be_bytes([d[lr16 + 12], d[lr16 + 13]]);
+        assert_eq!(count, 3, "image layer + group end marker + group");
+        assert!(find(b"8BIMlsct").is_some() && find(b"8BIMpass").is_some());
+        let name: Vec<u8> = "Subject".encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        assert!(find(&name).is_some(), "Unicode group name");
+        // Composite: raw 16-bit RGB at the end.
+        assert_eq!(u16::from_be_bytes([d[d.len() - 64 * 48 * 6 - 2], d[d.len() - 64 * 48 * 6 - 1]]), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dng_export_reopens_as_linear_rgb() {
+        let dir = temp_dir("export-dng");
+        let dest = dir.join("enhanced.dng");
+        let loaded = synthetic_loaded(64, 48);
+        let options = ExportOptions { format: ExportFormat::Dng, ..ExportOptions::default() };
+        let report =
+            export::export(&loaded, &Adjustments::default(), &dest, options, None, subject_plane()).unwrap();
+        assert_eq!(report.format, ExportFormat::Dng);
+        let raw = epikos_decode::decode_file(&dest).unwrap();
+        assert_eq!((raw.mosaic.width, raw.mosaic.height), (64, 48));
+        assert_eq!(raw.mosaic.samples_per_pixel, 3);
+        let d = fs::read(&dest).unwrap();
+        assert!(d.windows(7).any(|w| w == b"Subject"), "semantic mask name");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_a_mismatched_extension() {
+        let dir = temp_dir("export-ext");
+        let loaded = synthetic_loaded(16, 16);
+        let options = ExportOptions { format: ExportFormat::Psd, ..ExportOptions::default() };
+        let err = export::export(&loaded, &Adjustments::default(), &dir.join("x.tif"), options, None, Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(".psd"), "{err}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn export_resizes_to_the_long_edge() {
         let dir = temp_dir("export-size");
@@ -745,7 +807,7 @@ mod tests {
         let loaded = synthetic_loaded(64, 48);
         let options = ExportOptions { long_edge: Some(32), ..ExportOptions::default() };
         let report =
-            export::export_tiff(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+            export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (32, 24));
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -783,7 +845,7 @@ mod tests {
                 ..ExportOptions::default()
             };
             let report =
-                export::export_tiff(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
+                export::export(&loaded, &Adjustments::default(), &dest, options, None, Vec::new()).unwrap();
             assert_eq!(report.wrote_location, include_location);
 
             let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
@@ -825,10 +887,10 @@ mod tests {
         loaded.raw.source_path = raw.to_string_lossy().into_owned();
         let adj = Adjustments::default();
         assert!(
-            export::export_tiff(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), None, Vec::new())
+            export::export(&loaded, &adj, &dir.join("x.jpg"), ExportOptions::default(), None, Vec::new())
                 .is_err()
         );
-        assert!(export::export_tiff(&loaded, &adj, &raw, ExportOptions::default(), None, Vec::new()).is_err());
+        assert!(export::export(&loaded, &adj, &raw, ExportOptions::default(), None, Vec::new()).is_err());
         fs::remove_dir_all(&dir).unwrap();
     }
 

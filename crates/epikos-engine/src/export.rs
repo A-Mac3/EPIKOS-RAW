@@ -1,9 +1,11 @@
-//! Full-resolution 16-bit TIFF export with an embedded ICC profile (PRD Section 1.2 /
-//! Step 8 handoff to Photoshop, Lightroom, Capture One, DxO).
+//! Step 8 handoff (PRD Section 1.2): full-resolution exports for Photoshop, Lightroom,
+//! Capture One and DxO, with the AI masks intact.
 //!
-//! The AI masks (subject, sky, skin) and depth can ride along as extra 16-bit
-//! channels. Photoshop opens those as alpha channels, named through the Photoshop
-//! image-resource tag (34377) it writes and reads itself; other apps use the RGB.
+//! - **TIFF**: 16-bit with ICC profile; masks and depth as extra channels, which
+//!   Photoshop opens as named alpha channels (image-resource tag 34377).
+//! - **PSD**: layered, the masks as masked layer groups (see [`crate::psd`]).
+//! - **DNG**: enhanced linear DNG of the scene-referred image with semantic masks
+//!   (see [`crate::dng`]).
 
 use std::borrow::Cow;
 use std::fs::{self, File};
@@ -27,9 +29,38 @@ use tiff::tags::{PhotometricInterpretation, SampleFormat, Tag, Type};
 
 use crate::Loaded;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportFormat {
+    #[default]
+    Tiff,
+    Psd,
+    Dng,
+}
+
+impl ExportFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            ExportFormat::Tiff => "16-bit TIFF",
+            ExportFormat::Psd => "Layered PSD",
+            ExportFormat::Dng => "Enhanced DNG",
+        }
+    }
+
+    fn extensions(self) -> &'static [&'static str] {
+        match self {
+            ExportFormat::Tiff => &["tif", "tiff"],
+            ExportFormat::Psd => &["psd"],
+            ExportFormat::Dng => &["dng"],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExportOptions {
+    pub format: ExportFormat,
+    /// TIFF and PSD only; a DNG stays in its linear camera-independent space.
     pub color_space: OutputSpace,
     /// Copy GPS position into the export. On by default, as in Lightroom and Photoshop.
     pub include_location: bool,
@@ -44,6 +75,7 @@ pub struct ExportOptions {
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
+            format: ExportFormat::Tiff,
             color_space: OutputSpace::Srgb,
             include_location: true,
             ai_masks: false,
@@ -68,6 +100,7 @@ const MAX_EXTRA: usize = 4;
 #[serde(rename_all = "camelCase")]
 pub struct ExportReport {
     pub path: String,
+    pub format: ExportFormat,
     pub width: u32,
     pub height: u32,
     pub color_space: String,
@@ -81,7 +114,7 @@ pub struct ExportReport {
     pub write_ms: u64,
 }
 
-pub(crate) fn export_tiff(
+pub(crate) fn export(
     loaded: &Loaded,
     adjustments: &Adjustments,
     dest: &Path,
@@ -89,11 +122,16 @@ pub(crate) fn export_tiff(
     depth: Option<&DepthMap>,
     aux: Vec<AuxPlane>,
 ) -> Result<ExportReport> {
-    let space = options.color_space;
-    let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if !matches!(ext.to_ascii_lowercase().as_str(), "tif" | "tiff") {
+    let format = options.format;
+    let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !format.extensions().contains(&ext.as_str()) {
         return Err(Error::InvalidImage {
-            reason: format!("export must be a .tif/.tiff file, got {}", dest.display()),
+            reason: format!(
+                "a {} export must be a .{} file, got {}",
+                format.label(),
+                format.extensions()[0],
+                dest.display()
+            ),
         });
     }
     if same_file(dest, Path::new(&loaded.raw.source_path)) {
@@ -103,8 +141,13 @@ pub(crate) fn export_tiff(
     }
 
     let t = Instant::now();
-    let inputs = crate::look_inputs(depth);
-    let rgb = develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, &inputs)?;
+    // The DNG carries the scene, not the look (the reader applies its own rendering).
+    let rgb = if format == ExportFormat::Dng {
+        develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &crate::scene_only(adjustments), &Default::default())?
+    } else {
+        let inputs = crate::look_inputs(depth);
+        develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, &inputs)?
+    };
     let rgb = match options.long_edge {
         Some(edge) => downsize(rgb, edge),
         None => rgb,
@@ -119,30 +162,61 @@ pub(crate) fn export_tiff(
             Some((a.name.clone(), fitted.iter().map(|v| (v * 65535.0).round() as u16).collect()))
         })
         .collect();
-    let pixels = interleave(encode_rgb16(&rgb, space), &channels);
-    drop(rgb);
-    let develop_ms = t.elapsed().as_millis() as u64;
     let names: Vec<String> = channels.iter().map(|(n, _)| n.clone()).collect();
-    drop(channels);
-
-    // Write beside the destination, then rename: a failed export never leaves a
-    // truncated TIFF where the user expects a finished one.
-    let t = Instant::now();
-    let partial = partial_path(dest);
+    let space = options.color_space;
     let meta = &loaded.raw.metadata;
     let gps = meta
         .gps
         .as_ref()
         .filter(|g| options.include_location && g.has_position());
-    let image = TiffImage { width, height, pixels: &pixels, alpha_names: &names };
-    let result = match names.len() {
-        0 => write_tiff::<colortype::RGB16>(&partial, &image, space, meta, gps),
-        1 => write_tiff::<Rgb16Plus1>(&partial, &image, space, meta, gps),
-        2 => write_tiff::<Rgb16Plus2>(&partial, &image, space, meta, gps),
-        3 => write_tiff::<Rgb16Plus3>(&partial, &image, space, meta, gps),
-        _ => write_tiff::<Rgb16Plus4>(&partial, &image, space, meta, gps),
-    }
-    .and_then(|()| fs::rename(&partial, dest).map_err(Error::from));
+
+    // Write beside the destination, then rename: a failed export never leaves a
+    // truncated file where the user expects a finished one.
+    let partial = partial_path(dest);
+    let (develop_ms, t_write, result) = match format {
+        ExportFormat::Tiff => {
+            let pixels = interleave(encode_rgb16(&rgb, space), &channels);
+            drop((rgb, channels));
+            let develop_ms = t.elapsed().as_millis() as u64;
+            let t = Instant::now();
+            let image = TiffImage { width, height, pixels: &pixels, alpha_names: &names };
+            let r = match names.len() {
+                0 => write_tiff::<colortype::RGB16>(&partial, &image, space, meta, gps),
+                1 => write_tiff::<Rgb16Plus1>(&partial, &image, space, meta, gps),
+                2 => write_tiff::<Rgb16Plus2>(&partial, &image, space, meta, gps),
+                3 => write_tiff::<Rgb16Plus3>(&partial, &image, space, meta, gps),
+                _ => write_tiff::<Rgb16Plus4>(&partial, &image, space, meta, gps),
+            };
+            (develop_ms, t, r)
+        }
+        ExportFormat::Psd => {
+            let pixels = encode_rgb16(&rgb, space);
+            drop(rgb);
+            let develop_ms = t.elapsed().as_millis() as u64;
+            let t = Instant::now();
+            let icc = space.icc_profile();
+            let image = crate::psd::PsdImage {
+                width,
+                height,
+                rgb: &pixels,
+                icc: &icc,
+                ppi: 300,
+                masks: channels
+                    .iter()
+                    .map(|(name, mask)| crate::psd::MaskLayer { name, mask })
+                    .collect(),
+            };
+            let r = crate::psd::write_psd(&partial, &image).map_err(Error::from);
+            (develop_ms, t, r)
+        }
+        ExportFormat::Dng => {
+            let develop_ms = t.elapsed().as_millis() as u64;
+            let t = Instant::now();
+            let r = crate::dng::write_dng(&partial, &rgb, &channels, meta, gps.is_some());
+            (develop_ms, t, r)
+        }
+    };
+    let result = result.and_then(|()| fs::rename(&partial, dest).map_err(Error::from));
     if result.is_err() {
         let _ = fs::remove_file(&partial);
     }
@@ -150,15 +224,20 @@ pub(crate) fn export_tiff(
 
     Ok(ExportReport {
         path: dest.to_string_lossy().into_owned(),
+        format,
         width,
         height,
-        color_space: space.label().to_string(),
+        color_space: if format == ExportFormat::Dng {
+            "Linear Rec.2020 (DNG)".to_string()
+        } else {
+            space.label().to_string()
+        },
         bytes: fs::metadata(dest)?.len(),
-        wrote_exif: true,
-        wrote_location: gps.is_some(),
+        wrote_exif: format != ExportFormat::Psd,
+        wrote_location: gps.is_some() && format == ExportFormat::Tiff,
         alpha_channels: names,
         develop_ms,
-        write_ms: t.elapsed().as_millis() as u64,
+        write_ms: t_write.elapsed().as_millis() as u64,
     })
 }
 

@@ -89,7 +89,7 @@ async fn save_document(
 
 /// Full-resolution 16-bit TIFF. `dest` comes from the native save dialog.
 #[tauri::command]
-async fn export_tiff(
+async fn export_image(
     engine: EngineState<'_>,
     path: String,
     adjustments: Adjustments,
@@ -99,7 +99,7 @@ async fn export_tiff(
     let path = raw_path(&path)?;
     let dest = PathBuf::from(dest);
     let engine = engine.inner().clone();
-    blocking(move || engine.export_tiff(&path, &adjustments, &dest, options)).await
+    blocking(move || engine.export(&path, &adjustments, &dest, options)).await
 }
 
 #[tauri::command]
@@ -265,7 +265,7 @@ pub fn run() {
             render_preview,
             thumbnail,
             save_document,
-            export_tiff,
+            export_image,
             mask_models,
             detect_mask,
             detect_depth,

@@ -8,10 +8,10 @@ Cross-platform RAW/DNG editor. Product spec: [PRD.md](PRD.md).
 |---|---|
 | `crates/epikos-core` | 32-bit float image types, camera formats, sensor profiles |
 | `crates/epikos-decode` | RAW/DNG decode via `rawler`, crop, embedded thumbnails |
-| `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, optics, colour, exposure, Step 4 texture / retouching, Step 5 HSL and colour wheels, Step 6 glow / depth fog / light shafts, Step 7 curves and split toning, parametric styles (`src/look`), preview binning, display transform |
+| `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, optics, colour, exposure, Step 4 texture / retouching, Step 5 HSL and colour wheels, Step 6 glow / depth fog / light shafts, Step 7 parametric and point curves, split toning, Step 8 grain and vignette, parametric styles (`src/look`), preview binning, display transform |
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
 | `crates/epikos-masks` | On-device models via ONNX Runtime (CPU): IS-Net subject and skyseg sky masks (Step 3), Depth Anything V2 Small depth (Step 6) |
-| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy |
+| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy, TIFF / layered PSD / enhanced DNG export |
 | `crates/epikos-cli` | `epikos inspect / sidecar / develop` |
 | `apps/desktop` | Tauri 2 + React/TypeScript desktop app (`src-tauri` = Rust commands) |
 
@@ -41,12 +41,14 @@ Render a file with each built-in style and a Step 6 sample (plus its skin and de
 cargo run --release -p epikos-engine --example render_looks -- <RAW> <OUT_DIR> [--full]
 ```
 
-Export a full-resolution 16-bit TIFF (sRGB, Display P3 or ProPhoto, ICC embedded). With
-`--masks` / `--depth` the subject, sky and skin masks and the depth map ride along as named
-alpha channels, which Photoshop shows in its Channels panel:
+Export (format from the extension). With `--masks` / `--depth` the subject, sky and skin
+masks and the depth map come along: named alpha channels in a TIFF, masked layer groups in
+a PSD, DNG 1.6 semantic masks and a DNG 1.5 depth map in an enhanced (linear) DNG:
 
 ```bash
 cargo run --release -p epikos-cli -- export <RAW> -o out.tif --space prophoto --masks --depth
+cargo run --release -p epikos-cli -- export <RAW> -o out.psd --masks
+cargo run --release -p epikos-cli -- export <RAW> -o out.dng --masks --depth
 ```
 
 The app's Export dialog can then open the TIFF in an installed editor (Photoshop, Lightroom,

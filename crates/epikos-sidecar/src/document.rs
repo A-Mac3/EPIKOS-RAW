@@ -53,6 +53,8 @@ pub struct Adjustments {
     pub curves: Curves,
     /// Step 7: split toning.
     pub split_toning: SplitToning,
+    /// Step 8: film grain and vignette.
+    pub finishing: Finishing,
     /// Parametric style layered on top of the manual Step 4–6 settings.
     pub style: StyleRef,
 }
@@ -71,6 +73,7 @@ impl Default for Adjustments {
             atmosphere: Atmosphere::default(),
             curves: Curves::default(),
             split_toning: SplitToning::default(),
+            finishing: Finishing::default(),
             style: StyleRef::default(),
         }
     }
@@ -248,7 +251,11 @@ impl Default for Atmosphere {
 /// identity. The four regions bend the curve around ⅕, ⅖, ⅗ and ⅘ of the tonal range;
 /// `black` lifts the floor (matte, > 0) or crushes shadows to black (< 0); `white`
 /// clips highlights earlier (> 0) or lowers the ceiling (faded, < 0).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+///
+/// `points` is a free-form point curve applied after the parametric one: control
+/// points `[input, output]` in 0…1, sorted by input, joined by a monotone cubic.
+/// Empty (or points on the diagonal) is the identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ToneCurve {
     pub shadows: f32,
@@ -257,15 +264,21 @@ pub struct ToneCurve {
     pub highlights: f32,
     pub black: f32,
     pub white: f32,
+    pub points: Vec<[f32; 2]>,
 }
 
 impl ToneCurve {
     pub fn is_identity(&self) -> bool {
-        *self == Self::default()
+        self.to_array() == [0.0; 6] && self.points_are_identity()
+    }
+
+    /// No point curve, or one whose points all lie on the diagonal.
+    pub fn points_are_identity(&self) -> bool {
+        self.points.iter().all(|[x, y]| (x - y).abs() < 1e-6)
     }
 
     /// `[shadows, darks, lights, highlights, black, white]`.
-    pub fn to_array(self) -> [f32; 6] {
+    pub fn to_array(&self) -> [f32; 6] {
         [
             self.shadows,
             self.darks,
@@ -284,12 +297,13 @@ impl ToneCurve {
             highlights,
             black,
             white,
+            points: Vec::new(),
         }
     }
 }
 
 /// The master RGB curve (applied first) and one curve per channel.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Curves {
     pub rgb: ToneCurve,
@@ -300,7 +314,7 @@ pub struct Curves {
 
 impl Curves {
     pub fn is_identity(&self) -> bool {
-        *self == Self::default()
+        [&self.rgb, &self.red, &self.green, &self.blue].iter().all(|c| c.is_identity())
     }
 }
 
@@ -332,6 +346,41 @@ impl Default for SplitToning {
 impl SplitToning {
     pub fn is_neutral(&self) -> bool {
         self.highlight_saturation <= 0.0 && self.shadow_saturation <= 0.0
+    }
+}
+
+/// PRD Step 8 finishing. Grain 0…100 with size and roughness 0…100; vignette amount
+/// −100 (darken) … 100 (lighten), midpoint and feather 0…100, roundness −100 (follows
+/// the frame) … 100 (circle).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Finishing {
+    pub grain: f32,
+    pub grain_size: f32,
+    pub grain_roughness: f32,
+    pub vignette: f32,
+    pub vignette_midpoint: f32,
+    pub vignette_feather: f32,
+    pub vignette_roundness: f32,
+}
+
+impl Default for Finishing {
+    fn default() -> Self {
+        Self {
+            grain: 0.0,
+            grain_size: 25.0,
+            grain_roughness: 50.0,
+            vignette: 0.0,
+            vignette_midpoint: 50.0,
+            vignette_feather: 50.0,
+            vignette_roundness: 0.0,
+        }
+    }
+}
+
+impl Finishing {
+    pub fn is_neutral(&self) -> bool {
+        self.grain <= 0.0 && self.vignette == 0.0
     }
 }
 

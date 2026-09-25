@@ -28,16 +28,71 @@ export function curveShape(c: ToneCurve, x: number): number {
   return lo + Math.min(1, Math.max(0, y)) * (hi - lo);
 }
 
-/** `n + 1` samples of the curve, forced monotonic like the engine's table. */
-export function curvePoints(c: ToneCurve, n = 64): [number, number][] {
+/**
+ * Monotone cubic through control points (Fritsch–Carlson), mirroring `PointCurve` in
+ * tone.rs. Returns null for the identity. Corners (0,0) and (1,1) are implied.
+ */
+export function pointSpline(points: [number, number][]): ((x: number) => number) | null {
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  let pts = points.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y)).map(([x, y]) => [clamp(x), clamp(y)]);
+  if (pts.every(([x, y]) => Math.abs(x - y) < 1e-6)) return null;
+  pts.sort((a, b) => a[0] - b[0]);
+  pts = pts.filter((p, i) => i === 0 || Math.abs(p[0] - pts[i - 1][0]) >= 1e-4);
+  if (pts[0][0] > 0) pts.unshift([0, 0]);
+  if (pts[pts.length - 1][0] < 1) pts.push([1, 1]);
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const n = xs.length;
+  const d = xs.slice(0, -1).map((_, k) => (ys[k + 1] - ys[k]) / (xs[k + 1] - xs[k]));
+  const ms = new Array<number>(n).fill(0);
+  ms[0] = d[0];
+  ms[n - 1] = d[n - 2];
+  for (let k = 1; k < n - 1; k++) ms[k] = d[k - 1] * d[k] <= 0 ? 0 : 0.5 * (d[k - 1] + d[k]);
+  for (let k = 0; k < n - 1; k++) {
+    if (d[k] === 0) {
+      ms[k] = 0;
+      ms[k + 1] = 0;
+      continue;
+    }
+    const a = ms[k] / d[k];
+    const b = ms[k + 1] / d[k];
+    const h = a * a + b * b;
+    if (h > 9) {
+      const t = 3 / Math.sqrt(h);
+      ms[k] = t * a * d[k];
+      ms[k + 1] = t * b * d[k];
+    }
+  }
+  return (xIn: number) => {
+    const x = clamp(xIn);
+    let k = 0;
+    while (k < n - 2 && xs[k + 1] <= x) k++;
+    const h = xs[k + 1] - xs[k];
+    const t = (x - xs[k]) / h;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return clamp(
+      (2 * t3 - 3 * t2 + 1) * ys[k] +
+        (t3 - 2 * t2 + t) * h * ms[k] +
+        (-2 * t3 + 3 * t2) * ys[k + 1] +
+        (t3 - t2) * h * ms[k + 1],
+    );
+  };
+}
+
+/** `n + 1` samples of the full curve (parametric, forced monotonic, then points). */
+export function curvePoints(c: ToneCurve, n = 96): [number, number][] {
+  const spline = pointSpline(c.points);
   const pts: [number, number][] = [];
   let prev = -Infinity;
   for (let i = 0; i <= n; i++) {
     const x = i / n;
     prev = Math.max(prev, curveShape(c, x));
-    pts.push([x, prev]);
+    pts.push([x, spline ? spline(prev) : prev]);
   }
   return pts;
 }
 
-export const isIdentity = (c: ToneCurve) => Object.values(c).every((v) => v === 0);
+export const isIdentity = (c: ToneCurve) =>
+  [c.shadows, c.darks, c.lights, c.highlights, c.black, c.white].every((v) => v === 0) &&
+  c.points.every(([x, y]) => Math.abs(x - y) < 1e-6);

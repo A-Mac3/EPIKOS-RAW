@@ -112,7 +112,7 @@ fn main() {
         if full {
             let dest = out.join(format!("{stem}_{name}.tif"));
             let r = engine
-                .export_tiff(&raw, adj, &dest, Default::default())
+                .export(&raw, adj, &dest, Default::default())
                 .unwrap();
             line += &format!("   full {}×{} develop {} ms", r.width, r.height, r.develop_ms);
         }

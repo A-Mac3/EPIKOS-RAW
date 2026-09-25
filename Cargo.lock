@@ -1008,6 +1008,8 @@ dependencies = [
  "epikos-sidecar",
  "flate2",
  "image",
+ "rawler",
+ "rayon",
  "serde",
  "tiff",
 ]
