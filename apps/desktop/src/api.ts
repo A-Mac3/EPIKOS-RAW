@@ -15,7 +15,10 @@ import type {
   MaskModels,
   Preview,
   SaveReport,
+  SceneAnalysis,
+  StoryArc,
   StyleInfo,
+  SyncReport,
 } from "./types";
 
 export const inTauri = isTauri();
@@ -118,3 +121,17 @@ export const openInApp = (app: string, file: string) => invoke<void>("open_in_ap
 /** Natural Language Look Prompting: description → settings (engine-side, offline). */
 export const interpretLook = (path: string, prompt: string, adjustments: Adjustments) =>
   invoke<LookPrompt>("interpret_look", { path, prompt, adjustments });
+
+/** Section 2.1: genre, light and skin reading of one photo. */
+export const analyzeImage = (path: string, adjustments: Adjustments) =>
+  invoke<SceneAnalysis>("analyze_image", { path, adjustments });
+
+/** Section 2.2: story-arc groups, hero frames and palettes for a folder. */
+export const storyArc = (dir: string) => invoke<StoryArc>("story_arc", { dir });
+
+/** Copy the hero's look onto `targets`, calibrated per frame (sidecars are backed up). */
+export const syncLook = (hero: string, adjustments: Adjustments, targets: string[]) =>
+  invoke<SyncReport>("sync_look", { hero, adjustments, targets });
+
+/** Restore the sidecars the last sync replaced; returns the restored paths. */
+export const undoSync = (targets: string[]) => invoke<string[]>("undo_sync", { targets });

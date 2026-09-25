@@ -402,3 +402,88 @@ export function defaultColorGrade(): ColorGrade {
     skinProtection: 0,
   };
 }
+
+/** Section 2.1: rule-based scene reading of one photo. */
+export interface SceneAnalysis {
+  genres: { id: string; label: string; score: number; evidence: string }[];
+  lighting: {
+    colorTemperature: number | null;
+    dynamicRangeEv: number;
+    highlightsClipped: number;
+    shadowsCrushed: number;
+    key: string;
+    hardness: number;
+    hardnessLabel: string;
+    direction: string | null;
+    backlit: boolean;
+    haze: number;
+    hazeLabel: string;
+    snow: number;
+    timeOfDay: string | null;
+  };
+  skin: {
+    coverage: number;
+    toneDepth: number;
+    toneLabel: string;
+    undertone: string;
+    shine: number;
+    shineLabel: string;
+    texture: number;
+    textureLabel: string;
+  } | null;
+  composition: {
+    subjectCoverage: number | null;
+    skyCoverage: number | null;
+    depthRange: number | null;
+    lineStrength: number;
+  };
+  palette: Swatch[];
+  limits: string[];
+  analysisMs: number;
+}
+
+export interface Swatch {
+  hex: string;
+  weight: number;
+}
+
+/** Section 2.2: a folder split into groups shot under similar conditions. */
+export interface StoryArc {
+  groups: ShotGroup[];
+  frames: FrameSummary[];
+  analysisMs: number;
+}
+
+export interface ShotGroup {
+  id: number;
+  label: string;
+  frames: string[];
+  hero: string;
+  palette: Swatch[];
+  /** Why this group starts a new one (empty for the first). */
+  splitReason: string;
+}
+
+export interface FrameSummary {
+  path: string;
+  name: string;
+  captured: string | null;
+  sceneEv: number | null;
+  lightness: number;
+  cast: [number, number];
+  gps: [number, number] | null;
+  skin: number;
+  group: number;
+  error: string | null;
+}
+
+export interface SyncReport {
+  frames: {
+    path: string;
+    exposureDelta: number;
+    whiteBalanceShifted: boolean;
+    textureScale: number;
+    skinProtection: number;
+  }[];
+  skipped: { path: string; reason: string }[];
+}

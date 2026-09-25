@@ -3,7 +3,17 @@
 // chart and applies exposure / white balance approximately. Never shipped: main.tsx only
 // imports this behind `import.meta.env.DEV`.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { Adjustments, DevelopDocument, FileEntry, ImageInfo, MaskKind, StyleInfo } from "../types";
+import type {
+  Adjustments,
+  DevelopDocument,
+  FileEntry,
+  ImageInfo,
+  MaskKind,
+  SceneAnalysis,
+  StoryArc,
+  StyleInfo,
+  SyncReport,
+} from "../types";
 import { defaultAdjustments } from "../types";
 
 const FOLDER = "/mock/Sydney shoot";
@@ -16,6 +26,7 @@ const FILES: FileEntry[] = ["DSCF0346.RAF", "DSCF0352.RAF", "L1000530.DNG", "L10
   }),
 );
 const saved = new Map<string, DevelopDocument>();
+const presync = new Map<string, DevelopDocument | null>();
 const AS_SHOT = { temperature: 5600, tint: 4 };
 
 // Copy of the engine's built-in styles (crates/epikos-pipeline/src/look/style.rs).
@@ -128,6 +139,40 @@ export function installMockBackend() {
         }
         const known = new Set(["foggy", "film", "a", "an", "the", "with", "make", "this", "look", "like"]);
         return { adjustments: adj, matched, unknown: words.filter((w) => !known.has(w)) };
+      }
+      case "analyze_image":
+        await new Promise((r) => setTimeout(r, 400));
+        return analysis(a.path as string);
+      case "story_arc":
+        return story();
+      case "sync_look": {
+        const targets = a.targets as string[];
+        const report: SyncReport = { frames: [], skipped: [] };
+        targets.forEach((path, i) => {
+          if (saved.has(path)) presync.set(path, saved.get(path)!);
+          else presync.set(path, null);
+          saved.set(path, { version: 1, adjustments: structuredClone(a.adjustments as Adjustments) } as DevelopDocument);
+          report.frames.push({
+            path,
+            exposureDelta: [0.35, -0.6, 0.1][i % 3],
+            whiteBalanceShifted: i % 2 === 0,
+            textureScale: [1, 1.22, 0.84][i % 3],
+            skinProtection: 70,
+          });
+        });
+        return report;
+      }
+      case "undo_sync": {
+        const restored: string[] = [];
+        for (const path of a.targets as string[]) {
+          if (!presync.has(path)) continue;
+          const before = presync.get(path);
+          if (before) saved.set(path, before);
+          else saved.delete(path);
+          presync.delete(path);
+          restored.push(path);
+        }
+        return restored;
       }
       case "list_styles":
         return STYLES;
@@ -318,4 +363,89 @@ function depthMap(): ArrayBuffer {
     d.fill(Math.round(near * 255), y * w, (y + 1) * w);
   }
   return out;
+}
+
+// Shapes and values from `epikos analyze` / `epikos story` on the real test photos.
+function analysis(path: string): SceneAnalysis {
+  const portrait = /L1000583|IMG_0421/.test(path);
+  const bird = /DSCF/.test(path);
+  return {
+    genres: portrait
+      ? [
+          { id: "environmental-portrait", label: "Environmental Portrait", score: 0.95, evidence: "skin 7.2% in a wider scene, depth range 0.94" },
+          { id: "dark-melanin-fashion", label: "Dark Melanin Fashion", score: 0.95, evidence: "portrait with skin tone depth ~8/10" },
+          { id: "close-up-portrait", label: "Close-up Portrait", score: 0.93, evidence: "skin 7.2%, subject 29.3%" },
+        ]
+      : bird
+        ? [{ id: "wildlife", label: "Wildlife", score: 0.46, evidence: "no people, 140 mm, isolated subject 1.1%, 15.4% foliage / earth colours" }]
+        : [{ id: "environmental-portrait", label: "Environmental Portrait", score: 0.72, evidence: "skin 0.7% in a wider scene, depth range 0.95" }],
+    lighting: {
+      colorTemperature: bird ? 4239 : 6156,
+      dynamicRangeEv: 7.5,
+      highlightsClipped: 0.4,
+      shadowsCrushed: 0.1,
+      key: "mid-key",
+      hardness: portrait ? 0.89 : 0.58,
+      hardnessLabel: portrait ? "hard, direct" : "medium",
+      direction: "from the upper right",
+      backlit: portrait,
+      haze: 0.08,
+      hazeLabel: "clear",
+      snow: 0,
+      timeOfDay: "daytime",
+    },
+    skin: bird
+      ? null
+      : {
+          coverage: portrait ? 7.2 : 0.7,
+          toneDepth: portrait ? 8 : 8.4,
+          toneLabel: "deep",
+          undertone: "neutral",
+          shine: 0.68,
+          shineLabel: portrait ? "glossy" : "too small to judge",
+          texture: 0.2,
+          textureLabel: portrait ? "smooth" : "too small to judge",
+        },
+    composition: { subjectCoverage: portrait ? 29.3 : bird ? 1.1 : 4.7, skyCoverage: bird ? 1.6 : 12, depthRange: 0.9, lineStrength: 0.1 },
+    palette: [
+      { hex: "#67675d", weight: 0.24 },
+      { hex: "#373b39", weight: 0.21 },
+      { hex: "#8e7a6a", weight: 0.2 },
+      { hex: "#1f1a18", weight: 0.19 },
+      { hex: "#c9c3b8", weight: 0.16 },
+    ],
+    limits: [],
+    analysisMs: 3100,
+  };
+}
+
+function story(): StoryArc {
+  const groups = [
+    { names: ["DSCF0346.RAF", "DSCF0352.RAF"], label: "2025-12-14 15:41–15:52 · 2 photos", reason: "", palette: ["#5a5555", "#97818c", "#2e2f30", "#5a874d", "#beceb0"] },
+    { names: ["L1000530.DNG"], label: "2026-08-17 08:18 · 1 photo", reason: "245 days without shooting", palette: ["#4f5157", "#95a6b6", "#648db0", "#2e3032", "#cac9c6"] },
+    { names: ["L1000583.DNG", "IMG_0421.CR3"], label: "2026-09-20 12:04–12:09 · 2 photos", reason: "34 days without shooting", palette: ["#67675d", "#373b39", "#8e7a6a", "#1f1a18", "#c9c3b8"] },
+  ];
+  return {
+    groups: groups.map((g, id) => ({
+      id,
+      label: g.label,
+      frames: g.names.map((n) => `${FOLDER}/${n}`),
+      hero: `${FOLDER}/${g.names[0]}`,
+      palette: g.palette.map((hex, i) => ({ hex, weight: [0.29, 0.2, 0.19, 0.17, 0.15][i] })),
+      splitReason: g.reason,
+    })),
+    frames: FILES.map((f) => ({
+      path: f.path,
+      name: f.name,
+      captured: null,
+      sceneEv: 10,
+      lightness: 0.5,
+      cast: [0, 0],
+      gps: null,
+      skin: 0,
+      group: groups.findIndex((g) => g.names.includes(f.name)),
+      error: null,
+    })),
+    analysisMs: 113,
+  };
 }

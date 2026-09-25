@@ -137,6 +137,47 @@ async fn interpret_look(
     blocking(move || engine.interpret_look(&path, &prompt, &adjustments)).await
 }
 
+/// Section 2.1: genre, light and skin reading of one photo.
+#[tauri::command]
+async fn analyze_image(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+) -> CmdResult<epikos_engine::SceneAnalysis> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.analyze(&path, &adjustments)).await
+}
+
+/// Section 2.2: split a folder into story-arc groups with hero frames and palettes.
+#[tauri::command]
+async fn story_arc(engine: EngineState<'_>, dir: String) -> CmdResult<epikos_engine::StoryArc> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.story_arc(Path::new(&dir))).await
+}
+
+/// Copy the hero's look onto `targets`, calibrated per frame; every sidecar is backed up.
+#[tauri::command]
+async fn sync_look(
+    engine: EngineState<'_>,
+    hero: String,
+    adjustments: Adjustments,
+    targets: Vec<String>,
+) -> CmdResult<epikos_engine::SyncReport> {
+    let hero = raw_path(&hero)?;
+    let targets = targets.iter().map(|t| raw_path(t)).collect::<CmdResult<Vec<_>>>()?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.sync_look(&hero, &adjustments, &targets)).await
+}
+
+/// Restore the sidecars a sync replaced. Returns the frames that were restored.
+#[tauri::command]
+async fn undo_sync(engine: EngineState<'_>, targets: Vec<String>) -> CmdResult<Vec<String>> {
+    let targets = targets.iter().map(|t| raw_path(t)).collect::<CmdResult<Vec<_>>>()?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.undo_sync(&targets)).await
+}
+
 /// Photo editors installed on this computer, for "Export & open in…".
 #[tauri::command]
 async fn handoff_apps() -> CmdResult<Vec<handoff::HandoffApp>> {
@@ -285,7 +326,11 @@ pub fn run() {
             list_styles,
             handoff_apps,
             open_in_app,
-            interpret_look
+            interpret_look,
+            analyze_image,
+            story_arc,
+            sync_look,
+            undo_sync
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");
