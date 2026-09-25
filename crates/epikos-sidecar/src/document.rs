@@ -42,7 +42,11 @@ pub struct Adjustments {
     pub lens: LensCorrections,
     /// Global exposure in stops (EV), applied in scene-referred linear light.
     pub exposure: f32,
+    /// Step 2: contrast, highlights, shadows, whites, blacks, vibrance, saturation.
+    pub tone: Tone,
     pub noise_reduction: NoiseReduction,
+    /// Step 3: edits confined to an AI mask.
+    pub local: Vec<LocalAdjustment>,
     /// Step 4: micro-texture and skin retouching.
     pub texture: Texture,
     /// Step 5: HSL and three-way colour grading.
@@ -67,7 +71,9 @@ impl Default for Adjustments {
             demosaic: DemosaicMode::Auto,
             lens: LensCorrections::default(),
             exposure: 0.0,
+            tone: Tone::default(),
             noise_reduction: NoiseReduction::default(),
+            local: Vec::new(),
             texture: Texture::default(),
             color: ColorGrade::default(),
             atmosphere: Atmosphere::default(),
@@ -76,6 +82,116 @@ impl Default for Adjustments {
             finishing: Finishing::default(),
             style: StyleRef::default(),
         }
+    }
+}
+
+/// PRD Step 2 tone controls, each −100…100, zero is neutral. Highlights and shadows
+/// work on a smoothed luminance so local contrast survives; whites and blacks move
+/// the ends of the range; vibrance favours muted colours and spares skin.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Tone {
+    pub contrast: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
+    pub vibrance: f32,
+    pub saturation: f32,
+}
+
+impl Tone {
+    pub fn is_neutral(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn to_array(&self) -> [f32; 7] {
+        [self.contrast, self.highlights, self.shadows, self.whites, self.blacks, self.vibrance, self.saturation]
+    }
+
+    pub fn from_array([contrast, highlights, shadows, whites, blacks, vibrance, saturation]: [f32; 7]) -> Self {
+        Self { contrast, highlights, shadows, whites, blacks, vibrance, saturation }
+    }
+}
+
+/// A region from Step 3's models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MaskTarget {
+    /// The main subject (IS-Net).
+    #[default]
+    Subject,
+    /// Everything but the subject.
+    Background,
+    Sky,
+    /// Skin anywhere in the frame (colour model).
+    Skin,
+    /// Eyes (face parsing).
+    Eyes,
+    /// Hair on the head (face parsing).
+    Hair,
+    /// The near part of the scene (depth model).
+    Foreground,
+}
+
+impl MaskTarget {
+    pub const ALL: [MaskTarget; 7] = [
+        MaskTarget::Subject,
+        MaskTarget::Background,
+        MaskTarget::Sky,
+        MaskTarget::Skin,
+        MaskTarget::Eyes,
+        MaskTarget::Hair,
+        MaskTarget::Foreground,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            MaskTarget::Subject => "subject",
+            MaskTarget::Background => "background",
+            MaskTarget::Sky => "sky",
+            MaskTarget::Skin => "skin",
+            MaskTarget::Eyes => "eyes",
+            MaskTarget::Hair => "hair",
+            MaskTarget::Foreground => "foreground",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MaskTarget::Subject => "Subject",
+            MaskTarget::Background => "Background",
+            MaskTarget::Sky => "Sky",
+            MaskTarget::Skin => "Skin",
+            MaskTarget::Eyes => "Eyes",
+            MaskTarget::Hair => "Hair",
+            MaskTarget::Foreground => "Foreground",
+        }
+    }
+}
+
+/// PRD Step 3: an adjustment applied only inside a mask. Exposure in EV (−3…3), the
+/// rest −100…100.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LocalAdjustment {
+    pub mask: MaskTarget,
+    pub exposure: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+    /// Cooler (−) or warmer (+).
+    pub warmth: f32,
+    /// Mid-scale local contrast.
+    pub clarity: f32,
+}
+
+impl LocalAdjustment {
+    pub fn is_neutral(&self) -> bool {
+        self.exposure == 0.0 && self.contrast == 0.0 && self.saturation == 0.0 && self.warmth == 0.0 && self.clarity == 0.0
     }
 }
 
@@ -110,11 +226,21 @@ pub struct Texture {
     pub blemish_smoothing: f32,
     /// Tames shiny hot spots on skin and restores the skin colour under them.
     pub specular_balance: f32,
+    /// Character line sculpting, −100…100: deepens (+) or softens (−) the mid-scale
+    /// lines of a face (smile lines, brow furrows) without touching pores.
+    pub character_lines: f32,
+    /// Confine skin retouching and line sculpting to the subject mask, so skin-toned
+    /// backgrounds (wood, sand, brick) are left alone.
+    pub retouch_subject_only: bool,
 }
 
 impl Texture {
     pub fn is_neutral(&self) -> bool {
-        *self == Self::default()
+        self.clarity == 0.0
+            && self.micro_texture == 0.0
+            && self.blemish_smoothing == 0.0
+            && self.specular_balance == 0.0
+            && self.character_lines == 0.0
     }
 }
 
@@ -200,6 +326,28 @@ pub struct ColorGrade {
     pub wheels: ColorWheels,
     /// 0…100: how much of the HSL and wheel changes skin is shielded from.
     pub skin_protection: f32,
+    /// Foliage shift: hue (− towards teal, + towards autumn gold), saturation and
+    /// luminance of greenery, outside the subject.
+    pub foliage: HslChannel,
+    /// Background re-colouration through the Step 3 subject mask.
+    pub background: BackgroundTint,
+}
+
+/// Tint, saturation and luminance of everything outside the subject. Hue in degrees
+/// on the HSV wheel, amount 0…100, saturation and luminance −100…100.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackgroundTint {
+    pub hue: f32,
+    pub amount: f32,
+    pub saturation: f32,
+    pub luminance: f32,
+}
+
+impl BackgroundTint {
+    pub fn is_neutral(&self) -> bool {
+        self.amount <= 0.0 && self.saturation == 0.0 && self.luminance == 0.0
+    }
 }
 
 /// PRD Step 6: atmospheric light. Strengths 0…100, warmth −100 (cool) … 100 (gold).
@@ -211,6 +359,8 @@ pub struct Atmosphere {
     /// Bloom radius, 0…100 (≈0.5–5% of the frame).
     pub glow_size: f32,
     pub glow_warmth: f32,
+    /// Let only the subject glow (through the Step 3 subject mask).
+    pub glow_subject_only: bool,
     /// Aerial haze that thickens with distance (from the depth model; uniform without it).
     pub fog: f32,
     /// Depth at which fog begins, 0 (at the camera) … 100 (only the far background).
@@ -270,6 +420,7 @@ impl Default for Atmosphere {
             glow: 0.0,
             glow_size: 50.0,
             glow_warmth: 0.0,
+            glow_subject_only: false,
             fog: 0.0,
             fog_start: 30.0,
             fog_warmth: 0.0,
@@ -498,11 +649,40 @@ pub enum WbMode {
     Custom,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct LensCorrections {
+    /// Apply the lens profile: the camera's own corrections in a DNG, else the Lensfun
+    /// database entry for the lens (distortion, lateral CA, vignetting).
+    pub profile: bool,
+    /// Manual corrections, applied on top of the profile.
     pub distortion: DistortionCoeffs,
     pub chromatic_aberration: ChromaticAberration,
+    /// Straighten: rotation in degrees (positive = counter-clockwise), with the frame
+    /// cropped to stay filled.
+    pub rotation: f32,
+    /// Vertical perspective, −100…100: positive straightens verticals that converge
+    /// towards the top (camera tilted up).
+    pub vertical: f32,
+}
+
+impl Default for LensCorrections {
+    fn default() -> Self {
+        Self {
+            profile: true,
+            distortion: DistortionCoeffs::default(),
+            chromatic_aberration: ChromaticAberration::default(),
+            rotation: 0.0,
+            vertical: 0.0,
+        }
+    }
+}
+
+impl LensCorrections {
+    /// Whether the upright geometry (rotation, perspective) changes anything.
+    pub fn has_transform(&self) -> bool {
+        self.rotation != 0.0 || self.vertical != 0.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

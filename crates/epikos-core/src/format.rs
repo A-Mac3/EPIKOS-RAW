@@ -12,6 +12,9 @@ pub enum CameraFormat {
     LeicaDng,
     AppleProRaw,
     AdobeDng,
+    /// Already-rendered images: developed like a linear-RGB DNG from their sRGB values.
+    Jpeg,
+    Png,
     Unknown,
 }
 
@@ -24,6 +27,8 @@ impl CameraFormat {
             "nef" | "nrw" => Self::NikonNef,
             "raf" => Self::FujifilmRaf,
             "dng" => Self::AdobeDng,
+            "jpg" | "jpeg" => Self::Jpeg,
+            "png" => Self::Png,
             _ => Self::Unknown,
         }
     }
@@ -44,6 +49,11 @@ impl CameraFormat {
         Self::AdobeDng
     }
 
+    /// JPEG or PNG: 8-bit display-referred pixels, not sensor data.
+    pub fn is_bitmap(self) -> bool {
+        matches!(self, Self::Jpeg | Self::Png)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::SonyArw => "Sony ARW",
@@ -54,6 +64,8 @@ impl CameraFormat {
             Self::LeicaDng => "Leica DNG",
             Self::AppleProRaw => "Apple ProRAW",
             Self::AdobeDng => "Adobe DNG",
+            Self::Jpeg => "JPEG",
+            Self::Png => "PNG",
             Self::Unknown => "Unknown",
         }
     }

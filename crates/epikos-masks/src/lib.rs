@@ -5,6 +5,7 @@
 //! | Subject | IS-Net (DIS), `isnet-general-use.onnx`  | 1024×1024  |
 //! | Sky     | U²-Net sky segmentation, `skyseg.onnx`  | 320×320    |
 //! | Depth   | Depth Anything V2 Small, `depth-anything-v2-small.onnx` | 518 long side, ×14 |
+//! | Face parts (eyes, hair, …) | BiSeNet face parsing, `face-parsing-resnet18.onnx` | 512×512 face crop |
 //!
 //! Models are downloaded by `scripts/fetch-models.sh` (they are not committed) and loaded
 //! lazily on first use, then kept for the life of the [`Masker`]. Inputs are
@@ -91,6 +92,43 @@ const DEPTH: ModelSpec = ModelSpec {
 /// Session slot of the depth model, after the two masks.
 const DEPTH_SLOT: usize = 2;
 
+/// BiSeNet (ResNet-18) face parsing, trained on CelebAMask-HQ; ImageNet normalisation.
+/// Expects a face crop.
+const FACE: ModelSpec = ModelSpec {
+    file: "face-parsing-resnet18.onnx",
+    side: 512,
+    mean: [0.485, 0.456, 0.406],
+    std: [0.229, 0.224, 0.225],
+};
+const FACE_SLOT: usize = 3;
+/// CelebAMask-HQ classes: 0 background, 1 skin, 2–3 brows, 4–5 eyes, 6 glasses,
+/// 7–8 ears, 9 earring, 10 nose, 11 mouth, 12–13 lips, 14 neck, 15 necklace,
+/// 16 cloth, 17 hair, 18 hat.
+const FACE_CLASSES: usize = 19;
+
+/// Per-part probabilities (0–1) for one face crop, at the crop's size.
+#[derive(Debug, Clone)]
+pub struct FaceParts {
+    pub width: u32,
+    pub height: u32,
+    /// Face skin (not neck).
+    pub skin: Vec<f32>,
+    pub eyes: Vec<f32>,
+    pub brows: Vec<f32>,
+    pub lips: Vec<f32>,
+    pub hair: Vec<f32>,
+    pub infer_ms: u64,
+}
+
+impl FaceParts {
+    /// Share of the crop that reads as a face (skin and features). Low values mean the
+    /// crop held no face.
+    pub fn face_share(&self) -> f32 {
+        let n = self.skin.len().max(1) as f32;
+        (0..self.skin.len()).map(|i| self.skin[i] + self.eyes[i] + self.brows[i] + self.lips[i]).sum::<f32>() / n
+    }
+}
+
 /// Relative scene depth, row-major: 1 = nearest, 0 = farthest (the sky).
 #[derive(Debug, Clone)]
 pub struct DepthMap {
@@ -142,14 +180,14 @@ pub struct ModelStatus {
 /// Owns the ONNX sessions. Thread-safe; each model runs one inference at a time.
 pub struct Masker {
     dir: PathBuf,
-    sessions: [Mutex<Option<Session>>; 3],
+    sessions: [Mutex<Option<Session>>; 4],
 }
 
 impl Masker {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
-            sessions: [Mutex::new(None), Mutex::new(None), Mutex::new(None)],
+            sessions: [Mutex::new(None), Mutex::new(None), Mutex::new(None), Mutex::new(None)],
         }
     }
 
@@ -187,6 +225,52 @@ impl Masker {
 
     pub fn depth_available(&self) -> bool {
         self.depth_file().is_file()
+    }
+
+    pub fn face_file(&self) -> PathBuf {
+        self.dir.join(FACE.file)
+    }
+
+    pub fn face_available(&self) -> bool {
+        self.face_file().is_file()
+    }
+
+    /// Parse a face crop into parts (skin, eyes, brows, lips, hair), at the crop's size.
+    pub fn parse_face(&self, crop: &RgbImage) -> Result<FaceParts> {
+        if crop.width == 0 || crop.height == 0 {
+            return Err(Error::InvalidImage { reason: "cannot parse an empty face crop".into() });
+        }
+        let input = to_nchw(crop, &FACE);
+        let mut slot = self.sessions[FACE_SLOT].lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(self.load_file(&self.face_file(), "Face parsing")?);
+        }
+        let session = slot.as_mut().expect("session loaded above");
+        let t = Instant::now();
+        let side = FACE.side as usize;
+        let tensor = Tensor::from_array(([1usize, 3, side, side], input)).map_err(ml)?;
+        let outputs = session.run(ort::inputs![tensor]).map_err(ml)?;
+        // Logits [1, 19, 512, 512].
+        let (shape, logits) = outputs[0].try_extract_tensor::<f32>().map_err(ml)?;
+        let n = side * side;
+        if logits.len() < FACE_CLASSES * n || shape.iter().rev().take(2).product::<i64>() as usize != n {
+            return Err(Error::Decode(format!("{}: unexpected output shape {shape:?}", FACE.file)));
+        }
+        let parts = face_parts(&logits[..FACE_CLASSES * n], n);
+        drop(outputs);
+        let infer_ms = t.elapsed().as_millis() as u64;
+        drop(slot);
+        let fit = |p: &[f32]| resize_plane(p, FACE.side, FACE.side, crop.width, crop.height);
+        Ok(FaceParts {
+            width: crop.width,
+            height: crop.height,
+            skin: fit(&parts[0]),
+            eyes: fit(&parts[1]),
+            brows: fit(&parts[2]),
+            lips: fit(&parts[3]),
+            hair: fit(&parts[4]),
+            infer_ms,
+        })
     }
 
     /// Estimate relative depth for `image`, returned at the image's size.
@@ -335,6 +419,21 @@ fn normalise_depth(disparity: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// Softmax over the class axis, summed into [skin, eyes, brows, lips, hair].
+fn face_parts(logits: &[f32], n: usize) -> [Vec<f32>; 5] {
+    let groups: [&[usize]; 5] = [&[1], &[4, 5], &[2, 3], &[11, 12, 13], &[17]];
+    let mut out: [Vec<f32>; 5] = std::array::from_fn(|_| vec![0.0; n]);
+    for i in 0..n {
+        let max = (0..FACE_CLASSES).map(|c| logits[c * n + i]).fold(f32::MIN, f32::max);
+        let exp: [f32; FACE_CLASSES] = std::array::from_fn(|c| (logits[c * n + i] - max).exp());
+        let sum: f32 = exp.iter().sum();
+        for (g, classes) in groups.iter().enumerate() {
+            out[g][i] = classes.iter().map(|&c| exp[c]).sum::<f32>() / sum;
+        }
+    }
+    out
+}
+
 fn ml(e: impl std::fmt::Display) -> Error {
     Error::Decode(format!("mask model: {e}"))
 }
@@ -403,6 +502,19 @@ mod tests {
         assert_eq!(Masker::locate(&[empty.clone(), full.clone()]).dir(), full);
         assert_eq!(Masker::locate(std::slice::from_ref(&empty)).dir(), empty);
         std::fs::remove_dir_all(&full).unwrap();
+    }
+
+    #[test]
+    fn face_parts_softmax_groups_classes() {
+        // Two pixels: one confidently hair (17), one split between the eyes (4, 5).
+        let n = 2;
+        let mut logits = vec![0.0f32; FACE_CLASSES * n];
+        logits[17 * n] = 20.0;
+        logits[4 * n + 1] = 10.0;
+        logits[5 * n + 1] = 10.0;
+        let [skin, eyes, _, _, hair] = face_parts(&logits, n);
+        assert!(hair[0] > 0.99 && eyes[0] < 0.01);
+        assert!(eyes[1] > 0.99 && skin[1] < 0.01);
     }
 
     #[test]

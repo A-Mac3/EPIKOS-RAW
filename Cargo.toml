@@ -33,7 +33,7 @@ sha2 = "0.10"
 hex = "0.4"
 clap = { version = "4", features = ["derive"] }
 rawler = "0.8"
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 # Dev builds (incl. `tauri dev`): optimise the image engine and all dependencies so
 # decoding and previews run at near-release speed; the app shell keeps fast debug builds.

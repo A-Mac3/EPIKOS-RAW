@@ -3,8 +3,10 @@
 //! Container parsers (CR3, ARW, NEF, RAF, DNG, ProRAW) are provided by
 //! [`rawler`]. Black/white scaling and sensor metadata become [`epikos_core`] types.
 
+mod bitmap;
 mod convert;
 mod metadata;
+mod opcodes;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -33,6 +35,9 @@ pub fn decode_file(path: impl AsRef<Path>) -> Result<DecodedRaw> {
     let path = path.as_ref();
     let bytes = Arc::new(std::fs::read(path)?);
     let digest = hex::encode(Sha256::digest(bytes.as_slice()));
+    if is_bitmap(path) {
+        return bitmap::decode(path, &bytes, digest);
+    }
     let src = RawSource::new_from_shared_vec(bytes);
     let params = RawDecodeParams::default();
     let mut raw = rawler::decode(&src, &params).map_err(decode_err)?;
@@ -41,13 +46,22 @@ pub fn decode_file(path: impl AsRef<Path>) -> Result<DecodedRaw> {
     let (orientation, capture) = metadata::read(&src, &params, &raw.make, &raw.model);
     let mut decoded = convert::from_rawler(path, raw, digest, orientation)?;
     decoded.metadata = capture;
+    decoded.lens_profile = rawler::get_decoder(&src).ok().and_then(|d| opcodes::lens_profile(d.as_ref()));
     Ok(decoded)
+}
+
+/// JPEG or PNG (by extension).
+pub fn is_bitmap(path: &Path) -> bool {
+    CameraFormat::from_extension(path.extension().and_then(|e| e.to_str()).unwrap_or("")).is_bitmap()
 }
 
 /// Capture metadata (camera, lens, exposure, time, GPS) without decoding the image
 /// data: cheap enough to run over a whole shoot.
 pub fn read_metadata(path: impl AsRef<Path>) -> Result<CaptureMetadata> {
     let path = path.as_ref();
+    if is_bitmap(path) {
+        return bitmap::read_metadata(path);
+    }
     let src = RawSource::new(path)?;
     let params = RawDecodeParams::default();
     let meta = rawler::get_decoder(&src)
@@ -57,13 +71,16 @@ pub fn read_metadata(path: impl AsRef<Path>) -> Result<CaptureMetadata> {
     Ok(metadata::read(&src, &params, &make, &model).1)
 }
 
-/// Camera-embedded JPEG preview, upright, downscaled so its longest side is at most
+/// Camera-embedded JPEG preview (for a JPEG/PNG, the image itself), upright, downscaled so its longest side is at most
 /// `max_side`.
 ///
 /// This is the camera's own rendering (not an EPIKOS develop), which makes it cheap
 /// enough for browsing whole folders.
 pub fn embedded_thumbnail(path: impl AsRef<Path>, max_side: u32) -> Result<image::RgbImage> {
     let path = path.as_ref();
+    if is_bitmap(path) {
+        return bitmap::thumbnail(path, max_side);
+    }
     let params = RawDecodeParams::default();
     let img = rawler::analyze::extract_thumbnail_pixels(path, &params).map_err(decode_err)?;
     let img = if img.width().max(img.height()) > max_side {

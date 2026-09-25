@@ -772,6 +772,7 @@ mod tests {
                 source_sha256: String::new(),
                 source_path: "synthetic.ARW".into(),
                 metadata: Default::default(),
+                lens_profile: None,
             },
             bases: Mutex::new(Vec::new()),
             masks: Mutex::new(Vec::new()),

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Download the ONNX models used for Step 3 (AI Subject & Semantic Masking) and Step 6
-# (depth-based fog) and verify their SHA-256. Models are not committed; the engine
+# Download the ONNX models used for Step 3 (AI Subject & Semantic Masking: subject, sky,
+# eyes and hair) and Step 6 (depth-based fog) and verify their SHA-256. Models are not committed; the engine
 # looks for them in $EPIKOS_MODELS_DIR, then the app data folder, then <repo>/models.
 #
 #   scripts/fetch-models.sh [DEST_DIR]      (default: <repo>/models)
@@ -15,6 +15,9 @@ MODELS=(
   "skyseg.onnx|https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx|ab9c34c64c3d821220a2886a4a06da4642ffa14d5b30e8d5339056a089aa1d39"
   # Depth Anything V2 Small (Apache-2.0; the Base/Large weights are non-commercial).
   "depth-anything-v2-small.onnx|https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx|afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c"
+  # BiSeNet face parsing (code and weights MIT, yakhyo/face-parsing), for the eye and
+  # hair masks. Trained on CelebAMask-HQ, whose images are for non-commercial research.
+  "face-parsing-resnet18.onnx|https://github.com/yakhyo/face-parsing/releases/download/weights/resnet18.onnx|0d9bd318e46987c3bdbfacae9e2c0f461cae1c6ac6ea6d43bbe541a91727e33f"
 )
 
 sha256() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1 || sha256sum "$1" | cut -d' ' -f1; }

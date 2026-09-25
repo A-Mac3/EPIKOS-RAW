@@ -15,6 +15,8 @@ pub struct DecodedRaw {
     pub source_path: String,
     /// EXIF capture metadata (camera, lens, exposure, time, GPS) for exports.
     pub metadata: CaptureMetadata,
+    /// The camera's own lens corrections (DNG `OpcodeList3`), when the file has them.
+    pub lens_profile: Option<epikos_core::LensProfile>,
 }
 
 pub fn from_rawler(
@@ -108,6 +110,7 @@ pub fn from_rawler(
         source_sha256: digest,
         source_path: path.to_string_lossy().into_owned(),
         metadata: CaptureMetadata::default(),
+        lens_profile: None,
     })
 }
 

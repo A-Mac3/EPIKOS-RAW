@@ -32,7 +32,7 @@ pub(crate) fn read(
     (orientation, convert(meta, make, model))
 }
 
-fn convert(meta: RawMetadata, make: &str, model: &str) -> CaptureMetadata {
+pub(crate) fn convert(meta: RawMetadata, make: &str, model: &str) -> CaptureMetadata {
     let e = meta.exif;
     let lens = meta.lens;
     let text = |s: Option<String>| {

@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use epikos_core::{Error, Result};
 
 use crate::document::{
-    Adjustments, Atmosphere, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
+    Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
-    NoiseReduction, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, ToneCurve, VirtualLight, WbMode, WhiteBalance,
+    LocalAdjustment, MaskTarget, NoiseReduction, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
+    ToneCurve, VirtualLight, WbMode, WhiteBalance,
 };
 
 /// XMP namespace that marks a sidecar as written by EPIKOS RAW.
@@ -106,7 +107,10 @@ fn render_xmp(doc: &DevelopDocument) -> String {
     epikos:cy="{cy}"
     epikos:caEnabled="{ca_on}"
     epikos:caRed="{ca_r}"
-    epikos:caBlue="{ca_b}"{look}/>
+    epikos:caBlue="{ca_b}"
+    epikos:lensProfile="{lens_profile}"
+    epikos:geometry="{rotation},{vertical}"
+    epikos:tone="{tone}"{look}/>
  </rdf:RDF>
 </x:xmpmeta>
 "#,
@@ -138,6 +142,10 @@ fn render_xmp(doc: &DevelopDocument) -> String {
         ca_on = a.lens.chromatic_aberration.enabled,
         ca_r = a.lens.chromatic_aberration.red,
         ca_b = a.lens.chromatic_aberration.blue,
+        lens_profile = a.lens.profile,
+        rotation = a.lens.rotation,
+        vertical = a.lens.vertical,
+        tone = a.tone.to_array().map(|v| v.to_string()).join(","),
         look = render_look(a),
     )
 }
@@ -147,8 +155,22 @@ fn render_xmp(doc: &DevelopDocument) -> String {
 fn render_look(a: &Adjustments) -> String {
     let t = &a.texture;
     let mut out = format!(
-        "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"",
-        t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance
+        "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"\n    epikos:characterLines=\"{}\"\n    epikos:retouchSubjectOnly=\"{}\"",
+        t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance, t.character_lines, t.retouch_subject_only
+    );
+    // Local adjustments: "mask,exposure,contrast,saturation,warmth,clarity;…".
+    if !a.local.is_empty() {
+        let local: Vec<String> = a
+            .local
+            .iter()
+            .map(|l| format!("{},{},{},{},{},{}", l.mask.id(), l.exposure, l.contrast, l.saturation, l.warmth, l.clarity))
+            .collect();
+        out += &format!("\n    epikos:local=\"{}\"", local.join(";"));
+    }
+    let (f, bg) = (&a.color.foliage, &a.color.background);
+    out += &format!(
+        "\n    epikos:foliage=\"{},{},{}\"\n    epikos:background=\"{},{},{},{}\"",
+        f.hue, f.saturation, f.luminance, bg.hue, bg.amount, bg.saturation, bg.luminance
     );
     for (name, band) in HslBands::NAMES.iter().zip(a.color.hsl.bands()) {
         out += &format!(
@@ -178,6 +200,9 @@ fn render_look(a: &Adjustments) -> String {
         at.shafts, at.shaft_length, at.shaft_warmth,
         if at.shaft_auto { "auto" } else { "manual" }, at.shaft_x, at.shaft_y
     );
+    if at.glow_subject_only {
+        out += "\n    epikos:glowSubjectOnly=\"true\"";
+    }
     // Virtual lights: "x,y,depth,intensity,reach,warmth,halo;…".
     if !at.lights.is_empty() {
         let lights: Vec<String> = at
@@ -320,6 +345,25 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
             highlight_recovery: flag("epikos:highlightRecovery")
                 .unwrap_or(defaults.highlight_recovery),
             exposure: num("epikos:exposure").unwrap_or(defaults.exposure),
+            tone: get("epikos:tone").and_then(numbers::<7>).map(Tone::from_array).unwrap_or_default(),
+            local: get("epikos:local")
+                .map(|v| {
+                    v.split(';')
+                        .filter_map(|l| {
+                            let (mask, rest) = l.split_once(',')?;
+                            let [exposure, contrast, saturation, warmth, clarity] = numbers::<5>(rest)?;
+                            Some(LocalAdjustment {
+                                mask: MaskTarget::from_id(mask.trim())?,
+                                exposure,
+                                contrast,
+                                saturation,
+                                warmth,
+                                clarity,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             // Camera Raw's LuminanceSmoothing / ColorNoiseReduction use a different
             // algorithm, so the numbers don't transfer; only EPIKOS values are read.
             noise_reduction: NoiseReduction {
@@ -332,6 +376,8 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                 micro_texture: num("epikos:microTexture").unwrap_or(0.0),
                 blemish_smoothing: num("epikos:blemishSmoothing").unwrap_or(0.0),
                 specular_balance: num("epikos:specularBalance").unwrap_or(0.0),
+                character_lines: num("epikos:characterLines").unwrap_or(0.0),
+                retouch_subject_only: flag("epikos:retouchSubjectOnly").unwrap_or(false),
             },
             color: {
                 let mut hsl = HslBands::default();
@@ -364,6 +410,14 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                         highlights: wheel("Highlights"),
                     },
                     skin_protection: num("epikos:skinProtection").unwrap_or(0.0),
+                    foliage: get("epikos:foliage")
+                        .and_then(triple)
+                        .map(|[hue, saturation, luminance]| HslChannel { hue, saturation, luminance })
+                        .unwrap_or_default(),
+                    background: get("epikos:background")
+                        .and_then(numbers::<4>)
+                        .map(|[hue, amount, saturation, luminance]| BackgroundTint { hue, amount, saturation, luminance })
+                        .unwrap_or_default(),
                 }
             },
             atmosphere: {
@@ -408,6 +462,7 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     .unwrap_or_default();
                 Atmosphere {
                     lights,
+                    glow_subject_only: flag("epikos:glowSubjectOnly").unwrap_or(false),
                     glow,
                     glow_size,
                     glow_warmth,
@@ -497,6 +552,9 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     .unwrap_or_default(),
             },
             lens: LensCorrections {
+                profile: flag("epikos:lensProfile").unwrap_or(defaults.lens.profile),
+                rotation: get("epikos:geometry").and_then(numbers::<2>).map_or(0.0, |g| g[0]),
+                vertical: get("epikos:geometry").and_then(numbers::<2>).map_or(0.0, |g| g[1]),
                 distortion: DistortionCoeffs {
                     enabled: flag("epikos:distortionEnabled").unwrap_or(d.enabled),
                     k1: num("epikos:k1").unwrap_or(d.k1),
@@ -591,6 +649,19 @@ mod tests {
         doc.adjustments.style.id = "silver-charcoal".into();
         doc.adjustments.style.amount = 70.0;
         doc.adjustments.style.skin_protection = 55.0;
+        doc.adjustments.lens.profile = false;
+        doc.adjustments.lens.rotation = -1.25;
+        doc.adjustments.lens.vertical = 30.0;
+        doc.adjustments.tone = Tone::from_array([10.0, -40.0, 35.5, 5.0, -8.0, 20.0, -3.0]);
+        doc.adjustments.local = vec![
+            LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, clarity: 25.0, ..Default::default() },
+            LocalAdjustment { mask: MaskTarget::Background, saturation: -30.0, warmth: 12.0, ..Default::default() },
+        ];
+        doc.adjustments.texture.character_lines = 40.0;
+        doc.adjustments.texture.retouch_subject_only = true;
+        doc.adjustments.color.foliage = HslChannel { hue: 35.0, saturation: -10.0, luminance: 5.0 };
+        doc.adjustments.color.background = BackgroundTint { hue: 200.0, amount: 30.0, saturation: -20.0, luminance: -10.0 };
+        doc.adjustments.atmosphere.glow_subject_only = true;
         let xml = render_xmp(&doc);
         let back = parse_xmp(&xml).unwrap();
         assert_eq!(doc, back);
