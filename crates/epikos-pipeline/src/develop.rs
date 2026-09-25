@@ -1,10 +1,11 @@
 use epikos_core::{ColorSpace, ImageRgbF32, MosaicF32, Result, SensorLayout, SensorProfile};
 use epikos_sidecar::{Adjustments, DemosaicMode, DevelopDocument};
 
-use crate::color_transform::{apply_white_balance, camera_to_linear_rec2020};
+use crate::color_transform::{apply_white_balance, camera_to_linear_rec2020, wb_multipliers};
 use crate::demosaic::{demosaic, DemosaicAlgorithm};
 use crate::highlights::recover_highlights;
 use crate::optics::{correct_chromatic_aberration, correct_distortion};
+use crate::orient::apply_orientation;
 use crate::white_balance::gains_for_temperature;
 
 /// Run the full 32-bit develop graph. The RAW buffer is never mutated on disk.
@@ -18,7 +19,8 @@ pub fn develop(
     develop_rgb(rgb, profile, adj)
 }
 
-/// Everything after demosaic: highlights → WB → optics → camera RGB → Rec.2020 → exposure.
+/// Everything after demosaic: highlights → WB → optics → camera RGB → Rec.2020 →
+/// exposure → orientation.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
 /// interactive preview share one code path.
@@ -29,14 +31,17 @@ pub fn develop_rgb(
 ) -> Result<ImageRgbF32> {
     rgb.validate()?;
 
-    if adj.highlight_recovery {
-        recover_highlights(&mut rgb);
-    }
-
     let monochrome = matches!(profile.layout, SensorLayout::Monochrome);
+    let gains = if monochrome {
+        [1.0; 3]
+    } else {
+        wb_multipliers(resolve_wb(profile, adj))
+    };
+
+    // Always runs: even with reconstruction off, clipped pixels must stay neutral.
+    recover_highlights(&mut rgb, gains, adj.highlight_recovery);
     if !monochrome {
-        let wb = resolve_wb(profile, adj);
-        apply_white_balance(&mut rgb, wb);
+        apply_white_balance(&mut rgb, gains);
     }
 
     rgb = correct_chromatic_aberration(&rgb, &adj.lens.chromatic_aberration);
@@ -55,6 +60,9 @@ pub fn develop_rgb(
             plane.iter_mut().for_each(|v| *v *= gain);
         }
     }
+
+    // Last, so lens corrections above work in the sensor's own frame.
+    let rgb = apply_orientation(rgb, profile.orientation);
     rgb.validate()?;
     Ok(rgb)
 }
@@ -131,6 +139,7 @@ mod tests {
             },
             as_shot_wb: [1.0, 1.0, 1.0, 1.0],
             xyz_to_cam: [[0.0; 3]; 3],
+            orientation: Default::default(),
         };
         let doc = DevelopDocument::new(SourceRef {
             path: "synthetic.ARW".into(),

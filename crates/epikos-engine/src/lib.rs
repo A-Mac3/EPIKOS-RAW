@@ -39,6 +39,7 @@ pub struct ImageInfo {
     pub format: String,
     pub make: String,
     pub model: String,
+    /// Upright (display-oriented) size in pixels.
     pub width: u32,
     pub height: u32,
     pub monochrome: bool,
@@ -154,6 +155,7 @@ impl Engine {
 
         let p = &raw.profile;
         let monochrome = matches!(p.layout, SensorLayout::Monochrome);
+        let upright_swapped = p.orientation.swaps_axes();
         let as_shot = (!monochrome)
             .then(|| temperature_for_gains(&p.xyz_to_cam, p.as_shot_wb))
             .flatten()
@@ -165,8 +167,8 @@ impl Engine {
             format: p.format.label().to_string(),
             make: p.clean_make.clone(),
             model: p.clean_model.clone(),
-            width: p.width,
-            height: p.height,
+            width: if upright_swapped { p.height } else { p.width },
+            height: if upright_swapped { p.width } else { p.height },
             monochrome,
             as_shot,
             document,
@@ -313,6 +315,7 @@ mod tests {
             layout: SensorLayout::Cfa { cfa: cfa.clone() },
             as_shot_wb: [1.0, 1.0, 1.0, 1.0],
             xyz_to_cam: [[0.0; 3]; 3],
+            orientation: Default::default(),
         };
         Loaded {
             raw: DecodedRaw {

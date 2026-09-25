@@ -1,7 +1,7 @@
 //! Scene-referred 32-bit develop pipeline.
 //!
 //! Order: demosaic → highlight recovery → white balance → chromatic aberration
-//! → Brown–Conrady distortion → camera RGB → linear Rec.2020 → exposure.
+//! → Brown–Conrady distortion → camera RGB → linear Rec.2020 → exposure → orientation.
 //! [`to_display_srgb`] is the separate view transform for the screen.
 
 mod color_transform;
@@ -11,6 +11,7 @@ mod display;
 mod highlights;
 mod matrix;
 mod optics;
+mod orient;
 mod preview;
 mod white_balance;
 
@@ -20,4 +21,5 @@ pub use display::{to_display_srgb, DisplayImage};
 pub use preview::{base_block, bin_mosaic, block_for_size};
 pub use highlights::recover_highlights;
 pub use optics::{correct_chromatic_aberration, correct_distortion};
+pub use orient::apply_orientation;
 pub use white_balance::{gains_for_temperature, temperature_for_gains};

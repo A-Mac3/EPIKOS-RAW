@@ -2,16 +2,20 @@ use epikos_core::{ColorSpace, ImageRgbF32, SensorProfile};
 
 use crate::matrix::{effective_xyz_to_cam, invert, mul, Mat3, REC2020_TO_XYZ};
 
-/// Apply as-shot (or sidecar) white-balance multipliers in camera RGB.
-pub fn apply_white_balance(image: &mut ImageRgbF32, wb: [f32; 4]) {
+/// Green-normalised `[r, g, b]` multipliers from camera WB coefficients `[r, g, b, e]`.
+/// Missing or invalid coefficients count as 1.
+pub fn wb_multipliers(wb: [f32; 4]) -> [f32; 3] {
     let valid = |v: f32| v.is_finite() && v > 1e-6;
-    let wr = if valid(wb[0]) { wb[0] } else { 1.0 };
-    let wg = if valid(wb[1]) { wb[1] } else { 1.0 };
-    let wb_ = if valid(wb[2]) { wb[2] } else { 1.0 };
-    let scale = 1.0 / wg;
+    let pick = |v: f32| if valid(v) { v } else { 1.0 };
+    let g = pick(wb[1]);
+    [pick(wb[0]) / g, 1.0, pick(wb[2]) / g]
+}
+
+/// Multiply camera RGB by green-normalised WB multipliers (see [`wb_multipliers`]).
+pub fn apply_white_balance(image: &mut ImageRgbF32, gains: [f32; 3]) {
     for i in 0..image.len() {
-        image.r[i] *= wr * scale;
-        image.b[i] *= wb_ * scale;
+        image.r[i] *= gains[0];
+        image.b[i] *= gains[2];
     }
 }
 

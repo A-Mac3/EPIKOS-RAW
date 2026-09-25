@@ -49,6 +49,62 @@ pub enum SensorLayout {
     Monochrome,
 }
 
+/// How the sensor image must be transformed for upright display (EXIF tag 0x0112).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Orientation {
+    #[default]
+    Normal,
+    FlipHorizontal,
+    Rotate180,
+    FlipVertical,
+    /// Mirror across the top-left → bottom-right diagonal.
+    Transpose,
+    /// Rotate 90° clockwise.
+    Rotate90,
+    /// Mirror across the top-right → bottom-left diagonal.
+    Transverse,
+    /// Rotate 270° clockwise (90° counter-clockwise).
+    Rotate270,
+}
+
+impl Orientation {
+    pub fn from_exif(tag: u16) -> Self {
+        match tag {
+            2 => Self::FlipHorizontal,
+            3 => Self::Rotate180,
+            4 => Self::FlipVertical,
+            5 => Self::Transpose,
+            6 => Self::Rotate90,
+            7 => Self::Transverse,
+            8 => Self::Rotate270,
+            _ => Self::Normal,
+        }
+    }
+
+    /// True when width and height trade places.
+    pub fn swaps_axes(self) -> bool {
+        matches!(
+            self,
+            Self::Transpose | Self::Rotate90 | Self::Transverse | Self::Rotate270
+        )
+    }
+
+    /// Source pixel for output pixel `(x, y)`, where `w × h` is the *source* size.
+    pub fn source_of(self, x: u32, y: u32, w: u32, h: u32) -> (u32, u32) {
+        match self {
+            Self::Normal => (x, y),
+            Self::FlipHorizontal => (w - 1 - x, y),
+            Self::Rotate180 => (w - 1 - x, h - 1 - y),
+            Self::FlipVertical => (x, h - 1 - y),
+            Self::Transpose => (y, x),
+            Self::Rotate90 => (y, h - 1 - x),
+            Self::Transverse => (w - 1 - y, h - 1 - x),
+            Self::Rotate270 => (w - 1 - y, x),
+        }
+    }
+}
+
 /// Camera/sensor identity used for color science and demosaic routing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +123,9 @@ pub struct SensorProfile {
     /// CIE XYZ (D65) → camera RGB: the DNG `ColorMatrix` convention, not normalised.
     /// All zeros means the file carries no matrix.
     pub xyz_to_cam: [[f32; 3]; 3],
+    /// Applied at the end of develop; `width`/`height` above are sensor (unrotated) size.
+    #[serde(default)]
+    pub orientation: Orientation,
 }
 
 impl SensorProfile {

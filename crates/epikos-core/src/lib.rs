@@ -10,4 +10,4 @@ pub use buffer::{ImageRgbF32, MosaicF32, Pixel};
 pub use color::ColorSpace;
 pub use error::{Error, Result};
 pub use format::CameraFormat;
-pub use profile::{CfaPattern, SensorLayout, SensorProfile};
+pub use profile::{CfaPattern, Orientation, SensorLayout, SensorProfile};

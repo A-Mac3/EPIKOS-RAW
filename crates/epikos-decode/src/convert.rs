@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use epikos_core::{
-    CameraFormat, CfaPattern, Error, MosaicF32, Result, SensorLayout, SensorProfile,
+    CameraFormat, CfaPattern, Error, MosaicF32, Orientation, Result, SensorLayout, SensorProfile,
 };
 use rawler::rawimage::{RawImage, RawImageData, RawPhotometricInterpretation};
 
@@ -14,7 +14,12 @@ pub struct DecodedRaw {
     pub source_path: String,
 }
 
-pub fn from_rawler(path: &Path, raw: RawImage, digest: String) -> Result<DecodedRaw> {
+pub fn from_rawler(
+    path: &Path,
+    raw: RawImage,
+    digest: String,
+    orientation: Orientation,
+) -> Result<DecodedRaw> {
     let format =
         CameraFormat::from_extension(path.extension().and_then(|e| e.to_str()).unwrap_or(""))
             .refine_dng(&raw.clean_make, &raw.clean_model);
@@ -80,6 +85,7 @@ pub fn from_rawler(path: &Path, raw: RawImage, digest: String) -> Result<Decoded
         layout,
         as_shot_wb: raw.wb_coeffs,
         xyz_to_cam,
+        orientation,
     };
 
     let cfa = match &profile.layout {
