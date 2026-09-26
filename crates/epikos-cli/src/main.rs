@@ -37,7 +37,21 @@ enum Commands {
     /// Story-arc groups of the RAW files in a folder, with hero frames, as JSON.
     Story { dir: PathBuf },
     /// The AI Mentor's reading of a photo (insights and a recommended start), as JSON.
-    Mentor { path: PathBuf },
+    Mentor {
+        path: PathBuf,
+        /// A learned style's id to aim the starting point at (default: Editorial).
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Learn the look of a reference photo (as edited by its sidecar) and keep it in
+    /// ~/.epikos/learned_styles.json; prints the learned style as JSON.
+    Learn {
+        path: PathBuf,
+        #[arg(long, default_value = "")]
+        name: String,
+    },
+    /// The learned styles, as JSON.
+    Learned,
     /// The built-in styles, as JSON.
     Styles,
     /// Export a full-resolution 16-bit TIFF, layered PSD, enhanced DNG, JPEG or 16-bit PNG (by extension).
@@ -93,10 +107,16 @@ fn run() -> Result<()> {
         }
         Commands::Story { dir } => print_json(&Engine::new(1).story_arc(&dir)?),
         Commands::Styles => print_json(&epikos_engine::styles()),
-        Commands::Mentor { path } => {
+        Commands::Learn { path, name } => {
             let engine = Engine::new(1);
             let adjustments = engine.open(&path)?.document.adjustments;
-            let report = engine.mentor(&path, &adjustments)?;
+            print_json(&engine.learn_style(&path, &adjustments, &name)?)
+        }
+        Commands::Learned => print_json(&Engine::new(1).learned_styles()?),
+        Commands::Mentor { path, target } => {
+            let engine = Engine::new(1);
+            let adjustments = engine.open(&path)?.document.adjustments;
+            let report = engine.mentor(&path, &adjustments, target.as_deref())?;
             let feedback = engine.critique(&path, &report.recommended)?;
             print_json(&serde_json::json!({ "report": report, "feedbackOnRecommended": feedback }))
         }

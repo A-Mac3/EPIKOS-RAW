@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use epikos_core::{resize_plane, CaptureMetadata, ImageRgbF32};
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,7 +116,7 @@ pub struct Composition {
     pub line_strength: f32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Swatch {
     pub hex: String,

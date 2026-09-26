@@ -12,6 +12,7 @@ epikos-pipeline.workspace = true
 epikos-sidecar.workspace = true
 epikos-masks.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 image.workspace = true
 tiff = "0.11.3"
 flate2 = "1"

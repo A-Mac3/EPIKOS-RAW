@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use crate::analysis::{self, SceneAnalysis};
 use crate::guidance::{self, CropAdvice, SkinFix, SkinProblem};
+use crate::learn::{editorial, Target};
 use crate::{scene_only, Engine};
 
 #[derive(Debug, Clone, Serialize)]
@@ -33,6 +34,8 @@ pub struct MentorReport {
     pub changes: Vec<String>,
     /// A composition crop and straighten, offered separately from the starting point.
     pub crop: Option<CropAdvice>,
+    /// The look the starting point aims for: "Editorial" or a learned style's name.
+    pub target: String,
     pub analysis_ms: u64,
 }
 
@@ -136,7 +139,11 @@ fn cast_words((a, b): (f32, f32)) -> Option<&'static str> {
 
 impl Engine {
     /// Read the photo and explain how and why to edit it, with a recommended start.
-    pub fn mentor(&self, path: &Path, adjustments: &Adjustments) -> Result<MentorReport> {
+    ///
+    /// The starting point aims at `target`: a learned style's id, or `None` for the
+    /// built-in Editorial profile (rich blacks, dimensional skin, calm olive foliage,
+    /// a midtone S-curve).
+    pub fn mentor(&self, path: &Path, adjustments: &Adjustments, target: Option<&str>) -> Result<MentorReport> {
         let started = Instant::now();
         let loaded = self.load(path)?;
         let scene = self.analyze(path, adjustments)?;
@@ -172,7 +179,7 @@ impl Engine {
         let straighten = if rotation.abs() >= 0.3 { rotation } else { adjustments.lens.rotation };
         let crop = guidance::suggest_crop(subject.as_deref(), sky.as_deref(), w as usize, h as usize, straighten);
 
-        Ok(advise(&scene, &s, adjustments, AdviceInputs {
+        let mut report = advise(&scene, &s, adjustments, AdviceInputs {
             auto_ev,
             auto_tone,
             rotation,
@@ -186,7 +193,29 @@ impl Engine {
             background_warmth,
             crop,
             started,
-        }))
+        });
+
+        // Aim the starting point at the target look, measured on the real render.
+        let learned = match target {
+            Some(id) if id != "editorial" => self.learned_styles()?.into_iter().find(|s| s.id == id),
+            _ => None,
+        };
+        let built_in = editorial();
+        let target = match &learned {
+            Some(l) => Target { name: l.name.clone(), signature: &l.signature, match_exposure: true, match_colours: true },
+            None => Target { name: "Editorial".into(), signature: &built_in, match_exposure: false, match_colours: false },
+        };
+        let before = report.recommended.clone();
+        let fitted = self.fit_to_target(&loaded, &before, &target)?;
+        let moves = describe_fit(&before, &fitted);
+        if !moves.is_empty() {
+            insights_for_target(&mut report, &target, learned.is_some(), &moves);
+            report.changes.extend(moves);
+        }
+        report.recommended = fitted;
+        report.target = target.name;
+        report.analysis_ms = started.elapsed().as_millis() as u64;
+        Ok(report)
     }
 
     /// Live feedback on `adjustments`: what the edit does well and what to watch.
@@ -304,16 +333,15 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
             topic: "Dynamic range",
             observation: format!("The scene spans about {:.1} stops from deep shadow to bright highlight.", l.dynamic_range_ev),
             why: "A wide range can't all fit on screen at once; a global contrast boost would crush one end or the other.".into(),
-            how: "Step 2: recover Highlights and lift Shadows, which work on regions and keep local texture, rather than adding Contrast.".into(),
+            how: "Step 2: recover Highlights first; keep the shadows anchored for depth and lift only the subject (Step 3) if its detail matters. Lifting every shadow flattens the picture into an HDR look.".into(),
         });
     }
-    if a.auto_tone.shadows > rec.tone.shadows + 5.0 {
-        rec.tone.shadows = a.auto_tone.shadows;
-        changes.push(format!("Shadows {:+.0}", a.auto_tone.shadows));
-    }
-    if a.auto_tone.blacks < rec.tone.blacks - 3.0 {
-        rec.tone.blacks = a.auto_tone.blacks;
-        changes.push(format!("Blacks {:+.0}", a.auto_tone.blacks));
+    // Shadows stay anchored (no flat, washed-out lift): only a large share of the frame
+    // crushed to black gets a gentle opening. The black point is set by the target.
+    if s.crushed > 0.08 && a.auto_tone.shadows > rec.tone.shadows + 5.0 {
+        let lift = a.auto_tone.shadows.min(15.0);
+        rec.tone.shadows = lift;
+        changes.push(format!("Shadows {lift:+.0} (only the crushed shadows)"));
     }
 
     // Colour cast.
@@ -345,14 +373,14 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
             observation: format!("The light comes from behind the subject{}.", l.direction.as_deref().map_or(String::new(), |d| format!(" ({d})"))),
             why: "Backlight gives a lovely rim but leaves the side facing the camera in shadow.".into(),
             how: if a.subject {
-                "Step 3: add a local adjustment on Subject with about +0.4 EV, instead of brightening the whole frame.".into()
+                "Step 3: add a local adjustment on Subject with about +0.3 EV, instead of brightening the whole frame.".into()
             } else {
                 "Step 2: lift Shadows gently; install the subject model for a subject-only lift.".into()
             },
         });
         if a.subject && !rec.local.iter().any(|x| x.mask == MaskTarget::Subject) {
-            rec.local.push(LocalAdjustment { mask: MaskTarget::Subject, exposure: 0.4, ..Default::default() });
-            changes.push("Subject +0.40 EV".into());
+            rec.local.push(LocalAdjustment { mask: MaskTarget::Subject, exposure: 0.3, ..Default::default() });
+            changes.push("Subject +0.30 EV".into());
         }
     }
     if l.haze >= 0.25 {
@@ -380,9 +408,11 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
             how: "Keep Skin tone protection at 40–70% when grading (Step 5), and judge exposure on the whole frame, not the face.".into(),
         });
         rec.color.skin_protection = rec.color.skin_protection.max(50.0);
-        if skin.shine >= 0.66 && current.texture.specular_balance < 20.0 {
-            rec.texture.specular_balance = 25.0;
-            changes.push("Specular balance 25".into());
+        // Specular highlights on cheekbones and forehead give skin its dimension: only
+        // an oily, spread-out shine is tamed, and gently.
+        if skin.shine >= 0.85 && current.texture.specular_balance < 12.0 {
+            rec.texture.specular_balance = 12.0;
+            changes.push("Specular balance 12 (oily shine only)".into());
         }
         if portrait && a.eyes && !rec.local.iter().any(|x| x.mask == MaskTarget::Eyes) {
             insights.push(Insight {
@@ -451,7 +481,7 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
     let has_subject_local = rec.local.iter().any(|x| x.mask == MaskTarget::Subject);
     if let (true, Some((on, off))) = (a.subject && !has_subject_local, a.separation) {
         if on < off - 0.5 {
-            let lift = ((off - on) * 0.4).clamp(0.2, 0.6);
+            let lift = ((off - on) * 0.3).clamp(0.2, 0.45);
             insights.push(Insight {
                 topic: "Subject",
                 observation: format!("The subject is {:.1} stops darker than its surroundings.", off - on),
@@ -531,7 +561,82 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
         recommended: rec,
         changes,
         crop: a.crop.clone(),
+        target: String::new(),
         analysis_ms: a.started.elapsed().as_millis() as u64,
+    }
+}
+
+/// What fitting to the target changed, in words.
+fn describe_fit(before: &Adjustments, after: &Adjustments) -> Vec<String> {
+    let mut out = Vec::new();
+    let changed = |a: f32, b: f32| (a - b).abs() >= 1.0;
+    if (after.exposure - before.exposure).abs() >= 0.05 {
+        out.push(format!("Exposure {:+.2} EV (matched to the look's brightness)", after.exposure));
+    }
+    if changed(after.tone.blacks, before.tone.blacks) {
+        out.push(format!("Blacks {:+.0} (black point)", after.tone.blacks));
+    }
+    if changed(after.tone.whites, before.tone.whites) {
+        out.push(format!("Whites {:+.0} (white point)", after.tone.whites));
+    }
+    if changed(after.tone.contrast, before.tone.contrast) {
+        out.push(format!("Contrast {:+.0}", after.tone.contrast));
+    }
+    let (s0, s1) = (&before.curves.s_curve, &after.curves.s_curve);
+    if s1.enabled && (!s0.enabled || changed(s1.amount, s0.amount)) {
+        out.push(format!("Midtone S-curve {:.0}", s1.amount));
+    } else if s0.enabled && !s1.enabled {
+        out.push("S-curve off".into());
+    }
+    let (f0, f1) = (&before.color.foliage, &after.color.foliage);
+    if changed(f1.hue, f0.hue) || changed(f1.saturation, f0.saturation) {
+        out.push(format!("Foliage hue {:+.0} (towards olive), saturation {:+.0}", f1.hue, f1.saturation));
+    }
+    let skin = |a: &Adjustments| a.local.iter().find(|l| l.mask == MaskTarget::Skin).copied().unwrap_or_default();
+    let (k0, k1) = (skin(before), skin(after));
+    if changed(k1.warmth, k0.warmth) || changed(k1.tint, k0.tint) || changed(k1.saturation, k0.saturation) || (k1.exposure - k0.exposure).abs() >= 0.05 {
+        out.push(format!(
+            "Skin warmth {:+.0}, tint {:+.0}, saturation {:+.0}{}",
+            k1.warmth,
+            k1.tint,
+            k1.saturation,
+            if k1.exposure != 0.0 { format!(", {:+.2} EV", k1.exposure) } else { String::new() }
+        ));
+    }
+    if after.texture.specular_balance < before.texture.specular_balance {
+        out.push("Specular highlights kept (balance 0)".into());
+    }
+    let hsl = before.color.hsl.bands().iter().zip(after.color.hsl.bands()).filter(|(a, b)| **a != *b).count();
+    if hsl > 0 {
+        out.push(format!("HSL: {hsl} colour band{} matched", if hsl == 1 { "" } else { "s" }));
+    }
+    if changed(after.color.background.saturation, before.color.background.saturation) {
+        out.push(format!("Background saturation {:+.0}", after.color.background.saturation));
+    }
+    out
+}
+
+/// One insight saying what the target look is and what it set.
+fn insights_for_target(report: &mut MentorReport, target: &Target, learned: bool, moves: &[String]) {
+    let (observation, why) = if learned {
+        (
+            format!("Starting point aimed at your learned style \"{}\": its black and white points, midtone curve, skin richness and colour.", target.name),
+            "The look is measured from the reference and matched on this photo's own render, so each slider lands where the reference's look is, for this light.".to_string(),
+        )
+    } else {
+        (
+            "Starting point aimed at the Editorial profile: rich, anchored blacks, a clean white point, a midtone S-curve, skin rich and warm with its highlights kept, and foliage calmed towards olive.".to_string(),
+            "Contrast and depth read as professional; lifting every shadow reads as flat HDR. Skin is judged within its own depth, so every skin tone keeps its own richness.".to_string(),
+        )
+    };
+    report.insights.push(Insight {
+        topic: "Style",
+        observation,
+        why,
+        how: format!("Apply Recommended Starting Point: {}.", moves.join(", ")),
+    });
+    if report.summary.is_empty() || report.insights.len() == 1 {
+        report.summary = format!("First priority: {}", report.insights[0].topic.to_lowercase());
     }
 }
 

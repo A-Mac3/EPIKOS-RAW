@@ -207,10 +207,11 @@ async fn mentor(
     engine: EngineState<'_>,
     path: String,
     adjustments: Adjustments,
+    target: Option<String>,
 ) -> CmdResult<epikos_engine::MentorReport> {
     let path = raw_path(&path)?;
     let engine = engine.inner().clone();
-    blocking(move || engine.mentor(&path, &adjustments)).await
+    blocking(move || engine.mentor(&path, &adjustments, target.as_deref())).await
 }
 
 /// Live feedback on the current edit (praise and warnings).
@@ -223,6 +224,50 @@ async fn critique(
     let path = raw_path(&path)?;
     let engine = engine.inner().clone();
     blocking(move || engine.critique(&path, &adjustments)).await
+}
+
+/// Learn the look of `path` as edited by `adjustments` and keep it (AI Style Learning).
+#[tauri::command]
+async fn learn_style(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+    name: String,
+) -> CmdResult<epikos_engine::LearnedStyle> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.learn_style(&path, &adjustments, &name)).await
+}
+
+#[tauri::command]
+async fn learned_styles(engine: EngineState<'_>) -> CmdResult<Vec<epikos_engine::LearnedStyle>> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.learned_styles()).await
+}
+
+#[tauri::command]
+async fn delete_learned_style(engine: EngineState<'_>, id: String) -> CmdResult<()> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.delete_learned_style(&id)).await
+}
+
+/// Custom presets (the look of an edit), kept in `~/.epikos/presets.json`.
+#[tauri::command]
+async fn list_presets(engine: EngineState<'_>) -> CmdResult<Vec<epikos_engine::Preset>> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.presets()).await
+}
+
+#[tauri::command]
+async fn save_preset(engine: EngineState<'_>, name: String, adjustments: Adjustments) -> CmdResult<epikos_engine::Preset> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.save_preset(&name, &adjustments)).await
+}
+
+#[tauri::command]
+async fn delete_preset(engine: EngineState<'_>, id: String) -> CmdResult<()> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.delete_preset(&id)).await
 }
 
 /// Imported 3D LUTs.
@@ -454,7 +499,13 @@ pub fn run() {
             critique,
             list_luts,
             import_lut,
-            remove_lut
+            remove_lut,
+            learn_style,
+            learned_styles,
+            delete_learned_style,
+            list_presets,
+            save_preset,
+            delete_preset
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

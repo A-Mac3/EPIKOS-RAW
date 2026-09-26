@@ -69,7 +69,7 @@ impl SkinProblem {
 /// 47°–75° and chroma 0.033–0.092, at every depth. The band leaves margin around that;
 /// grey / ashy skin measures below 0.015, orange above 0.12, pink below 15°. Very deep
 /// skin carries less colour, so its floor is lower.
-fn chroma_band(l: f32) -> (f32, f32) {
+pub(crate) fn chroma_band(l: f32) -> (f32, f32) {
     let floor = if l < 0.3 { 0.02 } else { 0.028 };
     let ceiling = if l > 0.85 { 0.1 } else { 0.11 };
     (floor, ceiling)
@@ -187,6 +187,51 @@ pub(crate) fn skin_balance(rgb: &ImageRgbF32, mask: &[f32], current: Option<&Loc
         exposure,
         problem,
     })
+}
+
+/// Local Skin warmth, tint and saturation that bring the skin in `rgb` to `hue` and
+/// to `richness` (0…1) within the natural chroma range *for this skin's own depth*, so
+/// a learned look never moves one skin tone towards another. `None` when it's close.
+pub(crate) fn skin_towards(
+    rgb: &ImageRgbF32,
+    mask: &[f32],
+    current: Option<&LocalAdjustment>,
+    hue: f32,
+    richness: f32,
+) -> Option<(f32, f32, f32)> {
+    let sample = skin_sample(rgb, mask, 1200)?;
+    let now = colour_of(&sample);
+    let (lo, hi) = chroma_band(now.l);
+    let target_c = lo + richness.clamp(0.0, 1.0) * (hi - lo);
+    let cost = |c: &SkinColour| {
+        let dh = ((c.hue - hue + 540.0).rem_euclid(360.0) - 180.0).abs();
+        dh / 6.0 + (c.chroma - target_c).abs() / 0.006
+    };
+    let base = cost(&now);
+    if base < 0.8 {
+        return None;
+    }
+    let full = vec![1.0; sample.len()];
+    let mut best = (base, 0.0f32, 0.0f32, 0.0f32);
+    for ds in [-30.0f32, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0] {
+        for dw in (-6..=6).map(|k| k as f32 * 5.0) {
+            for dt in (-6..=6).map(|k| k as f32 * 5.0) {
+                let mut s = sample.clone();
+                let adj = LocalAdjustment { mask: MaskTarget::Skin, warmth: dw, tint: dt, saturation: ds, ..Default::default() };
+                apply_local_adjustment(&mut s, &adj, &full);
+                let c = cost(&colour_of(&s)) + 0.01 * (dw.abs() + dt.abs() + ds.abs()) / 5.0;
+                if c < best.0 {
+                    best = (c, dw, dt, ds);
+                }
+            }
+        }
+    }
+    let (c, dw, dt, ds) = best;
+    if c > 0.7 * base {
+        return None;
+    }
+    let (w0, t0, s0) = current.map_or((0.0, 0.0, 0.0), |l| (l.warmth, l.tint, l.saturation));
+    Some(((w0 + dw).clamp(-100.0, 100.0), (t0 + dt).clamp(-100.0, 100.0), (s0 + ds).clamp(-100.0, 100.0)))
 }
 
 /// Mean log luminance (stops) of `rgb` where `weight` is high, and where it's low.

@@ -27,6 +27,7 @@ mod analysis;
 mod dng;
 mod export;
 mod guidance;
+mod learn;
 mod lensdb;
 mod luts;
 mod mentor;
@@ -39,6 +40,7 @@ pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportFormat, ExportOptions, ExportReport};
 pub use prompt::{interpret_look, LookPrompt, PromptMatch};
+pub use learn::{default_data_dir, editorial, LearnedStyle, Preset, Signature};
 pub use luts::{default_lut_dir, LutInfo};
 pub use mentor::{Feedback, Insight, MentorReport};
 pub use regions::{MaskData, TargetStatus};
@@ -185,6 +187,10 @@ pub struct Engine {
     lut_dir: PathBuf,
     /// Parsed LUTs by name.
     luts: Mutex<Vec<(String, Arc<epikos_pipeline::Lut3d>)>>,
+    /// Learned styles and custom presets live here (`~/.epikos`).
+    data_dir: PathBuf,
+    /// Serialises read-modify-write of the stores.
+    store_lock: Mutex<()>,
 }
 
 impl Default for Engine {
@@ -217,7 +223,15 @@ impl Engine {
             masker: Masker::locate(&default_model_dirs()),
             lut_dir: default_lut_dir(),
             luts: Mutex::new(Vec::new()),
+            data_dir: learn::default_data_dir(),
+            store_lock: Mutex::new(()),
         }
+    }
+
+    /// Keep learned styles and presets in `dir` instead of `~/.epikos`.
+    pub fn with_data_dir(mut self, dir: PathBuf) -> Self {
+        self.data_dir = dir;
+        self
     }
 
     /// Use `masker` (and its model directory) for AI masks.
