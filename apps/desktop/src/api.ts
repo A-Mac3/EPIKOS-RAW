@@ -79,6 +79,22 @@ export async function pickExportPath(defaultPath: string, format: ExportFormat):
   return dest ?? null;
 }
 
+/** Export to a temporary JPEG / PNG / TIFF and send it with AirDrop (macOS). */
+export const airdropExport = (path: string, adjustments: Adjustments, options: ExportOptions) =>
+  invoke<ExportReport>("airdrop_export", { path, adjustments, options });
+
+/** "Describe a look" through the user's AI provider (key in the Keychain). */
+export const interpretLookAi = (path: string, prompt: string, adjustments: Adjustments, provider: string, model: string) =>
+  invoke<LookPrompt>("interpret_look_ai", { path, prompt, adjustments, provider, model });
+
+/** Save / check / remove an AI API key in the macOS Keychain; the key never comes back. */
+export const saveAiKey = (provider: string, key: string) => invoke<void>("save_ai_key", { provider, key });
+export const hasAiKey = (provider: string) => invoke<boolean>("has_ai_key", { provider });
+export const deleteAiKey = (provider: string) => invoke<void>("delete_ai_key", { provider });
+
+/** AirDrop exists on macOS only. */
+export const canAirDrop = () => /Mac/i.test(navigator.platform || navigator.userAgent);
+
 export const exportImage = (
   path: string,
   adjustments: Adjustments,

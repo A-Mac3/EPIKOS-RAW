@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { exportImage, handoffApps, maskModels, openInApp, pickExportPath } from "../api";
+import { airdropExport, canAirDrop, exportImage, handoffApps, maskModels, openInApp, pickExportPath } from "../api";
 import type {
   Adjustments,
   ExportFormat,
@@ -97,6 +97,8 @@ function store(key: string, value: string) {
 type State =
   | { kind: "idle" }
   | { kind: "exporting"; dest: string }
+  | { kind: "airdrop" }
+  | { kind: "airdropped"; report: ExportReport }
   | { kind: "done"; report: ExportReport; opened: string | null; openError: string | null }
   | { kind: "error"; message: string };
 
@@ -121,7 +123,7 @@ export function ExportDialog({ info, adjustments, onClose, onExported }: Props) 
   const [state, setState] = useState<State>({ kind: "idle" });
   const photoHasLocation = hasLocation(info.capture);
   const dialog = useRef<HTMLDialogElement>(null);
-  const busy = state.kind === "exporting";
+  const busy = state.kind === "exporting" || state.kind === "airdrop";
 
   useEffect(() => {
     dialog.current?.showModal();
@@ -176,6 +178,24 @@ export function ExportDialog({ info, adjustments, onClose, onExported }: Props) 
   };
 
   const hint = SPACES.find((s) => s.value === space)!.hint;
+  // AirDrop sends a JPEG, PNG or TIFF; other formats go as JPEG.
+  const airFormat: ExportFormat = format === "png" || format === "tiff" ? format : "jpeg";
+  const sendAirDrop = async () => {
+    setState({ kind: "airdrop" });
+    try {
+      const report = await airdropExport(info.path, adjustments, {
+        format: airFormat,
+        colorSpace: space === "proPhoto" ? "srgb" : space,
+        includeLocation,
+        aiMasks: false,
+        depthChannel: false,
+        longEdge: size === "full" ? null : Number(size),
+      });
+      setState({ kind: "airdropped", report });
+    } catch (e) {
+      setState({ kind: "error", message: String(e) });
+    }
+  };
 
   return (
     <dialog
@@ -305,12 +325,33 @@ export function ExportDialog({ info, adjustments, onClose, onExported }: Props) 
         </p>
       )}
       {state.kind === "done" && state.openError && <p className="modal-status is-error">{state.openError}</p>}
+      {state.kind === "airdrop" && <p className="modal-status">Rendering for AirDrop…</p>}
+      {state.kind === "airdropped" && (
+        <p className="modal-status is-ok">
+          Sent {state.report.path.split("/").pop()} to AirDrop · choose a device in the AirDrop window.
+        </p>
+      )}
       {state.kind === "error" && <p className="modal-status is-error">{state.message}</p>}
 
       <div className="modal-actions">
         <button type="button" className="btn" disabled={busy} onClick={onClose}>
-          {state.kind === "done" ? "Close" : "Cancel"}
+          {state.kind === "done" || state.kind === "airdropped" ? "Close" : "Cancel"}
         </button>
+        {canAirDrop() && (
+          <button
+            type="button"
+            className="btn airdrop-btn"
+            disabled={busy}
+            onClick={() => void sendAirDrop()}
+            title={`Send a ${airFormat === "jpeg" ? "JPEG" : airFormat.toUpperCase()} to a nearby device (sRGB or Display P3)`}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+              <path d="M8 13.5l-2-4.2A4.4 4.4 0 1 1 10 9.3z" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M3.2 12.2a6.8 6.8 0 1 1 9.6 0" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
+            {state.kind === "airdrop" ? "Preparing…" : "AirDrop"}
+          </button>
+        )}
         <button type="button" className="btn primary" disabled={busy} onClick={() => void run()}>
           {busy
             ? "Exporting…"

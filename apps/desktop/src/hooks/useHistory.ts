@@ -21,13 +21,18 @@ interface State<T> {
 export function useHistory<T>(initial: T, describe: (before: T, after: T) => string = () => "Edit") {
   const [state, setState] = useState<State<T>>({ items: [{ value: initial, label: "Opened" }], index: 0 });
   const pending = useRef<T | null>(null);
+  /** A continuous edit (slider or handle drag) is in progress. */
+  const [dragging, setDragging] = useState(false);
   const presentRef = useRef(initial);
   presentRef.current = state.items[state.index].value;
   const describeRef = useRef(describe);
   describeRef.current = describe;
 
   const edit = useCallback((update: (value: T) => T) => {
-    if (pending.current === null) pending.current = presentRef.current;
+    if (pending.current === null) {
+      pending.current = presentRef.current;
+      setDragging(true);
+    }
     setState((s) => {
       const items = s.items.slice();
       items[s.index] = { ...items[s.index], value: update(items[s.index].value) };
@@ -38,6 +43,7 @@ export function useHistory<T>(initial: T, describe: (before: T, after: T) => str
   const endEdit = useCallback(() => {
     const before = pending.current;
     pending.current = null;
+    setDragging(false);
     if (before === null) return;
     setState((s) => {
       const present = s.items[s.index];
@@ -76,6 +82,7 @@ export function useHistory<T>(initial: T, describe: (before: T, after: T) => str
   /** Jump to step `i` of the timeline (the History panel). */
   const goTo = useCallback((i: number) => {
     pending.current = null;
+    setDragging(false);
     setState((s) => ({ ...s, index: Math.max(0, Math.min(s.items.length - 1, i)) }));
   }, []);
 
@@ -99,6 +106,8 @@ export function useHistory<T>(initial: T, describe: (before: T, after: T) => str
     value: state.items[state.index].value,
     canUndo: state.index > 0,
     canRedo: state.index < state.items.length - 1,
+    /** True while a slider or handle is being dragged (for fast proxy renders). */
+    dragging,
     /** Step labels, oldest first, and which one is current. */
     steps: state.items.map((e) => e.label),
     index: state.index,

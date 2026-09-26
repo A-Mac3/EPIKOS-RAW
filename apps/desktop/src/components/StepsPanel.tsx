@@ -27,6 +27,8 @@ import {
   defaultCrop,
 } from "../types";
 import { ColorWheel } from "./ColorWheel";
+import { ManualMaskPanel } from "./ManualMaskPanel";
+import type { BrushSettings } from "./ManualMaskTool";
 import { CurveGraph } from "./CurveGraph";
 import { bakeCurve, isIdentity } from "../curve";
 import { Segmented, Slider, Toggle } from "./Slider";
@@ -54,6 +56,11 @@ interface Props {
   /** Open or close the crop tool on the image. */
   cropping: boolean;
   setCropping: (on: boolean) => void;
+  /** The hand-drawn mask being edited, and brush settings for new strokes. */
+  manualActive: number | null;
+  setManualActive: (i: number | null) => void;
+  brush: BrushSettings;
+  setBrush: (b: BrushSettings) => void;
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
@@ -138,7 +145,12 @@ export function StepsPanel({
   setSelectedLight,
   cropping,
   setCropping,
+  manualActive,
+  setManualActive,
+  brush,
+  setBrush,
 }: Props) {
+  const [maskTab, setMaskTab] = useState<"ai" | "manual">(() => (manualActive !== null ? "manual" : "ai"));
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const [hslMode, setHslMode] = useState<HslMode>("saturation");
   const [curveChannel, setCurveChannel] = useState<CurveChannel>("rgb");
@@ -357,8 +369,8 @@ export function StepsPanel({
               ? "A JPEG or PNG is already corrected by the camera or editor that made it."
               : `No profile for ${info.capture.lensModel ?? "this lens"} in the camera file or the built-in Lensfun database (${masks.models?.lensDatabase ?? "…"} lenses).`}
         </p>
-        <div className="field-row">
-          <span className="field-label">Geometry</span>
+        <span className="field-label">Geometry</span>
+        <div className="geometry-actions">
           <button type="button" className="btn" disabled={auto.busy !== null} onClick={() => void runAuto("upright")}>
             {auto.busy === "upright" ? "Measuring…" : "Auto upright"}
           </button>
@@ -602,14 +614,35 @@ export function StepsPanel({
     ),
     2: (
       <>
-        <MaskControls masks={masks} />
-        <LocalAdjustments
-          local={a.local}
-          masks={masks}
-          edit={edit}
-          endEdit={endEdit}
-          commit={commit}
+        <Segmented<"ai" | "manual">
+          label="Mask type"
+          value={maskTab}
+          options={[
+            { value: "ai", label: "AI masks" },
+            { value: "manual", label: `Manual masking${a.manual.length ? ` (${a.manual.length})` : ""}` },
+          ]}
+          onChange={(t) => {
+            setMaskTab(t);
+            if (t === "ai") setManualActive(null);
+          }}
         />
+        {maskTab === "ai" ? (
+          <>
+            <MaskControls masks={masks} />
+            <LocalAdjustments local={a.local} masks={masks} edit={edit} endEdit={endEdit} commit={commit} />
+          </>
+        ) : (
+          <ManualMaskPanel
+            manual={a.manual}
+            edit={edit}
+            endEdit={endEdit}
+            commit={commit}
+            active={manualActive}
+            setActive={setManualActive}
+            brush={brush}
+            setBrush={setBrush}
+          />
+        )}
       </>
     ),
     3: (

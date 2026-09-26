@@ -45,6 +45,12 @@ export function describeChange(before: Adjustments, after: Adjustments, styles: 
   if (!same(before.local, after.local)) {
     parts.push(after.local.length > before.local.length ? "Local adjustment added" : after.local.length < before.local.length ? "Local adjustment removed" : "Local adjustment");
   }
+  if (!same(before.manual, after.manual)) {
+    const n = (a: Adjustments) => a.manual.length;
+    const kind = (after.manual[after.manual.length - 1] ?? before.manual[before.manual.length - 1])?.shape.kind;
+    const word = kind === "brush" ? "Brush" : kind === "linear" ? "Linear gradient" : "Radial gradient";
+    parts.push(n(after) > n(before) ? `${word} added` : n(after) < n(before) ? "Mask removed" : "Manual mask");
+  }
   if (!same(before.texture, after.texture)) parts.push("Texture & retouching");
   if (!same(before.color, after.color)) parts.push("Colour grading");
   if (!same(before.atmosphere, after.atmosphere)) {

@@ -24,6 +24,18 @@ skin, calm olive foliage, a midtone S-curve) or at any learned style, fitted on 
 photo's own render. Learned styles and custom presets are kept in
 `~/.epikos/learned_styles.json` and `~/.epikos/presets.json` (or `$EPIKOS_DATA_DIR`), so
 they persist across sessions and updates.
+Step 3 also has **Manual masking**: a brush (size, feather, flow, erase), linear
+(graduated) and radial gradients drawn on the image, each with exposure, contrast,
+temperature, tint, dehaze, saturation and clarity. While a control is dragged the preview
+renders a lighter proxy so feedback keeps up, then sharpens when the drag ends. The AI
+Mentor ranks subjects (primary / secondary, by area and nearness), frames people by
+portrait rules (never cutting the neck, waist, knees or ankles; full body with ground
+below the feet or a clean three-quarter; headroom and lead room) and gives every warning
+a one-click **Fix** with its slider targets. The Export dialog can **AirDrop** a JPEG,
+PNG or TIFF (macOS). "Describe a look" understands tone-curve and HSL phrases ("deep
+blacks, creamy highlights, teal shadows, desaturated greens"); in Settings (⚙) it can
+optionally use your own Anthropic or OpenAI key, stored in the macOS Keychain and sent
+only with the prompt text.
 Edits save automatically
 to `<photo>.epikos.json` (and an Adobe-compatible `.xmp`) and come back when the photo
 is reopened.

@@ -26,6 +26,9 @@ import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
 import { HistoryPanel, LeftSidebar } from "./components/LeftSidebar";
 import { LearnedLibrary } from "./components/LearnedLibrary";
+import { SettingsDialog } from "./components/SettingsDialog";
+import { loadAiSettings, storeAiSettings, type AiSettings } from "./settings";
+import type { BrushSettings } from "./components/ManualMaskTool";
 import { MentorPanel } from "./components/MentorPanel";
 import { describeChange } from "./historyLabel";
 import { Viewer } from "./components/Viewer";
@@ -53,6 +56,8 @@ import {
 
 const AUTOSAVE_MS = 600;
 const MAX_PREVIEW_SIDE = 4096;
+/** Long side of the preview rendered while a control is dragged. */
+const DRAG_PROXY_SIDE = 960;
 const MENTOR_TARGET_KEY = "epikos.mentor.target";
 
 /** What the filmstrip shows: a folder, or photos opened one by one (Open Photo, a drop). */
@@ -89,6 +94,12 @@ export default function App() {
   const [before, setBefore] = useState(false);
   const [save, setSave] = useState<SaveStatus>({ kind: "idle" });
   const [exportOpen, setExportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiSettings, setAiSettingsState] = useState<AiSettings>(loadAiSettings);
+  const setAiSettings = (s: AiSettings) => {
+    setAiSettingsState(s);
+    storeAiSettings(s);
+  };
   /** The last finished export of the open photo, for the toolbar. */
   const [lastExport, setLastExport] = useState<{ path: string; label: string } | null>(null);
 
@@ -105,6 +116,10 @@ export default function App() {
   );
   /** The crop tool is open: the image shows the whole straightened frame. */
   const [cropping, setCropping] = useState(false);
+  /** The hand-drawn mask edited on the image, and the brush for new strokes. */
+  const [manualActiveRaw, setManualActive] = useState<number | null>(null);
+  const manualActive = manualActiveRaw !== null && manualActiveRaw < adjustments.manual.length ? manualActiveRaw : null;
+  const [brush, setBrush] = useState<BrushSettings>({ size: 0.05, feather: 50, flow: 100, erase: false });
   /** A style or LUT previewed while the pointer rests on its card. */
   const [hoverAdjustments, setHoverAdjustments] = useState<Adjustments | null>(null);
   /** Split view divider (0–1 across), or null when off. */
@@ -159,7 +174,15 @@ export default function App() {
   // A deleted (or unknown) learned style falls back to Editorial.
   const activeTarget = mentorTarget && learned.some((s) => s.id === mentorTarget) ? mentorTarget : null;
 
-  const previewSize = [Math.min(viewSize.w, MAX_PREVIEW_SIDE), Math.min(viewSize.h, MAX_PREVIEW_SIDE)] as const;
+  // While a slider or handle is dragged, render a lighter proxy (long side at most
+  // DRAG_PROXY_SIDE device px) so feedback keeps up with the pointer; the full
+  // resolution follows as soon as the drag ends. The browser scales the proxy up on
+  // the GPU, so the image never jumps in size.
+  const full = [Math.min(viewSize.w, MAX_PREVIEW_SIDE), Math.min(viewSize.h, MAX_PREVIEW_SIDE)] as const;
+  const proxy = Math.min(1, DRAG_PROXY_SIDE / Math.max(1, full[0], full[1]));
+  const previewSize = (
+    history.dragging ? [Math.max(1, Math.round(full[0] * proxy)), Math.max(1, Math.round(full[1] * proxy))] : full
+  ) as readonly [number, number];
   const shown = before ? beforeAdjustments : (hoverAdjustments ?? adjustments);
   const uncropped = useMemo(() => ({ ...shown, crop: defaultCrop() }), [shown]);
   const { preview, error: renderError, busy } = usePreview(
@@ -460,6 +483,7 @@ export default function App() {
     setSelectedLight(null);
     setLightDrag(false);
     setCropping(false);
+    setManualActive(null);
     setLastExport(null);
   }, [info?.path]);
 
@@ -469,6 +493,7 @@ export default function App() {
       if (e.key === "Escape") {
         setPicking(null);
         setCropping(false);
+        setManualActive(null);
       }
       const mod = e.metaKey || e.ctrlKey;
       const inField =
@@ -615,10 +640,26 @@ export default function App() {
               Exported {lastExport.label}
             </span>
           )}
+          <button type="button" className="btn icon" onClick={() => setSettingsOpen(true)} title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+              <circle cx="8" cy="8" r="2.4" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <path
+                d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <SaveBadge status={save} />
         </div>
       </header>
 
+      {settingsOpen && (
+        <ErrorBoundary area="settings">
+          <SettingsDialog settings={aiSettings} onChange={setAiSettings} onClose={() => setSettingsOpen(false)} />
+        </ErrorBoundary>
+      )}
       {exportOpen && info && (
         <ErrorBoundary area="the export dialog">
           <ExportDialog
@@ -635,7 +676,13 @@ export default function App() {
           <main className="stage">
             {info && (
               <ErrorBoundary area="the look prompt">
-                <LookPromptBar ref={promptRef} path={info.path} adjustments={adjustments} commit={history.commit} />
+                <LookPromptBar
+                  ref={promptRef}
+                  path={info.path}
+                  adjustments={adjustments}
+                  commit={history.commit}
+                  ai={aiSettings}
+                />
               </ErrorBoundary>
             )}
             {files.length === 0 ? (
@@ -665,6 +712,20 @@ export default function App() {
                   onLightPrepare={() => setLightDrag(true)}
                   frame={shownCrop}
                   pixelSize={pixelSize}
+                  manualTool={
+                    manualActive !== null && !cropping
+                      ? {
+                          shape: adjustments.manual[manualActive].shape,
+                          brush,
+                          onChange: (shape) =>
+                            history.edit((a) => ({
+                              ...a,
+                              manual: a.manual.map((m, k) => (k === manualActive ? { ...m, shape } : m)),
+                            })),
+                          onEnd: history.endEdit,
+                        }
+                      : null
+                  }
                   cropTool={
                     cropping
                       ? {
@@ -765,6 +826,10 @@ export default function App() {
                     setSelectedLight={setSelectedLight}
                     cropping={cropping}
                     setCropping={setCropping}
+                    manualActive={manualActive}
+                    setManualActive={setManualActive}
+                    brush={brush}
+                    setBrush={setBrush}
                   />
                 ) : (
                   <p className="note pad">Select a photo to start editing.</p>

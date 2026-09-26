@@ -2825,3 +2825,237 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-dim);
   font-size: 11px;
 }
+
+/* Geometry buttons: never clipped; they wrap onto a second line in a narrow panel. */
+.geometry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.geometry-actions .btn {
+  flex: 1 0 auto;
+  min-width: max-content;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.feedback-card li {
+  align-items: flex-start;
+}
+
+.feedback-text {
+  flex: 1;
+}
+
+.fix-btn {
+  flex: none;
+  margin-left: 6px;
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ---- Manual masking ---- */
+
+.manual-masks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.manual-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.manual-add .btn {
+  flex: 1 0 auto;
+  min-width: max-content;
+}
+
+.manual-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.manual-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.manual-item.is-active {
+  border-color: var(--accent-dim);
+  box-shadow: var(--accent-glow);
+}
+
+.manual-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid var(--text-dim);
+}
+
+.manual-icon.is-radial {
+  border-radius: 50%;
+}
+
+.manual-icon.is-linear {
+  background: linear-gradient(180deg, var(--text-dim), transparent);
+}
+
+.manual-icon.is-brush {
+  border-radius: 50% 50% 50% 0;
+}
+
+.mask-tool-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.mask-tool-layer.is-passive {
+  pointer-events: none;
+}
+
+.mask-tool {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.mask-tool.is-brush {
+  cursor: none;
+}
+
+.mask-tool:not(.is-brush) {
+  pointer-events: none;
+}
+
+.mask-tool:not(.is-brush) .mask-handle,
+.mask-tool:not(.is-brush) .mask-axis {
+  pointer-events: auto;
+}
+
+.mask-handle {
+  fill: #0f0f12;
+  stroke: #fff;
+  stroke-width: 1.6;
+  cursor: grab;
+  filter: drop-shadow(0 0 3px rgb(0 0 0 / 80%));
+}
+
+.mask-handle.is-center {
+  fill: var(--accent);
+  stroke: #fff6e2;
+}
+
+.mask-handle:hover {
+  stroke: var(--accent);
+}
+
+.mask-line {
+  stroke: #fff;
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.mask-line.is-full {
+  stroke-dasharray: none;
+}
+
+.mask-axis {
+  stroke: rgb(255 255 255 / 60%);
+  stroke-width: 10;
+  stroke-opacity: 0.001;
+  cursor: move;
+}
+
+.mask-ellipse {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.2;
+}
+
+.mask-ellipse.is-inner {
+  stroke-dasharray: 4 4;
+  opacity: 0.7;
+}
+
+.mask-stroke {
+  fill: none;
+  stroke: rgb(255 48 64);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.mask-stroke.is-erase {
+  stroke: #9a9aa3;
+}
+
+.brush-cursor {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.2;
+  pointer-events: none;
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 90%));
+}
+
+.brush-cursor.is-inner {
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.mask-tool.is-erasing .brush-cursor {
+  stroke: #ff8a8a;
+}
+
+.airdrop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: #6fb4ff;
+}
+
+.ai-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.key-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ok);
+}
+
+.modal input[type="text"],
+.modal input[type="password"] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+}

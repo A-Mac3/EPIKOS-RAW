@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Crop, Mask, Preview } from "../types";
+import type { Crop, ManualShape, Mask, Preview } from "../types";
 import { CropBar, CropOverlay } from "./CropTool";
+import { ManualMaskTool, type BrushSettings } from "./ManualMaskTool";
 import { LightPalette, type LightKind } from "./LightPalette";
 
 /** Zoom limits, as a share of the photo's actual pixels (1 = 100 %). */
@@ -64,6 +65,13 @@ interface Props {
   pixelSize?: { w: number; h: number } | null;
   /** When set, the crop tool is open. */
   cropTool?: CropTool | null;
+  /** When set, a hand-drawn mask is being edited on the image. */
+  manualTool?: {
+    shape: ManualShape;
+    brush: BrushSettings;
+    onChange: (shape: ManualShape) => void;
+    onEnd: () => void;
+  } | null;
 }
 
 export function Viewer({
@@ -90,6 +98,7 @@ export function Viewer({
   frame: view = null,
   pixelSize = null,
   cropTool = null,
+  manualTool = null,
 }: Props) {
   const imageRef = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -108,6 +117,10 @@ export function Viewer({
   useLayoutEffect(() => {
     const el = frame.current;
     if (!el) return;
+    // Measure now, so the first preview doesn't wait for the observer's first callback
+    // (which a hidden window may delay).
+    const r = el.getBoundingClientRect();
+    if (r.width > 0) setCssSize({ w: r.width, h: r.height });
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       setCssSize({ w: width, h: height });
@@ -265,7 +278,8 @@ export function Viewer({
     setPan({ x: 0, y: 0 });
   }, [photoKey]);
 
-  const canPan = !cropTool && preview !== null && (spaceHeld || (zooming && !onPick));
+  // Space always pans; a plain drag pans a zoomed image unless a tool uses the drag.
+  const canPan = !cropTool && preview !== null && (spaceHeld || (zooming && !onPick && !manualTool));
   const panHandlers = {
     onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
       if (!(canPan && e.button === 0) && e.button !== 1) return;
@@ -365,6 +379,19 @@ export function Viewer({
             }
           />
         </div>
+        {manualTool && preview && !cropTool && !showingBefore && (
+          <div className={`mask-tool-layer${spaceHeld ? " is-passive" : ""}`}>
+            <ManualMaskTool
+              shape={manualTool.shape}
+              width={shownW}
+              height={shownH}
+              view={view}
+              brush={manualTool.brush}
+              onChange={manualTool.onChange}
+              onEnd={manualTool.onEnd}
+            />
+          </div>
+        )}
         {cropTool && preview && (
           <>
             <div className="crop-clip" aria-hidden>

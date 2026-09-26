@@ -1,5 +1,6 @@
 import { forwardRef, useState } from "react";
-import { interpretLook } from "../api";
+import { interpretLook, interpretLookAi } from "../api";
+import type { AiSettings } from "../settings";
 import type { Adjustments, LookPrompt } from "../types";
 
 interface Props {
@@ -7,6 +8,8 @@ interface Props {
   adjustments: Adjustments;
   /** One undo step. */
   commit: (fn: (a: Adjustments) => Adjustments) => void;
+  /** Optional AI interpreter (the user's own key). */
+  ai?: AiSettings;
 }
 
 const EXAMPLE = "An eerie, foggy 1970s Scandinavian film scene with subtle golden light on the face";
@@ -17,21 +20,35 @@ const EXAMPLE = "An eerie, foggy 1970s Scandinavian film scene with subtle golde
  * settings as one undo step, and a strip over the photo shows what was understood.
  */
 export const LookPromptBar = forwardRef<HTMLInputElement, Props>(function LookPromptBar(
-  { path, adjustments, commit },
+  { path, adjustments, commit, ai },
   ref,
 ) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<LookPrompt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const useAi = ai && ai.provider !== "off";
 
   const run = async () => {
     const prompt = text.trim();
     if (!prompt || busy) return;
     setBusy(true);
     setError(null);
+    setNote(null);
     try {
-      const r = await interpretLook(path, prompt, adjustments);
+      let r: LookPrompt;
+      if (useAi) {
+        try {
+          r = await interpretLookAi(path, prompt, adjustments, ai!.provider, ai!.model);
+        } catch (e) {
+          // The built-in interpreter always works: fall back to it.
+          r = await interpretLook(path, prompt, adjustments);
+          setNote(`AI unavailable (${String(e)}); used the built-in interpreter.`);
+        }
+      } else {
+        r = await interpretLook(path, prompt, adjustments);
+      }
       setResult(r);
       if (r.matched.length > 0) commit(() => r.adjustments);
     } catch (e) {
@@ -72,8 +89,13 @@ export const LookPromptBar = forwardRef<HTMLInputElement, Props>(function LookPr
             Example
           </button>
         )}
+        {useAi && (
+          <span className="ai-badge" title={`Interpreted with ${ai!.provider === "anthropic" ? "Anthropic" : "OpenAI"} (your key, from the Keychain)`}>
+            AI
+          </span>
+        )}
         <button type="submit" className="btn" disabled={busy || !text.trim()}>
-          {busy ? "Applying…" : "Apply"}
+          {busy ? (useAi ? "Asking…" : "Applying…") : "Apply"}
         </button>
         <kbd title="Focus this bar">⌘K</kbd>
       </form>
@@ -93,6 +115,7 @@ export const LookPromptBar = forwardRef<HTMLInputElement, Props>(function LookPr
               ))}
             </ul>
           )}
+          {note && <span className="hint">{note}</span>}
           {result && result.unknown.length > 0 && (
             <span className="hint">Not understood: {result.unknown.join(", ")}</span>
           )}

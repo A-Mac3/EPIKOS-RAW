@@ -352,6 +352,17 @@ export function installMockBackend() {
       }
       case "list_luts":
         return luts;
+      case "has_ai_key":
+        return localStorage.getItem(`epikos.mock.aikey.${a.provider}`) === "1";
+      case "save_ai_key":
+        if (String(a.key ?? "").length < 20) throw new Error("That doesn't look like an API key");
+        localStorage.setItem(`epikos.mock.aikey.${a.provider}`, "1"); // never the key itself
+        return null;
+      case "delete_ai_key":
+        localStorage.removeItem(`epikos.mock.aikey.${a.provider}`);
+        return null;
+      case "interpret_look_ai":
+        throw new Error("the browser mock has no AI service");
       case "learned_styles":
         return load(LEARNED_KEY);
       case "learn_style": {
@@ -523,11 +534,20 @@ export function installMockBackend() {
       }
       case "critique": {
         const adj = a.adjustments as Adjustments;
-        const out: { level: string; text: string }[] = [];
-        if (adj.exposure > 2) out.push({ level: "warning", text: "2.4% of the image is clipping to white: lower Highlights or Exposure, or check Whites." });
-        if (adj.style.id) out.push({ level: "praise", text: "Skin tones are balanced: natural hue and depth, kept through the grade." });
-        if (adj.lens.rotation) out.push({ level: "praise", text: "Framing straightened: lines now read as intentional." });
-        if (out.length === 0) out.push({ level: "praise", text: "Nothing to flag: highlights, shadows and colour are all in a healthy range." });
+        const out: { level: string; text: string; fix: { label: string; adjustments: Adjustments } | null }[] = [];
+        if (adj.exposure > 2) {
+          const fixed = { ...adj, exposure: Math.round((adj.exposure - 0.25) * 100) / 100, tone: { ...adj.tone, highlights: Math.max(-100, adj.tone.highlights - 25) } };
+          const label = `Highlights ${fixed.tone.highlights}, Exposure ${fixed.exposure >= 0 ? "+" : ""}${fixed.exposure.toFixed(2)} EV`;
+          out.push({ level: "warning", text: `2.4% of the image is clipping to white. Fix: ${label}.`, fix: { label, adjustments: fixed } });
+        }
+        if (adj.tone.saturation > 30) {
+          const fixed = { ...adj, tone: { ...adj.tone, saturation: adj.tone.saturation - 15, vibrance: adj.tone.vibrance - 10 } };
+          const label = `Saturation +${fixed.tone.saturation}, Vibrance ${fixed.tone.vibrance}`;
+          out.push({ level: "warning", text: `11% of the image is very saturated. Fix: ${label}.`, fix: { label, adjustments: fixed } });
+        }
+        if (adj.style.id) out.push({ level: "praise", text: "Skin tones are balanced: natural hue and depth, kept through the grade.", fix: null });
+        if (adj.lens.rotation) out.push({ level: "praise", text: "Framing straightened: lines now read as intentional.", fix: null });
+        if (out.length === 0) out.push({ level: "praise", text: "Nothing to flag: highlights, shadows and colour are all in a healthy range.", fix: null });
         return out;
       }
       case "photo_extensions":
@@ -538,6 +558,21 @@ export function installMockBackend() {
         return storyFor(filesFor(a.paths as string[]).map((f) => f.path));
       case "plugin:dialog|save":
         return (a.options as { defaultPath?: string } | undefined)?.defaultPath ?? `${FOLDER}/export.tif`;
+      case "airdrop_export":
+        await new Promise((r) => setTimeout(r, 700));
+        return {
+          path: `/tmp/EPIKOS RAW AirDrop/${String(a.path).split("/").pop()!.replace(/\.[^.]+$/, "")}.jpg`,
+          format: (a.options as { format: string }).format,
+          width: 7728,
+          height: 5152,
+          colorSpace: "sRGB IEC61966-2.1",
+          bytes: 9_800_000,
+          wroteExif: true,
+          wroteLocation: false,
+          alphaChannels: [],
+          developMs: 1100,
+          writeMs: 60,
+        };
       case "export_image":
         await new Promise((r) => setTimeout(r, 900));
         console.info("[mock] export", a);

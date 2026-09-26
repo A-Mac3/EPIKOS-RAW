@@ -47,7 +47,7 @@ export function MentorPanel({
     return hit ? { kind: "done", ...hit } : { kind: "loading" };
   });
   const [updating, setUpdating] = useState(false);
-  const [feedback, setFeedback] = useState<Feedback[] | null>(null);
+  const [feedback, setFeedback] = useState<{ items: Feedback[]; basis: string } | null>(null);
   const [applying, setApplying] = useState(false);
   const latest = useRef(adjustments);
   latest.current = adjustments;
@@ -101,8 +101,9 @@ export function MentorPanel({
   useEffect(() => {
     let alive = true;
     const t = window.setTimeout(() => {
+      const b = JSON.stringify(adjustments);
       critique(info.path, adjustments).then(
-        (f) => alive && setFeedback(f),
+        (items) => alive && setFeedback({ items, basis: b }),
         () => alive && setFeedback(null),
       );
     }, FEEDBACK_DELAY_MS);
@@ -207,12 +208,31 @@ export function MentorPanel({
           <p className="note">Checking the current edit…</p>
         ) : (
           <ul>
-            {feedback.map((f, k) => (
-              <li key={k} className={`is-${f.level}`}>
-                <span aria-hidden>{f.level === "praise" ? "✓" : f.level === "warning" ? "!" : "→"}</span>
-                <span>{f.text}</span>
-              </li>
-            ))}
+            {feedback.items.map((f, k) => {
+              // A fix belongs to the edit it was made for; after further edits the
+              // feedback refreshes first.
+              const current = feedback.basis === JSON.stringify(adjustments);
+              return (
+                <li key={k} className={`is-${f.level}`}>
+                  <span aria-hidden>{f.level === "praise" ? "✓" : f.level === "warning" ? "!" : "→"}</span>
+                  <span className="feedback-text">{f.text}</span>
+                  {f.fix && (
+                    <button
+                      type="button"
+                      className="btn small fix-btn"
+                      disabled={!current}
+                      title={current ? `Apply: ${f.fix.label}` : "Updating for your latest edit…"}
+                      onClick={() => {
+                        const next = f.fix!.adjustments;
+                        commit(() => next);
+                      }}
+                    >
+                      Fix
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

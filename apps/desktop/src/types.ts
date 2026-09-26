@@ -239,6 +239,8 @@ export interface MentorReport {
 export interface Feedback {
   level: "praise" | "warning" | "tip";
   text: string;
+  /** The correction (warnings and tips): slider targets in words and the settings. */
+  fix: { label: string; adjustments: Adjustments } | null;
 }
 
 /** Hue in degrees on the HSV wheel, saturation 0…100, balance −100…100. */
@@ -326,6 +328,45 @@ export interface Adjustments {
   lut: LutRef;
   /** Step 1 crop of the upright (straightened) frame. */
   crop: Crop;
+  /** Step 3 hand-drawn masks (brush, linear and radial gradients) with their edits. */
+  manual: ManualAdjustment[];
+}
+
+/** One brush stroke: points on the upright frame (0–1); size is a share of its width. */
+export interface BrushStroke {
+  points: [number, number][];
+  size: number;
+  feather: number;
+  flow: number;
+  erase: boolean;
+}
+
+/** A hand-drawn mask; positions are fractions of the upright (uncropped) frame. */
+export type ManualShape =
+  | { kind: "linear"; x0: number; y0: number; x1: number; y1: number }
+  | { kind: "radial"; cx: number; cy: number; rx: number; ry: number; angle: number; feather: number; invert: boolean }
+  | { kind: "brush"; strokes: BrushStroke[] };
+
+export interface ManualAdjustment {
+  shape: ManualShape;
+  exposure: number;
+  contrast: number;
+  saturation: number;
+  /** Temperature: cooler (−) or warmer (+). */
+  warmth: number;
+  tint: number;
+  clarity: number;
+  dehaze: number;
+}
+
+export function newManual(kind: ManualShape["kind"]): ManualAdjustment {
+  const shape: ManualShape =
+    kind === "linear"
+      ? { kind, x0: 0.5, y0: 0.05, x1: 0.5, y1: 0.45 }
+      : kind === "radial"
+        ? { kind, cx: 0.5, cy: 0.5, rx: 0.22, ry: 0.28, angle: 0, feather: 50, invert: false }
+        : { kind, strokes: [] };
+  return { shape, exposure: 0, contrast: 0, saturation: 0, warmth: 0, tint: 0, clarity: 0, dehaze: 0 };
 }
 
 export interface SourceRef {
@@ -540,6 +581,7 @@ export function defaultAdjustments(): Adjustments {
     style: { id: "", amount: 100, skinProtection: 0, blend: [] },
     lut: { name: "", amount: 100 },
     crop: defaultCrop(),
+    manual: [],
   };
 }
 
