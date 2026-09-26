@@ -24,6 +24,7 @@ use epikos_sidecar::{
 use serde::Serialize;
 
 mod analysis;
+mod composition;
 mod dng;
 mod export;
 mod guidance;
@@ -39,10 +40,10 @@ pub use analysis::SceneAnalysis;
 pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportFormat, ExportOptions, ExportReport};
-pub use prompt::{interpret_look, LookPrompt, PromptMatch};
+pub use prompt::{apply_ai_look, interpret_look, LookPrompt, PromptMatch, AI_LOOK_INSTRUCTIONS};
 pub use learn::{default_data_dir, editorial, LearnedStyle, Preset, Signature};
 pub use luts::{default_lut_dir, LutInfo};
-pub use mentor::{Feedback, Insight, MentorReport};
+pub use mentor::{Feedback, Fix, Insight, MentorReport};
 pub use regions::{MaskData, TargetStatus};
 pub use story::{ShotGroup, StoryArc, SyncReport};
 

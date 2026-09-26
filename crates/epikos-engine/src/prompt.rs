@@ -344,6 +344,115 @@ fn concepts() -> Vec<Concept> {
             saturation(a, -15.0 * k);
             curve(a, -8.0 * k, 8.0 * k, 0.0, 0.0);
         }),
+        // Tone curve, precisely: black point, highlights, shadows, midtone curve.
+        c!(["crushed blacks", "deep blacks", "rich blacks", "inky blacks", "dense blacks", "true blacks"], "deeper black point", |a, k| {
+            curve(a, -8.0 * k, 0.0, -15.0 * k, 0.0);
+            add(&mut a.tone.blacks, -12.0 * k, -100.0, 100.0);
+        }),
+        c!(["faded blacks", "milky blacks", "washed blacks", "lifted blacks", "matte blacks", "soft blacks"], "lifted, matte black point", |a, k| {
+            curve(a, 0.0, 0.0, 18.0 * k, 0.0);
+        }),
+        c!(["creamy highlights", "soft highlights", "gentle highlights", "rolled off highlights", "smooth highlights"], "soft highlight roll-off", |a, k| {
+            curve(a, 0.0, -6.0 * k, 0.0, -12.0 * k);
+            add(&mut a.tone.highlights, -15.0 * k, -100.0, 100.0);
+        }),
+        c!(["bright highlights", "punchy highlights", "clean whites", "bright whites", "crisp whites"], "brighter highlights and whites", |a, k| {
+            curve(a, 0.0, 8.0 * k, 0.0, 10.0 * k);
+            add(&mut a.tone.whites, 10.0 * k, -100.0, 100.0);
+        }),
+        c!(["open shadows", "shadow detail", "bright shadows", "lifted shadows", "airy shadows"], "open shadows", |a, k| {
+            add(&mut a.tone.shadows, 20.0 * k, -100.0, 100.0);
+            curve(a, 8.0 * k, 0.0, 0.0, 0.0);
+        }),
+        c!(["deep shadows", "dark shadows", "heavy shadows", "moody shadows"], "deeper shadows", |a, k| {
+            add(&mut a.tone.shadows, -12.0 * k, -100.0, 100.0);
+            curve(a, -12.0 * k, 0.0, 0.0, 0.0);
+        }),
+        c!(["s curve", "s-curve", "strong curve", "midtone contrast", "punchy midtones"], "midtone S-curve", |a, k| {
+            let s = &mut a.curves.s_curve;
+            s.enabled = true;
+            s.amount = (if k > 0.0 { s.amount.max(0.0) } else { s.amount } + 35.0 * k).clamp(0.0, 100.0);
+            s.enabled = s.amount > 0.0;
+        }),
+        c!(["bright midtones", "luminous midtones", "open midtones"], "brighter midtones", |a, k| {
+            curve(a, 6.0 * k, 8.0 * k, 0.0, 0.0);
+        }),
+        // HSL, precisely: named hues and ranges.
+        c!(["teal and orange", "orange and teal", "teal orange", "orange teal"], "teal shadows, orange highlights and skin", |a, k| {
+            wheel(a, SHADOWS, 185.0, 25.0 * k, 0.0);
+            wheel(a, HIGHLIGHTS, 35.0, 22.0 * k, 0.0);
+            add(&mut band(&mut a.color.hsl, "orange").saturation, 10.0 * k, -100.0, 100.0);
+            add(&mut band(&mut a.color.hsl, "blue").hue, -25.0 * k, -100.0, 100.0);
+            add(&mut band(&mut a.color.hsl, "aqua").saturation, 12.0 * k, -100.0, 100.0);
+        }),
+        c!(["teal shadows", "cyan shadows"], "teal shadows", |a, k| { wheel(a, SHADOWS, 185.0, 22.0 * k, 0.0); }),
+        c!(["blue shadows", "cool shadows", "cold shadows"], "cool blue shadows", |a, k| { wheel(a, SHADOWS, 215.0, 20.0 * k, 0.0); }),
+        c!(["green shadows", "olive shadows"], "green-olive shadows", |a, k| { wheel(a, SHADOWS, 110.0, 15.0 * k, 0.0); }),
+        c!(["warm highlights", "golden highlights", "amber highlights"], "warm highlights", |a, k| { wheel(a, HIGHLIGHTS, 40.0, 20.0 * k, 0.0); }),
+        c!(["pink highlights", "magenta highlights", "rose highlights"], "pink highlights", |a, k| { wheel(a, HIGHLIGHTS, 330.0, 15.0 * k, 0.0); }),
+        c!(["cool highlights", "blue highlights", "silver highlights"], "cool highlights", |a, k| { wheel(a, HIGHLIGHTS, 210.0, 15.0 * k, 0.0); }),
+        c!(["desaturated greens", "muted greens", "olive greens", "olive", "olive tones", "calm greens"], "greens calmed towards olive", |a, k| {
+            let g = band(&mut a.color.hsl, "green");
+            add(&mut g.saturation, -30.0 * k, -100.0, 100.0);
+            add(&mut g.hue, -20.0 * k, -100.0, 100.0);
+            add(&mut a.color.foliage.hue, 20.0 * k, -100.0, 100.0);
+        }),
+        c!(["emerald greens", "lush greens", "rich greens", "deep greens"], "rich emerald greens", |a, k| {
+            let g = band(&mut a.color.hsl, "green");
+            add(&mut g.saturation, 20.0 * k, -100.0, 100.0);
+            add(&mut g.hue, 15.0 * k, -100.0, 100.0);
+            add(&mut g.luminance, -10.0 * k, -100.0, 100.0);
+        }),
+        c!(["yellow greens", "spring greens", "fresh greens"], "fresh yellow-greens", |a, k| {
+            let g = band(&mut a.color.hsl, "green");
+            add(&mut g.hue, -20.0 * k, -100.0, 100.0);
+            add(&mut g.saturation, 10.0 * k, -100.0, 100.0);
+            add(&mut g.luminance, 8.0 * k, -100.0, 100.0);
+        }),
+        c!(["deep blue sky", "deep blue skies", "blue sky", "blue skies", "dramatic sky", "darker sky", "dark sky"], "deeper blue sky", |a, k| {
+            let b = band(&mut a.color.hsl, "blue");
+            add(&mut b.luminance, -25.0 * k, -100.0, 100.0);
+            add(&mut b.saturation, 15.0 * k, -100.0, 100.0);
+            add(&mut band(&mut a.color.hsl, "aqua").luminance, -10.0 * k, -100.0, 100.0);
+        }),
+        c!(["vivid reds", "punchy reds", "red lips", "rich reds"], "richer reds", |a, k| {
+            add(&mut band(&mut a.color.hsl, "red").saturation, 25.0 * k, -100.0, 100.0);
+        }),
+        c!(["muted reds", "soft reds", "desaturated reds"], "calmer reds", |a, k| {
+            add(&mut band(&mut a.color.hsl, "red").saturation, -25.0 * k, -100.0, 100.0);
+        }),
+        c!(["warm skin", "golden skin", "sun-kissed skin", "tanned skin"], "warmer skin", |a, k| {
+            let o = band(&mut a.color.hsl, "orange");
+            add(&mut o.saturation, 8.0 * k, -100.0, 100.0);
+            add(&mut o.hue, 5.0 * k, -100.0, 100.0);
+        }),
+        c!(["natural skin", "true skin", "honest skin"], "natural, restrained skin", |a, k| {
+            add(&mut band(&mut a.color.hsl, "orange").saturation, -6.0 * k, -100.0, 100.0);
+            add(&mut a.color.skin_protection, 30.0 * k, 0.0, 100.0);
+        }),
+        c!(["pastel colours", "pastel colors", "pastel tones", "soft pastels"], "pastel palette", |a, k| {
+            saturation(a, -20.0 * k);
+            for b in a.color.hsl.bands_mut() {
+                add(&mut b.luminance, 10.0 * k, -100.0, 100.0);
+            }
+            curve(a, 0.0, 0.0, 10.0 * k, 0.0);
+        }),
+        c!(["neon", "cyberpunk", "synthwave"], "neon: magenta and cyan", |a, k| {
+            add(&mut band(&mut a.color.hsl, "magenta").saturation, 30.0 * k, -100.0, 100.0);
+            add(&mut band(&mut a.color.hsl, "aqua").saturation, 30.0 * k, -100.0, 100.0);
+            wheel(a, SHADOWS, 190.0, 20.0 * k, 0.0);
+            wheel(a, HIGHLIGHTS, 320.0, 18.0 * k, 0.0);
+        }),
+        c!(["bleach bypass", "silver retention", "desaturated contrast"], "bleach bypass: low colour, high contrast", |a, k| {
+            saturation(a, -40.0 * k);
+            add(&mut a.tone.contrast, 25.0 * k, -100.0, 100.0);
+            add(&mut a.texture.clarity, 15.0 * k, -100.0, 100.0);
+        }),
+        c!(["cross processed", "cross-processed", "xpro"], "cross-processed: green-cyan shadows, yellow highlights", |a, k| {
+            wheel(a, SHADOWS, 170.0, 22.0 * k, 0.0);
+            wheel(a, HIGHLIGHTS, 60.0, 20.0 * k, 0.0);
+            add(&mut a.tone.contrast, 15.0 * k, -100.0, 100.0);
+        }),
         // Colour words.
         c!(["golden", "gold", "warm", "warmer", "amber"], "warmer highlights", |a, k| {
             wheel(a, HIGHLIGHTS, 40.0, 15.0 * k, 0.0);
@@ -565,6 +674,148 @@ pub fn interpret_look(prompt: &str, base: &Adjustments, subject: Option<(f32, f3
     LookPrompt { adjustments: out, matched: matched.into_iter().map(|(_, m)| m).collect(), unknown }
 }
 
+/// Instructions for an optional language model (the user's own API key): describe the
+/// look as bounded changes to EPIKOS settings, as JSON only. The model never sees the
+/// photo or the user's files, only the prompt.
+pub const AI_LOOK_INSTRUCTIONS: &str = r#"You translate a photographer's description of a look into changes to a RAW editor's settings.
+Reply with JSON only, no prose: {"summary": ["short phrase: what it does", ...], "changes": {...}}.
+All "changes" fields are optional. Numbers are added to the current settings unless marked (absolute).
+- exposure: EV, -2..2
+- tone: {contrast, highlights, shadows, whites, blacks, vibrance, saturation, dehaze}: -100..100
+- curve: master tone curve shape {black, darks, lights, white}: -100..100 (black > 0 lifts / fades blacks)
+- sCurve: midtone S-curve amount 0..100 (absolute; 0 turns it off)
+- hsl: {red|orange|yellow|green|aqua|blue|purple|magenta: {hue, saturation, luminance}}: -100..100 (hue + rotates towards the next band: green + is towards aqua, blue - is towards aqua)
+- wheels: {shadows|midtones|highlights: {hue: 0..360 degrees, amount: 0..100, luminance: -100..100}}: tints to add
+- splitToning: {highlightHue, highlightSaturation, shadowHue, shadowSaturation} (absolute; hue 0..360, saturation 0..100)
+- texture: {clarity, microTexture}: -100..100
+- finishing: {grain: 0..100, vignette: -100..100}
+- foliage: {hue, saturation}: -100..100 (hue + is towards autumn gold / olive)
+- skinProtection: 0..100 (absolute)
+Keep changes moderate and photographic. Keep skin natural for every skin tone; never push one skin tone towards another."#;
+
+fn num(v: &serde_json::Value, k: &str) -> Option<f32> {
+    v.get(k).and_then(serde_json::Value::as_f64).map(|x| x as f32).filter(|x| x.is_finite())
+}
+
+/// Apply a language model's JSON reply (see [`AI_LOOK_INSTRUCTIONS`]) to `base`, with
+/// every value bounded. Unknown fields are ignored; nothing outside the listed
+/// settings can change.
+pub fn apply_ai_look(base: &Adjustments, reply: &serde_json::Value) -> LookPrompt {
+    let mut a = base.clone();
+    let c = reply.get("changes").unwrap_or(reply);
+    let d = |x: Option<f32>, lim: f32| x.map(|v| v.clamp(-lim, lim));
+    if let Some(e) = d(num(c, "exposure"), 2.0) {
+        add(&mut a.exposure, e, -5.0, 5.0);
+    }
+    if let Some(t) = c.get("tone") {
+        let tone = &mut a.tone;
+        for (k, v) in [
+            ("contrast", &mut tone.contrast),
+            ("highlights", &mut tone.highlights),
+            ("shadows", &mut tone.shadows),
+            ("whites", &mut tone.whites),
+            ("blacks", &mut tone.blacks),
+            ("vibrance", &mut tone.vibrance),
+            ("saturation", &mut tone.saturation),
+            ("dehaze", &mut tone.dehaze),
+        ] {
+            if let Some(x) = d(num(t, k), 100.0) {
+                add(v, x, -100.0, 100.0);
+            }
+        }
+    }
+    if let Some(cv) = c.get("curve") {
+        let get = |k| d(num(cv, k), 100.0).unwrap_or(0.0);
+        curve(&mut a, get("darks"), get("lights"), get("black"), get("white"));
+    }
+    if let Some(sc) = num(c, "sCurve") {
+        let amount = sc.clamp(0.0, 100.0);
+        a.curves.s_curve.enabled = amount > 0.0;
+        if amount > 0.0 {
+            a.curves.s_curve.amount = amount;
+        }
+    }
+    if let Some(h) = c.get("hsl") {
+        for (name, band) in HslBands::NAMES.iter().zip(a.color.hsl.bands_mut()) {
+            if let Some(b) = h.get(*name) {
+                for (k, v) in [("hue", &mut band.hue), ("saturation", &mut band.saturation), ("luminance", &mut band.luminance)] {
+                    if let Some(x) = d(num(b, k), 100.0) {
+                        add(v, x, -100.0, 100.0);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(w) = c.get("wheels") {
+        for (name, which) in [("shadows", SHADOWS), ("midtones", MIDTONES), ("highlights", HIGHLIGHTS)] {
+            if let Some(t) = w.get(name) {
+                let hue = num(t, "hue").unwrap_or(0.0).rem_euclid(360.0);
+                let amount = num(t, "amount").unwrap_or(0.0).clamp(0.0, 100.0);
+                let lum = d(num(t, "luminance"), 100.0).unwrap_or(0.0);
+                wheel(&mut a, which, hue, amount, lum);
+            }
+        }
+    }
+    if let Some(st) = c.get("splitToning") {
+        let s = &mut a.split_toning;
+        if let Some(v) = num(st, "highlightHue") {
+            s.highlight_hue = v.rem_euclid(360.0);
+        }
+        if let Some(v) = num(st, "highlightSaturation") {
+            s.highlight_saturation = v.clamp(0.0, 100.0);
+        }
+        if let Some(v) = num(st, "shadowHue") {
+            s.shadow_hue = v.rem_euclid(360.0);
+        }
+        if let Some(v) = num(st, "shadowSaturation") {
+            s.shadow_saturation = v.clamp(0.0, 100.0);
+        }
+    }
+    if let Some(t) = c.get("texture") {
+        if let Some(x) = d(num(t, "clarity"), 100.0) {
+            add(&mut a.texture.clarity, x, -100.0, 100.0);
+        }
+        if let Some(x) = d(num(t, "microTexture"), 100.0) {
+            add(&mut a.texture.micro_texture, x, -100.0, 100.0);
+        }
+    }
+    if let Some(f) = c.get("finishing") {
+        if let Some(x) = d(num(f, "grain"), 100.0) {
+            add(&mut a.finishing.grain, x, 0.0, 100.0);
+        }
+        if let Some(x) = d(num(f, "vignette"), 100.0) {
+            add(&mut a.finishing.vignette, x, -100.0, 100.0);
+        }
+    }
+    if let Some(f) = c.get("foliage") {
+        if let Some(x) = d(num(f, "hue"), 100.0) {
+            add(&mut a.color.foliage.hue, x, -100.0, 100.0);
+        }
+        if let Some(x) = d(num(f, "saturation"), 100.0) {
+            add(&mut a.color.foliage.saturation, x, -100.0, 100.0);
+        }
+    }
+    if let Some(p) = num(c, "skinProtection") {
+        a.color.skin_protection = p.clamp(0.0, 100.0);
+    }
+    let c2 = &mut a.curves;
+    for curve in [&mut c2.rgb, &mut c2.red, &mut c2.green, &mut c2.blue] {
+        *curve = epikos_pipeline::bake_tone_curve(curve);
+    }
+    let summary: Vec<String> = reply
+        .get("summary")
+        .and_then(serde_json::Value::as_array)
+        .map(|s| s.iter().filter_map(|x| x.as_str()).map(|x| x.chars().take(120).collect()).take(12).collect())
+        .unwrap_or_default();
+    let changed = a != *base;
+    let matched = if summary.is_empty() && changed {
+        vec![PromptMatch { phrase: "AI".into(), effect: "look interpreted by the language model".into(), strength: 1.0 }]
+    } else {
+        summary.into_iter().map(|s| PromptMatch { phrase: "AI".into(), effect: s, strength: 1.0 }).collect()
+    };
+    LookPrompt { adjustments: a, matched: if changed { matched } else { Vec::new() }, unknown: Vec::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,5 +871,53 @@ mod tests {
         let r = interpret_look("black and white noir", &Adjustments::default(), None);
         assert!(r.adjustments.color.hsl.red.saturation <= -99.0);
         assert_eq!(r.matched.len(), 2);
+    }
+
+    #[test]
+    fn precise_tone_and_hsl_phrases_map_to_curves_and_bands() {
+        let base = Adjustments::default();
+        let r = interpret_look("editorial with deep blacks, creamy highlights, teal shadows and desaturated greens, very deep blue sky and an s-curve", &base, None);
+        let effects: Vec<&str> = r.matched.iter().map(|m| m.effect.as_str()).collect();
+        for e in ["deeper black point", "soft highlight roll-off", "teal shadows", "greens calmed towards olive", "deeper blue sky", "midtone S-curve"] {
+            assert!(effects.contains(&e), "{e} missing from {effects:?}");
+        }
+        let a = &r.adjustments;
+        assert!(a.tone.blacks < 0.0 && a.tone.highlights < 0.0);
+        assert!(a.color.hsl.green.saturation < 0.0 && a.color.hsl.green.hue < 0.0);
+        assert!(a.color.hsl.blue.luminance < -30.0, "\"very\" strengthens: {}", a.color.hsl.blue.luminance);
+        assert!(a.curves.s_curve.enabled && a.curves.s_curve.amount >= 35.0);
+        // "teal shadows" is its own phrase, not "teal" plus an unknown word.
+        assert!(!r.unknown.iter().any(|w| w == "shadows"), "{:?}", r.unknown);
+    }
+
+    #[test]
+    fn ai_replies_are_bounded_and_limited_to_listed_settings() {
+        let base = Adjustments::default();
+        let reply = serde_json::json!({
+            "summary": ["deep blacks", "teal shadows"],
+            "changes": {
+                "exposure": 9.0,
+                "tone": {"blacks": -30, "contrast": 500},
+                "hsl": {"green": {"saturation": -25}},
+                "wheels": {"shadows": {"hue": 190, "amount": 25}},
+                "sCurve": 40,
+                "lens": {"rotation": 45},
+                "crop": {"width": 0.1}
+            }
+        });
+        let r = apply_ai_look(&base, &reply);
+        let a = &r.adjustments;
+        assert_eq!(a.exposure, 2.0, "clamped");
+        assert_eq!(a.tone.contrast, 100.0);
+        assert_eq!(a.tone.blacks, -30.0);
+        assert_eq!(a.color.hsl.green.saturation, -25.0);
+        assert!(a.color.wheels.shadows.amount > 20.0);
+        assert!(a.curves.s_curve.enabled);
+        assert_eq!(a.lens, base.lens, "framing is not the model's to change");
+        assert_eq!(a.crop, base.crop);
+        assert_eq!(r.matched.len(), 2);
+        // Garbage changes nothing.
+        let none = apply_ai_look(&base, &serde_json::json!({"text": "hello"}));
+        assert!(none.matched.is_empty() && none.adjustments == base);
     }
 }

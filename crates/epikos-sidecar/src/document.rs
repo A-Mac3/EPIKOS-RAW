@@ -65,6 +65,8 @@ pub struct Adjustments {
     pub lut: LutRef,
     /// Step 1 crop of the upright (straightened) frame.
     pub crop: Crop,
+    /// Step 3 hand-drawn masks (brush, linear and radial gradients) with their edits.
+    pub manual: Vec<ManualAdjustment>,
 }
 
 impl Default for Adjustments {
@@ -87,6 +89,7 @@ impl Default for Adjustments {
             style: StyleRef::default(),
             lut: LutRef::default(),
             crop: Crop::default(),
+            manual: Vec::new(),
         }
     }
 }
@@ -229,6 +232,109 @@ impl LocalAdjustment {
             && self.warmth == 0.0
             && self.clarity == 0.0
             && self.tint == 0.0
+    }
+}
+
+/// A hand-drawn mask. Positions are fractions of the upright (uncropped) frame; sizes
+/// along x are fractions of its width, along y of its height.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ManualShape {
+    /// Full effect on the (x0, y0) side, fading to none at (x1, y1): sky or ground.
+    #[serde(rename_all = "camelCase")]
+    Linear { x0: f32, y0: f32, x1: f32, y1: f32 },
+    /// An ellipse centred at (cx, cy) with radii rx, ry, turned `angle` degrees;
+    /// `feather` 0…100 softens it from the edge inwards. `invert` edits the outside.
+    #[serde(rename_all = "camelCase")]
+    Radial { cx: f32, cy: f32, rx: f32, ry: f32, angle: f32, feather: f32, invert: bool },
+    /// Painted strokes.
+    #[serde(rename_all = "camelCase")]
+    Brush { strokes: Vec<BrushStroke> },
+}
+
+/// One brush stroke: its path, size (fraction of the frame width), feather and flow
+/// (0…100); an erase stroke removes mask instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrushStroke {
+    pub points: Vec<[f32; 2]>,
+    pub size: f32,
+    pub feather: f32,
+    pub flow: f32,
+    pub erase: bool,
+}
+
+impl Default for BrushStroke {
+    fn default() -> Self {
+        Self { points: Vec::new(), size: 0.05, feather: 50.0, flow: 100.0, erase: false }
+    }
+}
+
+/// A local edit through a hand-drawn mask: exposure (EV), contrast, saturation,
+/// warmth (temperature), tint, clarity and dehaze (−100…100).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ManualAdjustment {
+    pub shape: ManualShape,
+    pub exposure: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+    pub warmth: f32,
+    pub tint: f32,
+    pub clarity: f32,
+    pub dehaze: f32,
+}
+
+impl Default for ManualAdjustment {
+    fn default() -> Self {
+        Self {
+            shape: ManualShape::Radial { cx: 0.5, cy: 0.5, rx: 0.25, ry: 0.25, angle: 0.0, feather: 50.0, invert: false },
+            exposure: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            warmth: 0.0,
+            tint: 0.0,
+            clarity: 0.0,
+            dehaze: 0.0,
+        }
+    }
+}
+
+impl ManualAdjustment {
+    pub fn is_neutral(&self) -> bool {
+        [self.exposure, self.contrast, self.saturation, self.warmth, self.tint, self.clarity, self.dehaze]
+            .iter()
+            .all(|v| *v == 0.0)
+    }
+
+    /// The same edit on a crop of the frame: positions and sizes in the crop's own
+    /// fractions.
+    pub fn cropped(&self, c: &Crop) -> ManualAdjustment {
+        let c = c.clamped();
+        let (fx, fy) = (|x: f32| (x - c.x) / c.width, |y: f32| (y - c.y) / c.height);
+        let shape = match &self.shape {
+            ManualShape::Linear { x0, y0, x1, y1 } => ManualShape::Linear { x0: fx(*x0), y0: fy(*y0), x1: fx(*x1), y1: fy(*y1) },
+            ManualShape::Radial { cx, cy, rx, ry, angle, feather, invert } => ManualShape::Radial {
+                cx: fx(*cx),
+                cy: fy(*cy),
+                rx: rx / c.width,
+                ry: ry / c.height,
+                angle: *angle,
+                feather: *feather,
+                invert: *invert,
+            },
+            ManualShape::Brush { strokes } => ManualShape::Brush {
+                strokes: strokes
+                    .iter()
+                    .map(|s| BrushStroke {
+                        points: s.points.iter().map(|[x, y]| [fx(*x), fy(*y)]).collect(),
+                        size: s.size / c.width,
+                        ..s.clone()
+                    })
+                    .collect(),
+            },
+        };
+        ManualAdjustment { shape, ..self.clone() }
     }
 }
 

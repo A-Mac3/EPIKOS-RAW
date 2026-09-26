@@ -1,7 +1,7 @@
 //! Steps 4–6 plus the parametric style engine, run on upright scene-linear Rec.2020
 //! after exposure.
 //!
-//! Order inside: Step 3 local adjustments through their masks → Oklab → skin map
+//! Order inside: Step 3 local adjustments through their masks (AI, then hand-drawn) → Oklab → skin map
 //! (from the image before any look, optionally confined to the subject) → Step 4
 //! texture and line sculpting (manual + style) → Step 5 manual grade (manual skin
 //! protection) → style skin grade (skin only) → style scene grade (style skin
@@ -15,6 +15,7 @@ mod finish;
 mod grade;
 mod lights;
 mod local;
+mod manual;
 mod lut;
 mod oklab;
 mod region;
@@ -165,6 +166,8 @@ struct Look {
     lights: Vec<epikos_sidecar::VirtualLight>,
     lut_amount: f32,
     local: Vec<LocalAdjustment>,
+    /// Hand-drawn masks with their edits.
+    drawn: Vec<epikos_sidecar::ManualAdjustment>,
     retouch_subject_only: bool,
     foliage: HslChannel,
     background: BackgroundTint,
@@ -187,6 +190,7 @@ impl Look {
             lights: adj.atmosphere.lights.clone(),
             lut_amount: if adj.lut.is_none() { 0.0 } else { pct(adj.lut.amount) },
             local: adj.local.iter().filter(|l| !l.is_neutral()).copied().collect(),
+            drawn: adj.manual.iter().filter(|m| !m.is_neutral()).cloned().collect(),
             retouch_subject_only: adj.texture.retouch_subject_only,
             foliage: adj.color.foliage,
             background: adj.color.background,
@@ -273,6 +277,7 @@ impl Look {
 
     fn is_neutral(&self) -> bool {
         self.local.is_empty()
+            && self.drawn.is_empty()
             && !self.needs_lab()
             && self.atmosphere.is_neutral()
             && !self.lights.iter().any(|l| l.intensity > 0.0)
@@ -316,6 +321,9 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         if let Some(m) = mask(rgb, l.mask) {
             local::apply_local(rgb, l, &m);
         }
+    }
+    for m in &look.drawn {
+        manual::apply_manual(rgb, m);
     }
     if look.needs_lab() {
         let ok = Oklab::new();

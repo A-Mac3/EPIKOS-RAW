@@ -18,6 +18,7 @@ use epikos_sidecar::{Adjustments, Crop, LocalAdjustment, MaskTarget, WbMode};
 use serde::Serialize;
 
 use crate::analysis::{self, SceneAnalysis};
+use crate::composition::{person_crop, rank_subjects, RankedSubject};
 use crate::guidance::{self, CropAdvice, SkinFix, SkinProblem};
 use crate::learn::{editorial, Target};
 use crate::{scene_only, Engine};
@@ -36,6 +37,8 @@ pub struct MentorReport {
     pub crop: Option<CropAdvice>,
     /// The look the starting point aims for: "Editorial" or a learned style's name.
     pub target: String,
+    /// Subjects in the frame, primary first.
+    pub subjects: Vec<RankedSubject>,
     pub analysis_ms: u64,
 }
 
@@ -58,6 +61,56 @@ pub struct Feedback {
     /// "praise", "warning" or "tip".
     pub level: &'static str,
     pub text: String,
+    /// The correction, for warnings and tips: slider targets in words and the
+    /// settings with them applied (one click in the app).
+    pub fix: Option<Fix>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fix {
+    /// e.g. "Highlights −35, Exposure −0.20 EV".
+    pub label: String,
+    pub adjustments: Adjustments,
+}
+
+/// Builds a [`Fix`]: each step changes a copy of the settings and names the new value.
+struct FixBuilder {
+    adj: Adjustments,
+    parts: Vec<String>,
+}
+
+impl FixBuilder {
+    fn new(adj: &Adjustments) -> Self {
+        Self { adj: adj.clone(), parts: Vec::new() }
+    }
+
+    fn set(mut self, label: impl Into<String>, f: impl FnOnce(&mut Adjustments)) -> Self {
+        f(&mut self.adj);
+        self.parts.push(label.into());
+        self
+    }
+
+    fn skin(self, label: impl Into<String>, f: impl FnOnce(&mut LocalAdjustment)) -> Self {
+        self.set(label, |a| {
+            let l = match a.local.iter_mut().position(|l| l.mask == MaskTarget::Skin) {
+                Some(i) => &mut a.local[i],
+                None => {
+                    a.local.push(LocalAdjustment { mask: MaskTarget::Skin, ..Default::default() });
+                    a.local.last_mut().expect("just pushed")
+                }
+            };
+            f(l);
+        })
+    }
+
+    fn done(self) -> Option<Fix> {
+        (!self.parts.is_empty()).then(|| Fix { label: self.parts.join(", "), adjustments: self.adj })
+    }
+}
+
+fn signed(v: f32) -> String {
+    format!("{}{:.0}", if v >= 0.0 { "+" } else { "−" }, v.abs())
 }
 
 /// Tonal statistics of a developed image.
@@ -177,9 +230,25 @@ impl Engine {
         let separation = subject.as_deref().and_then(|m| guidance::inside_outside_ev(&shown, m));
         let background_warmth = subject.as_deref().map(|m| guidance::outside_warmth(&shown, m));
         let straighten = if rotation.abs() >= 0.3 { rotation } else { adjustments.lens.rotation };
-        let crop = guidance::suggest_crop(subject.as_deref(), sky.as_deref(), w as usize, h as usize, straighten);
+        // Subjects ranked by area and nearness; a person as the primary subject is
+        // framed by portrait rules (no cut joints, feet clearance, headroom, lead room).
+        let depth = self
+            .masker
+            .depth_available()
+            .then(|| self.depth_for(&loaded, &whole).ok())
+            .flatten()
+            .map(|d| analysis::fit(&d.depth, d.width, d.height, w, h));
+        let subjects = subject
+            .as_deref()
+            .map(|m| rank_subjects(m, skin.as_deref(), depth.as_deref(), w as usize, h as usize))
+            .unwrap_or_default();
+        let crop = match subjects.first() {
+            Some(p) if p.person => person_crop(p, skin.as_deref(), w as usize, h as usize, straighten),
+            _ => guidance::suggest_crop(subject.as_deref(), sky.as_deref(), w as usize, h as usize, straighten),
+        };
 
         let mut report = advise(&scene, &s, adjustments, AdviceInputs {
+            subjects: &subjects,
             auto_ev,
             auto_tone,
             rotation,
@@ -233,7 +302,7 @@ impl Engine {
     }
 }
 
-struct AdviceInputs {
+struct AdviceInputs<'a> {
     auto_ev: f32,
     auto_tone: epikos_sidecar::Tone,
     rotation: f32,
@@ -249,6 +318,7 @@ struct AdviceInputs {
     /// Oklab b of the background (warm +, cool −).
     background_warmth: Option<f32>,
     crop: Option<CropAdvice>,
+    subjects: &'a [RankedSubject],
     started: Instant,
 }
 
@@ -264,7 +334,7 @@ fn upsert_local(rec: &mut Adjustments, mask: MaskTarget, f: impl FnOnce(&mut Loc
     }
 }
 
-fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInputs) -> MentorReport {
+fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInputs<'_>) -> MentorReport {
     let mut insights = Vec::new();
     let mut rec = current.clone();
     let mut changes = Vec::new();
@@ -508,12 +578,32 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
         }
     }
 
-    // Composition.
+    // Composition: who the picture is about, then how to frame them.
+    if let Some(p) = a.subjects.first().filter(|_| a.subjects.len() > 1) {
+        let secondary = a.subjects.len() - 1;
+        insights.push(Insight {
+            topic: "Subject",
+            observation: format!(
+                "Primary subject: {} ({:.0}% of the frame{}); {secondary} secondary subject{}.",
+                if p.person { "a person" } else { "the largest, nearest subject" },
+                100.0 * p.area,
+                p.nearness.map_or(String::new(), |n| format!(", {}", if n > 0.6 { "near" } else if n > 0.35 { "mid-distance" } else { "far" })),
+                if secondary == 1 { "" } else { "s" }
+            ),
+            why: "Framing, local light and colour decisions follow the primary subject; secondary subjects support it and shouldn't compete.".into(),
+            how: "Keep local lifts (Step 3 Subject) and the crop centred on the primary subject.".into(),
+        });
+    }
     if let Some(c) = &a.crop {
+        let person = a.subjects.first().is_some_and(|p| p.person);
         insights.push(Insight {
             topic: "Framing",
-            observation: format!("A tighter crop {}.", c.reason),
-            why: "Placing the subject and the horizon on the thirds gives the picture direction and room; a centred subject and a horizon through the middle split it in two.".into(),
+            observation: format!("A crop that {}.", c.reason.trim_start_matches("A tighter crop ")),
+            why: if person {
+                "Cutting at the neck, waist, knees or ankles reads as an amputation; a full-body frame with ground below the feet, or a clean three-quarter at mid-thigh, keeps the person whole. Anatomy and impact come before exact alignment.".into()
+            } else {
+                "Placing the subject and the horizon on the thirds gives the picture direction and room; a centred subject and a horizon through the middle split it in two.".into()
+            },
             how: format!(
                 "Apply suggested crop below, or Step 1: Crop & straighten{}.",
                 if c.rotation.abs() >= 0.3 { format!(" at {:+.1}°", c.rotation) } else { String::new() }
@@ -562,6 +652,7 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
         changes,
         crop: a.crop.clone(),
         target: String::new(),
+        subjects: a.subjects.to_vec(),
         analysis_ms: a.started.elapsed().as_millis() as u64,
     }
 }
@@ -646,66 +737,130 @@ fn style_name(id: &str) -> &'static str {
 
 fn judge(before: &Stats, now: &Stats, adj: &Adjustments) -> Vec<Feedback> {
     let mut out = Vec::new();
-    let mut add = |level: &'static str, text: String| out.push(Feedback { level, text });
+    let mut add = |level: &'static str, text: String, fix: Option<Fix>| {
+        // Warnings and tips spell the correction out.
+        let text = match &fix {
+            Some(f) => format!("{text} Fix: {}.", f.label),
+            None => text,
+        };
+        out.push(Feedback { level, text, fix });
+    };
+    let fix = || FixBuilder::new(adj);
 
     // Highlights and shadows.
     if now.clipped > 0.02 {
-        add("warning", format!("{:.1}% of the image is clipping to white: lower Highlights or Exposure, or check Whites.", 100.0 * now.clipped));
+        let h = (adj.tone.highlights - 25.0).max(-100.0);
+        let mut f = fix().set(format!("Highlights {}", signed(h)), |a| a.tone.highlights = h);
+        if adj.tone.highlights <= -60.0 || now.clipped > 0.06 {
+            let ev = ((adj.exposure - 0.25) * 100.0).round() / 100.0;
+            f = f.set(format!("Exposure {ev:+.2} EV"), |a| a.exposure = ev);
+        }
+        add("warning", format!("{:.1}% of the image is clipping to white.", 100.0 * now.clipped), f.done());
     } else if before.clipped > 0.01 && now.clipped < 0.5 * before.clipped {
-        add("praise", "Highlight detail recovered: the brights clip far less than in the original.".into());
+        add("praise", "Highlight detail recovered: the brights clip far less than in the original.".into(), None);
     }
     if now.crushed > 0.05 {
-        add("warning", format!("{:.1}% of the image is crushed to black: lift Shadows or Blacks unless that's the look.", 100.0 * now.crushed));
+        let (sh, bl) = ((adj.tone.shadows + 15.0).min(100.0), (adj.tone.blacks + 10.0).min(100.0));
+        let f = fix()
+            .set(format!("Shadows {}", signed(sh)), |a| a.tone.shadows = sh)
+            .set(format!("Blacks {}", signed(bl)), |a| a.tone.blacks = bl);
+        add("warning", format!("{:.1}% of the image is crushed to black (fine if that's the look).", 100.0 * now.crushed), f.done());
     }
     // Mid-tones.
     if now.p50.abs() <= 0.8 && before.p50.abs() > 1.2 {
-        add("praise", "Mid-tones now sit close to mid-grey: a well-judged exposure.".into());
+        add("praise", "Mid-tones now sit close to mid-grey: a well-judged exposure.".into(), None);
     } else if now.p50 < -2.5 {
-        add("tip", "The image is overall very dark; fine for a low-key mood, otherwise raise Exposure.".into());
+        let ev = ((adj.exposure + (-1.2 - now.p50).clamp(0.3, 1.5)) * 100.0).round() / 100.0;
+        let f = fix().set(format!("Exposure {ev:+.2} EV"), |a| a.exposure = ev);
+        add("tip", "The image is overall very dark (fine for a low-key mood).".into(), f.done());
     } else if now.p50 > 1.5 {
-        add("tip", "The image is overall very bright; fine for high-key, otherwise lower Exposure.".into());
+        let ev = ((adj.exposure - (now.p50 - 0.7).clamp(0.3, 1.5)) * 100.0).round() / 100.0;
+        let f = fix().set(format!("Exposure {ev:+.2} EV"), |a| a.exposure = ev);
+        add("tip", "The image is overall very bright (fine for high-key).".into(), f.done());
     }
     // Contrast range.
     let (range_before, range_now) = (before.p98 - before.p02, now.p98 - now.p02);
     if range_now < 0.6 * range_before && range_before > 4.0 {
-        add("tip", "The tonal range has been compressed a lot; the image may look flat. A little Contrast or a gentle S-curve helps.".into());
+        let amount = adj.curves.s_curve.amount.max(30.0);
+        let f = fix().set(format!("S-curve on, {amount:.0}"), |a| {
+            a.curves.s_curve.enabled = true;
+            a.curves.s_curve.amount = amount;
+        });
+        add("tip", "The tonal range has been compressed a lot; the image may look flat.".into(), f.done());
     }
     // Colour.
     if now.loud > 0.08 && now.loud > 1.5 * before.loud {
-        add("warning", format!("{:.0}% of the image is very saturated; colours may look artificial or posterise in print.", 100.0 * now.loud));
+        let (sat, vib) = ((adj.tone.saturation - 15.0).max(-100.0), (adj.tone.vibrance - 10.0).max(-100.0));
+        let f = fix()
+            .set(format!("Saturation {}", signed(sat)), |a| a.tone.saturation = sat)
+            .set(format!("Vibrance {}", signed(vib)), |a| a.tone.vibrance = vib);
+        add("warning", format!("{:.0}% of the image is very saturated; colours may look artificial or posterise in print.", 100.0 * now.loud), f.done());
     }
     if let (Some(w), None) = (cast_words(before.cast), cast_words(now.cast)) {
-        add("praise", format!("The {w} cast is neutralised: whites and greys look clean."));
+        add("praise", format!("The {w} cast is neutralised: whites and greys look clean."), None);
     }
     // Skin.
+    let protection = |a: &Adjustments| if a.style.is_none() { a.color.skin_protection } else { a.style.skin_protection };
+    let set_protection = |a: &mut Adjustments, v: f32| {
+        if a.style.is_none() {
+            a.color.skin_protection = v;
+        } else {
+            a.style.skin_protection = v;
+        }
+    };
+    let skin_now = adj.local.iter().find(|l| l.mask == MaskTarget::Skin).copied().unwrap_or_default();
     match (before.skin, now.skin) {
         (Some((l0, h0)), Some((l1, h1))) => {
             let dh = (h1 - h0 + 540.0).rem_euclid(360.0) - 180.0;
             if dh.abs() > 8.0 {
                 let towards = if dh > 0.0 { "yellow/green" } else { "red/magenta" };
-                add("warning", format!("Skin hue has shifted {:.0}° towards {towards}; raise Skin tone protection or ease the grade.", dh.abs()));
+                // Back towards the original hue: magenta against yellow-green, warmth
+                // and green against red-magenta.
+                let (dw, dt) = if dh > 0.0 { (-3.0, (dh * 0.4).clamp(3.0, 12.0)) } else { (5.0, -(dh.abs() * 0.4).clamp(3.0, 12.0)) };
+                let (w, t) = ((skin_now.warmth + dw).clamp(-100.0, 100.0), (skin_now.tint + dt).clamp(-100.0, 100.0));
+                let p = (protection(adj) + 25.0).clamp(25.0, 100.0);
+                let f = fix()
+                    .skin(format!("Skin warmth {}", signed(w)), |l| l.warmth = w)
+                    .set(format!("Skin protection {p:.0}%"), |a| set_protection(a, p))
+                    .skin(format!("Skin tint {}", signed(t)), |l| l.tint = t);
+                add("warning", format!("Skin hue has shifted {:.0}° towards {towards}.", dh.abs()), f.done());
             } else if (l1 - l0).abs() < 0.06 {
-                add("praise", "Skin tones are balanced: natural hue and depth, kept through the grade.".into());
+                add("praise", "Skin tones are balanced: natural hue and depth, kept through the grade.".into(), None);
             }
             if l1 < l0 - 0.08 {
-                add("tip", "Skin has become noticeably darker than in the original; check it doesn't look muddy.".into());
+                let ev = ((skin_now.exposure + 0.2).min(1.0) * 100.0).round() / 100.0;
+                let f = fix().skin(format!("Skin exposure {ev:+.2} EV"), |l| l.exposure = ev);
+                add("tip", "Skin has become noticeably darker than in the original and may look muddy.".into(), f.done());
             }
         }
-        (Some(_), None) => add("warning", "Skin is barely recognisable as skin after the grade; check the style amount or skin protection.".into()),
+        (Some(_), None) => {
+            let p = protection(adj).max(70.0);
+            let mut f = fix().set(format!("Skin protection {p:.0}%"), |a| set_protection(a, p));
+            if !adj.style.is_none() {
+                let amt = (adj.style.amount - 30.0).max(20.0);
+                f = f.set(format!("Style amount {amt:.0}%"), |a| a.style.amount = amt);
+            }
+            add("warning", "Skin is barely recognisable as skin after the grade.".into(), f.done());
+        }
         _ => {}
     }
     // Specific settings.
-    if adj.local.iter().any(|l| l.mask == MaskTarget::Eyes && l.exposure > 0.6) {
-        add("warning", "Eyes are lifted more than +0.6 EV and may look lit rather than bright.".into());
+    if let Some(i) = adj.local.iter().position(|l| l.mask == MaskTarget::Eyes && l.exposure > 0.6) {
+        let f = fix().set("Eyes exposure +0.45 EV", |a| a.local[i].exposure = 0.45);
+        add("warning", "Eyes are lifted more than +0.6 EV and may look lit rather than bright.".into(), f.done());
     }
     if adj.texture.clarity > 60.0 || adj.texture.micro_texture > 70.0 {
-        add("tip", "Strong clarity or micro-texture can add halos and age faces; zoom in to check edges.".into());
+        let (c, m) = (adj.texture.clarity.min(40.0), adj.texture.micro_texture.min(50.0));
+        let f = fix()
+            .set(format!("Clarity {}", signed(c)), |a| a.texture.clarity = c)
+            .set(format!("Micro-texture {}", signed(m)), |a| a.texture.micro_texture = m);
+        add("tip", "Strong clarity or micro-texture can add halos and age faces.".into(), f.done());
     }
     if adj.lens.rotation != 0.0 || adj.lens.vertical != 0.0 {
-        add("praise", "Framing straightened: lines now read as intentional.".into());
+        add("praise", "Framing straightened: lines now read as intentional.".into(), None);
     }
     if out.is_empty() {
-        out.push(Feedback { level: "praise", text: "Nothing to flag: highlights, shadows and colour are all in a healthy range.".into() });
+        out.push(Feedback { level: "praise", text: "Nothing to flag: highlights, shadows and colour are all in a healthy range.".into(), fix: None });
     }
     out
 }
@@ -731,12 +886,20 @@ mod tests {
         let adj = Adjustments::default();
         let before = stats_with(0.05, 0.0, (0.0, 0.0), Some((0.6, 60.0)));
         let clipping = judge(&before, &stats_with(0.06, 0.0, (0.0, 0.0), Some((0.6, 60.0))), &adj);
-        assert!(clipping.iter().any(|f| f.level == "warning" && f.text.contains("clipping")));
+        let clip = clipping.iter().find(|f| f.level == "warning" && f.text.contains("clipping")).expect("clipping warning");
+        let fix = clip.fix.as_ref().expect("a fix");
+        assert!(fix.adjustments.tone.highlights < adj.tone.highlights, "{}", fix.label);
+        assert!(clip.text.contains("Fix: Highlights"), "{}", clip.text);
         let recovered = judge(&before, &stats_with(0.005, 0.0, (0.0, 0.0), Some((0.6, 61.0))), &adj);
         assert!(recovered.iter().any(|f| f.level == "praise" && f.text.contains("Highlight detail")));
         assert!(recovered.iter().any(|f| f.level == "praise" && f.text.contains("Skin tones are balanced")));
         let shifted = judge(&before, &stats_with(0.0, 0.0, (0.0, 0.0), Some((0.6, 75.0))), &adj);
-        assert!(shifted.iter().any(|f| f.level == "warning" && f.text.contains("yellow/green")));
+        let shift = shifted.iter().find(|f| f.level == "warning" && f.text.contains("yellow/green")).expect("skin shift");
+        let fix = shift.fix.as_ref().expect("a fix");
+        let skin = fix.adjustments.local.iter().find(|l| l.mask == MaskTarget::Skin).expect("skin fix");
+        assert!(skin.tint > 0.0, "magenta against yellow-green: {}", fix.label);
+        assert!(fix.adjustments.color.skin_protection >= 25.0);
+        assert!(recovered.iter().all(|f| f.level != "praise" || f.fix.is_none()));
     }
 
     #[test]

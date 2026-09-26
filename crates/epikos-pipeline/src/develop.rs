@@ -151,6 +151,7 @@ fn look_cropped(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs) {
     }
     let a = &mut adj.atmosphere;
     (a.shaft_x, a.shaft_y) = to_cropped(crop, a.shaft_x, a.shaft_y);
+    adj.manual = adj.manual.iter().map(|m| m.cropped(crop)).collect();
     apply_look(rgb, &adj, &cropped);
 }
 

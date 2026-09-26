@@ -6,7 +6,7 @@ use epikos_core::{Error, Result};
 use crate::document::{
     Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Crop, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
-    LocalAdjustment, LutRef, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
+    LocalAdjustment, LutRef, ManualAdjustment, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
     ToneCurve, VirtualLight, WbMode, WhiteBalance,
 };
 
@@ -167,6 +167,12 @@ fn render_look(a: &Adjustments) -> String {
         "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"\n    epikos:characterLines=\"{}\"\n    epikos:retouchSubjectOnly=\"{}\"",
         t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance, t.character_lines, t.retouch_subject_only
     );
+    // Hand-drawn masks: their shapes don't fit a flat list, so they're kept as JSON.
+    if !a.manual.is_empty() {
+        if let Ok(json) = serde_json::to_string(&a.manual) {
+            out += &format!("\n    epikos:manual=\"{}\"", esc(&json));
+        }
+    }
     // Local adjustments: "mask,exposure,contrast,saturation,warmth,clarity,tint;…".
     if !a.local.is_empty() {
         let local: Vec<String> = a
@@ -604,6 +610,9 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     })
                     .unwrap_or_default(),
             },
+            manual: get("epikos:manual")
+                .and_then(|v| serde_json::from_str::<Vec<ManualAdjustment>>(&unescape(v)).ok())
+                .unwrap_or_default(),
             lut: LutRef {
                 name: text("epikos:lut"),
                 amount: num("epikos:lutAmount").unwrap_or(defaults.lut.amount),
@@ -642,6 +651,7 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::{BrushStroke, ManualShape};
     use crate::document::{DevelopDocument, SourceRef, WbMode};
     use epikos_core::Error;
 
@@ -720,6 +730,21 @@ mod tests {
         doc.adjustments.lens.vertical = 30.0;
         doc.adjustments.tone = Tone::from_array([10.0, -40.0, 35.5, 5.0, -8.0, 20.0, -3.0]);
         doc.adjustments.tone.dehaze = 35.0;
+        doc.adjustments.manual = vec![
+            ManualAdjustment {
+                shape: ManualShape::Linear { x0: 0.5, y0: 0.0, x1: 0.5, y1: 0.45 },
+                exposure: -0.6,
+                dehaze: 30.0,
+                ..Default::default()
+            },
+            ManualAdjustment {
+                shape: ManualShape::Brush {
+                    strokes: vec![BrushStroke { points: vec![[0.1, 0.2], [0.3, 0.25]], size: 0.04, erase: true, ..Default::default() }],
+                },
+                warmth: 12.0,
+                ..Default::default()
+            },
+        ];
         doc.adjustments.crop = Crop { x: 0.1, y: 0.05, width: 0.8, height: 0.64, aspect: "4:5".into() };
         doc.adjustments.local = vec![
             LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, clarity: 25.0, ..Default::default() },
