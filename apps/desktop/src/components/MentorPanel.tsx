@@ -86,6 +86,8 @@ export function MentorPanel({
             if (id === request.current) setState({ kind: "done", ...r });
           },
           (e) => {
+            // A newer reading replaced this one: not an error.
+            if (String(e).includes("superseded")) return;
             if (id === request.current && !cache.has(info.path)) setState({ kind: "error", message: String(e) });
           },
         ).finally(() => {
@@ -104,7 +106,7 @@ export function MentorPanel({
       const b = JSON.stringify(adjustments);
       critique(info.path, adjustments).then(
         (items) => alive && setFeedback({ items, basis: b }),
-        () => alive && setFeedback(null),
+        (e) => alive && !String(e).includes("superseded") && setFeedback(null),
       );
     }, FEEDBACK_DELAY_MS);
     return () => {

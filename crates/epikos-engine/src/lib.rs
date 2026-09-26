@@ -136,6 +136,8 @@ struct Loaded {
     depth: Mutex<Option<(String, Arc<DepthMap>)>>,
     /// The lens profile: the camera's (DNG) or the database's, resolved once.
     lens: OnceLock<Option<Arc<LensProfile>>>,
+    /// The depth map warped to the current straighten / perspective.
+    depth_warped: Mutex<Option<(String, Arc<DepthMap>)>>,
     /// Scene analyses of the photo as shot, keyed by the geometry they were made for:
     /// the mentor re-reads the edit often, the scene never changes.
     analyses: Mutex<Vec<(String, SceneAnalysis)>>,
@@ -192,6 +194,10 @@ pub struct Engine {
     data_dir: PathBuf,
     /// Serialises read-modify-write of the stores.
     store_lock: Mutex<()>,
+    /// Latest mentor / feedback request: an older one still running stops at its next
+    /// checkpoint instead of finishing work nobody will see.
+    mentor_ticket: std::sync::atomic::AtomicU64,
+    critique_ticket: std::sync::atomic::AtomicU64,
 }
 
 impl Default for Engine {
@@ -226,6 +232,8 @@ impl Engine {
             luts: Mutex::new(Vec::new()),
             data_dir: learn::default_data_dir(),
             store_lock: Mutex::new(()),
+            mentor_ticket: Default::default(),
+            critique_ticket: Default::default(),
         }
     }
 
@@ -265,8 +273,32 @@ impl Engine {
         self.depth_for(&loaded, adjustments)
     }
 
+    /// Depth of the upright frame. The model runs once on the unstraightened frame;
+    /// straighten and perspective then only warp its output, so dragging those sliders
+    /// never re-runs it.
     fn depth_for(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Arc<DepthMap>> {
-        // Only the geometry changes what the model sees in a way that matters.
+        let lens = &adjustments.lens;
+        let flat = self.depth_flat(loaded, &unstraightened(adjustments))?;
+        if !lens.has_transform() {
+            return Ok(flat);
+        }
+        let key = format!("{:?}|{}|{}", unstraightened(adjustments).lens, lens.rotation, lens.vertical);
+        let mut warped = loaded.depth_warped.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((k, d)) = warped.as_ref() {
+            if *k == key {
+                return Ok(d.clone());
+            }
+        }
+        let d = Arc::new(DepthMap {
+            depth: warp_plane(&flat.depth, flat.width, flat.height, lens.rotation, lens.vertical),
+            ..(*flat).clone()
+        });
+        *warped = Some((key, d.clone()));
+        Ok(d)
+    }
+
+    fn depth_flat(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Arc<DepthMap>> {
+        // Only the lens geometry changes what the model sees in a way that matters.
         let key = format!("{:?}", adjustments.lens);
         if let Some((k, d)) = loaded.depth.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             if *k == key {
@@ -560,7 +592,8 @@ impl Engine {
             demosaic: adjustments.demosaic,
             ..Adjustments::default()
         };
-        let key = format!("{:?}|{:?}", adjustments.lens, adjustments.demosaic);
+        // Straightening doesn't change what was photographed: one reading per lens set-up.
+        let key = format!("{:?}|{:?}", unstraightened(adjustments).lens, adjustments.demosaic);
         let cached = |analyses: &[(String, SceneAnalysis)]| analyses.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone());
         if let Some(a) = cached(&loaded.analyses.lock().unwrap_or_else(PoisonError::into_inner)) {
             return Ok(a);
@@ -753,6 +786,7 @@ impl Engine {
             bases: Mutex::new(Vec::new()),
             planes: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
+            depth_warped: Mutex::new(None),
             lens: OnceLock::new(),
             analyses: Mutex::new(Vec::new()),
         });
@@ -824,6 +858,25 @@ impl Prepared {
 
 /// Steps 1–2 only. Models describe the scene, not the look: a black-and-white or
 /// golden style would only make sky, subject and depth harder to read.
+/// The same settings on the unstraightened frame (lens corrections kept). The AI models
+/// run on it once; their outputs follow straighten and perspective by [`warp_plane`].
+pub(crate) fn unstraightened(adjustments: &Adjustments) -> Adjustments {
+    let mut a = adjustments.clone();
+    (a.lens.rotation, a.lens.vertical) = (0.0, 0.0);
+    a
+}
+
+/// A model output (0–1 plane) of the unstraightened frame, warped by the same
+/// straighten / perspective as the image (resolution-independent, so a small plane
+/// lines up with the full-size develop).
+pub(crate) fn warp_plane(data: &[f32], width: u32, height: u32, rotation: f32, vertical: f32) -> Vec<f32> {
+    let mut img = ImageRgbF32::new(width, height, epikos_core::ColorSpace::LinearRec2020);
+    img.r = data.to_vec();
+    img.g = data.to_vec();
+    img.b = data.to_vec();
+    epikos_pipeline::apply_geometry(&img, rotation, vertical).r
+}
+
 /// The scene without the look, and without the crop: the models (masks, depth) and
 /// the scene readings work on the whole upright frame.
 pub(crate) fn scene_only(adjustments: &Adjustments) -> Adjustments {
@@ -942,6 +995,7 @@ mod tests {
             bases: Mutex::new(Vec::new()),
             planes: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
+            depth_warped: Mutex::new(None),
             lens: OnceLock::new(),
             analyses: Mutex::new(Vec::new()),
         }

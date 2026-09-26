@@ -197,9 +197,13 @@ impl Engine {
     /// built-in Editorial profile (rich blacks, dimensional skin, calm olive foliage,
     /// a midtone S-curve).
     pub fn mentor(&self, path: &Path, adjustments: &Adjustments, target: Option<&str>) -> Result<MentorReport> {
+        use std::sync::atomic::Ordering;
         let started = Instant::now();
+        let ticket = self.mentor_ticket.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = || if self.mentor_ticket.load(Ordering::SeqCst) == ticket { Ok(()) } else { Err(epikos_core::Error::Superseded) };
         let loaded = self.load(path)?;
         let scene = self.analyze(path, adjustments)?;
+        current()?;
         let neutral = Adjustments { exposure: 0.0, tone: Default::default(), ..scene_only(adjustments) };
         let mut s = stats(&loaded.develop_scene(512, &neutral)?);
         // Colour is judged on what's on screen (the current look), tone on the scene. The
@@ -210,8 +214,11 @@ impl Engine {
         let shown = prepared
             .with_inputs(|inputs| develop_rgb_with((*base).clone(), &loaded.raw.profile, &whole, inputs))?;
         s.cast = stats(&shown).cast;
+        current()?;
         let (auto_ev, auto_tone) = self.auto_tone(path, adjustments)?;
+        current()?;
         let (rotation, vertical) = self.auto_upright(path, adjustments)?;
+        current()?;
         let targets = self.mask_targets();
         let available = |t: MaskTarget| targets.iter().any(|x| x.target == t && x.available);
         let has_profile = loaded.lens_profile().is_some();
@@ -274,8 +281,10 @@ impl Engine {
             Some(l) => Target { name: l.name.clone(), signature: &l.signature, match_exposure: true, match_colours: true },
             None => Target { name: "Editorial".into(), signature: &built_in, match_exposure: false, match_colours: false },
         };
+        current()?;
         let before = report.recommended.clone();
         let fitted = self.fit_to_target(&loaded, &before, &target)?;
+        current()?;
         let moves = describe_fit(&before, &fitted);
         if !moves.is_empty() {
             insights_for_target(&mut report, &target, learned.is_some(), &moves);
@@ -289,6 +298,8 @@ impl Engine {
 
     /// Live feedback on `adjustments`: what the edit does well and what to watch.
     pub fn critique(&self, path: &Path, adjustments: &Adjustments) -> Result<Vec<Feedback>> {
+        use std::sync::atomic::Ordering;
+        let ticket = self.critique_ticket.fetch_add(1, Ordering::SeqCst) + 1;
         let loaded = self.load(path)?;
         let base = loaded.base(512, 512);
         // Compared with the original over the same (whole) frame.
@@ -296,6 +307,9 @@ impl Engine {
         let prepared = self.prepare(&loaded, &whole)?;
         let edited = prepared
             .with_inputs(|inputs| develop_rgb_with((*base).clone(), &loaded.raw.profile, &whole, inputs))?;
+        if self.critique_ticket.load(Ordering::SeqCst) != ticket {
+            return Err(epikos_core::Error::Superseded);
+        }
         let now = stats(&edited);
         let before = stats(&loaded.develop_scene(512, &Adjustments::default())?);
         Ok(judge(&before, &now, adjustments))

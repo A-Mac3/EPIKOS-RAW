@@ -532,6 +532,8 @@ export interface Preview {
   rgba: Uint8ClampedArray<ArrayBuffer>;
   /** R, G, B histograms, 256 bins each. */
   histogram: [Uint32Array, Uint32Array, Uint32Array];
+  /** Straighten and perspective it was rendered with (for the live geometry preview). */
+  geometry?: { rotation: number; vertical: number };
 }
 
 /** Matches `Adjustments::default()` in Rust. */

@@ -65,6 +65,9 @@ interface Props {
   pixelSize?: { w: number; h: number } | null;
   /** When set, the crop tool is open. */
   cropTool?: CropTool | null;
+  /** Straighten / perspective as set now; while the render catches up, the photo is
+   * rotated and tilted by the difference so it follows the slider instantly. */
+  liveGeometry?: { rotation: number; vertical: number } | null;
   /** When set, a hand-drawn mask is being edited on the image. */
   manualTool?: {
     shape: ManualShape;
@@ -99,6 +102,7 @@ export function Viewer({
   pixelSize = null,
   cropTool = null,
   manualTool = null,
+  liveGeometry = null,
 }: Props) {
   const imageRef = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -128,6 +132,25 @@ export function Viewer({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Instant geometry: the rendered preview rotated / tilted by what's changed since.
+  const geometryStyle = ((): React.CSSProperties | undefined => {
+    const g = preview?.geometry;
+    if (!g || !liveGeometry || !preview) return undefined;
+    const dr = liveGeometry.rotation - g.rotation;
+    const dv = liveGeometry.vertical - g.vertical;
+    if (Math.abs(dr) < 0.01 && Math.abs(dv) < 0.5) return undefined;
+    // Scale so the turned frame still fills (as the engine crops to stay filled).
+    const t = (Math.abs(dr) * Math.PI) / 180;
+    const aspect = Math.max(preview.width / preview.height, preview.height / preview.width);
+    const fill = Math.cos(t) + Math.sin(t) * aspect + Math.abs(dv) * 0.0025;
+    // + rotation is counter-clockwise; + vertical widens the top (verticals that
+    // converge upwards straighten), approximated by tilting the top towards the viewer.
+    return {
+      transform: `perspective(1400px) rotateX(${(-0.16 * dv).toFixed(2)}deg) rotate(${(-dr).toFixed(3)}deg) scale(${fill.toFixed(4)})`,
+      transformOrigin: "50% 50%",
+    };
+  })();
 
   // Whole frame <-> what the preview shows (the crop).
   const toView = (x: number, y: number) =>
@@ -326,7 +349,15 @@ export function Viewer({
       >
         {/* Split view: the unedited render under the edit, which is clipped to the right. */}
         <canvas ref={beforeCanvas} className="viewer-before" style={{ display: splitting ? "block" : "none" }} />
-        <canvas ref={canvas} style={splitting ? { clipPath: `inset(0 0 0 ${split! * 100}%)` } : undefined} />
+        <div className="viewer-photo">
+          <canvas
+            ref={canvas}
+            style={{
+              ...(splitting ? { clipPath: `inset(0 0 0 ${split! * 100}%)` } : {}),
+              ...geometryStyle,
+            }}
+          />
+        </div>
         {splitting && (
           <div
             className="viewer-split"

@@ -301,4 +301,30 @@ mod tests {
     fn flat_images_need_nothing() {
         assert_eq!(estimate_upright(&vec![0.5; 100 * 80], 100, 80), (0.0, 0.0));
     }
+
+    #[test]
+    fn the_warp_is_the_same_at_any_resolution() {
+        // A mask made small and warped must line up with the full-size image warped the
+        // same way: compare a 400 px and a 100 px warp of the same pattern.
+        let pattern = |w: u32, h: u32| {
+            let mut img = ImageRgbF32::new(w, h, epikos_core::ColorSpace::LinearRec2020);
+            for i in 0..img.len() {
+                let (x, y) = ((i as u32 % w) as f32 / w as f32, (i as u32 / w) as f32 / h as f32);
+                let v = if ((x - 0.35).hypot(y - 0.55)) < 0.2 { 1.0 } else { 0.0 };
+                (img.r[i], img.g[i], img.b[i]) = (v, v, v);
+            }
+            img
+        };
+        let (big, small) = (apply_geometry(&pattern(400, 300), 4.0, 25.0), apply_geometry(&pattern(100, 75), 4.0, 25.0));
+        let (mut diff, mut n) = (0.0f32, 0);
+        for y in 0..75 {
+            for x in 0..100 {
+                // The big warp sampled at the small one's pixel centres.
+                let b = big.r[big.index(x * 4 + 2, y * 4 + 2)];
+                diff += (b - small.r[small.index(x, y)]).abs();
+                n += 1;
+            }
+        }
+        assert!(diff / (n as f32) < 0.03, "mean difference {}", diff / n as f32);
+    }
 }

@@ -77,9 +77,47 @@ impl Engine {
         self.mask_targets().iter().any(|t| t.target == target && t.available)
     }
 
-    /// The mask for `target` (computed once per lens geometry), or `None` when its model
-    /// isn't installed.
+    /// The mask for `target`, or `None` when its model isn't installed. The model runs
+    /// once on the unstraightened frame; straighten and perspective only warp its output
+    /// (a few milliseconds), so dragging those sliders never re-runs a model.
     pub(crate) fn mask_plane(
+        &self,
+        loaded: &Loaded,
+        adjustments: &Adjustments,
+        target: MaskTarget,
+    ) -> Result<Option<Arc<MaskData>>> {
+        let lens = &adjustments.lens;
+        if !lens.has_transform() {
+            return self.mask_plane_flat(loaded, adjustments, target);
+        }
+        let flat_adj = crate::unstraightened(adjustments);
+        let target = if target == MaskTarget::Background { MaskTarget::Subject } else { target };
+        let key = format!("warp|{}|{}|{}", lens.rotation, lens.vertical, cache_key(&flat_adj, target));
+        if let Some(m) = cached(loaded, &key) {
+            return Ok(Some(m));
+        }
+        let Some(flat) = self.mask_plane_flat(loaded, &flat_adj, target)? else { return Ok(None) };
+        let warped = Arc::new(MaskData {
+            data: crate::warp_plane(&flat.data, flat.width, flat.height, lens.rotation, lens.vertical),
+            ..(*flat).clone()
+        });
+        let mut cache = loaded.planes.lock().unwrap_or_else(PoisonError::into_inner);
+        // Keep only the latest two warps per target: a slider drag makes many.
+        let prefix = format!("|{}", cache_key(&flat_adj, target));
+        let mut seen = 0;
+        for i in (0..cache.len()).rev() {
+            if cache[i].0.starts_with("warp|") && cache[i].0.ends_with(&prefix) {
+                seen += 1;
+                if seen >= 2 {
+                    cache.remove(i);
+                }
+            }
+        }
+        cache.push((key, warped.clone()));
+        Ok(Some(warped))
+    }
+
+    fn mask_plane_flat(
         &self,
         loaded: &Loaded,
         adjustments: &Adjustments,

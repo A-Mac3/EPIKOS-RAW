@@ -35,7 +35,7 @@ import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
 import { depthAt, useDepth } from "./hooks/useDepth";
 import { useMasks } from "./hooks/useMasks";
-import { usePreview } from "./hooks/usePreview";
+import { useGeometrySettled, usePreview } from "./hooks/usePreview";
 import { useStyles } from "./hooks/useStyles";
 import {
   cropIsActive,
@@ -174,22 +174,25 @@ export default function App() {
   // A deleted (or unknown) learned style falls back to Editorial.
   const activeTarget = mentorTarget && learned.some((s) => s.id === mentorTarget) ? mentorTarget : null;
 
+  const shown = before ? beforeAdjustments : (hoverAdjustments ?? adjustments);
+  const uncropped = useMemo(() => ({ ...shown, crop: defaultCrop() }), [shown]);
+  const live = cropping ? uncropped : shown;
+  const rendered = useGeometrySettled(live, history.dragging);
   // While a slider or handle is dragged, render a lighter proxy (long side at most
   // DRAG_PROXY_SIDE device px) so feedback keeps up with the pointer; the full
   // resolution follows as soon as the drag ends. The browser scales the proxy up on
   // the GPU, so the image never jumps in size.
   const full = [Math.min(viewSize.w, MAX_PREVIEW_SIDE), Math.min(viewSize.h, MAX_PREVIEW_SIDE)] as const;
   const proxy = Math.min(1, DRAG_PROXY_SIDE / Math.max(1, full[0], full[1]));
+  // Only once the drag changes what's rendered: a geometry drag shows its changes by a
+  // transform and needs no re-render of the old geometry at proxy size.
+  const renderedBeforeDrag = useRef(rendered);
+  if (!history.dragging) renderedBeforeDrag.current = rendered;
+  const useProxy = history.dragging && rendered !== renderedBeforeDrag.current;
   const previewSize = (
-    history.dragging ? [Math.max(1, Math.round(full[0] * proxy)), Math.max(1, Math.round(full[1] * proxy))] : full
+    useProxy ? [Math.max(1, Math.round(full[0] * proxy)), Math.max(1, Math.round(full[1] * proxy))] : full
   ) as readonly [number, number];
-  const shown = before ? beforeAdjustments : (hoverAdjustments ?? adjustments);
-  const uncropped = useMemo(() => ({ ...shown, crop: defaultCrop() }), [shown]);
-  const { preview, error: renderError, busy } = usePreview(
-    info?.path ?? null,
-    info ? (cropping ? uncropped : shown) : null,
-    ...previewSize,
-  );
+  const { preview, error: renderError, busy } = usePreview(info?.path ?? null, info ? rendered : null, ...previewSize);
   const { preview: beforePreview } = usePreview(
     split !== null && !cropping ? (info?.path ?? null) : null,
     info && split !== null ? beforeAdjustments : null,
@@ -203,7 +206,7 @@ export default function App() {
   useEffect(() => setHoverAdjustments(null), [info?.path]);
 
   const masks = useMasks(info?.path ?? null, adjustments);
-  const { styles, thumbs } = useStyles(info?.path ?? null, adjustments);
+  const { styles, thumbs } = useStyles(info?.path ?? null, adjustments, history.dragging);
   stylesRef.current = styles;
   const [picking, setPicking] = useState<PickTarget>(null);
   const promptRef = useRef<HTMLInputElement>(null);
@@ -712,6 +715,7 @@ export default function App() {
                   onLightPrepare={() => setLightDrag(true)}
                   frame={shownCrop}
                   pixelSize={pixelSize}
+                  liveGeometry={{ rotation: live.lens.rotation, vertical: live.lens.vertical }}
                   manualTool={
                     manualActive !== null && !cropping
                       ? {

@@ -8,6 +8,8 @@ pub enum Error {
     InvalidImage { reason: String },
     Sidecar(String),
     Io(std::io::Error),
+    /// A newer request of the same kind replaced this one before it finished.
+    Superseded,
 }
 
 impl fmt::Display for Error {
@@ -20,6 +22,7 @@ impl fmt::Display for Error {
             Error::InvalidImage { reason } => write!(f, "invalid image: {reason}"),
             Error::Sidecar(msg) => write!(f, "sidecar: {msg}"),
             Error::Io(err) => write!(f, "i/o: {err}"),
+            Error::Superseded => write!(f, "superseded by a newer request"),
         }
     }
 }

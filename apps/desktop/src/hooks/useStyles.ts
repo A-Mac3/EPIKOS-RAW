@@ -10,7 +10,7 @@ const THUMB_DELAY_MS = 450;
  * The built-in styles plus a small render of the current photo in each. Thumbnails
  * follow the photo's other settings, re-rendered once edits pause.
  */
-export function useStyles(path: string | null, adjustments: Adjustments) {
+export function useStyles(path: string | null, adjustments: Adjustments, paused = false) {
   const [styles, setStyles] = useState<StyleInfo[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, Preview>>({});
 
@@ -28,8 +28,10 @@ export function useStyles(path: string | null, adjustments: Adjustments) {
   }, [path]);
 
   useEffect(() => {
-    if (!path || styles.length === 0) return;
+    // Mid-drag, thumbnails would compete with the main preview: they wait (and any
+    // batch in progress stops) until the drag ends.
     const token = ++latest.current;
+    if (!path || styles.length === 0 || paused) return;
     const base = JSON.parse(baseKey) as Omit<Adjustments, "style">;
     const timer = window.setTimeout(async () => {
       // Listed styles only, in the order the library shows them.
@@ -45,7 +47,7 @@ export function useStyles(path: string | null, adjustments: Adjustments) {
       }
     }, THUMB_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [path, baseKey, styles]);
+  }, [path, baseKey, styles, paused]);
 
   return { styles, thumbs };
 }

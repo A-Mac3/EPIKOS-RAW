@@ -3059,3 +3059,14 @@ input[type="range"]::-moz-range-thumb {
   background: var(--panel-2);
   color: var(--text);
 }
+
+/* The photo, clipped so the instant geometry preview (a CSS rotation) never spills. */
+.viewer-photo {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.viewer-photo canvas {
+  will-change: transform;
+}

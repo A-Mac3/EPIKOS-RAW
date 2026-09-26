@@ -44,7 +44,7 @@ export function usePreview(
         try {
           const p = await renderPreview(req.path, req.adjustments, req.width, req.height);
           if (req.path === currentPath.current) {
-            setPreview(p);
+            setPreview({ ...p, geometry: { rotation: req.adjustments.lens.rotation, vertical: req.adjustments.lens.vertical } });
             setError(null);
           }
         } catch (e) {
@@ -64,4 +64,29 @@ export function usePreview(
   }, [path]);
 
   return { preview, error, busy };
+}
+
+/** Geometry sliders re-render only once they pause this long (or are released). */
+const GEOMETRY_SETTLE_MS = 150;
+
+const geometryOf = (a: Adjustments) => `${a.lens.rotation}|${a.lens.vertical}`;
+
+/**
+ * `adjustments`, except that while a control is dragged, a change of straighten or
+ * perspective reaches the engine only once the drag pauses for GEOMETRY_SETTLE_MS (or
+ * ends): the viewer shows those changes instantly with a CSS transform meanwhile, and
+ * the engine renders the exact result once.
+ */
+export function useGeometrySettled(adjustments: Adjustments, dragging: boolean): Adjustments {
+  const [settled, setSettled] = useState(adjustments);
+  useEffect(() => {
+    if (dragging && geometryOf(adjustments) !== geometryOf(settled)) {
+      const t = window.setTimeout(() => setSettled(adjustments), GEOMETRY_SETTLE_MS);
+      return () => window.clearTimeout(t);
+    }
+    setSettled(adjustments);
+    // `settled` is read for the comparison only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adjustments, dragging]);
+  return settled;
 }
