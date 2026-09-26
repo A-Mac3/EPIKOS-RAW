@@ -2,6 +2,7 @@
 // (`npm run dev`, then open http://localhost:5173/?mock). It renders a synthetic test
 // chart and applies exposure / white balance approximately. Never shipped: main.tsx only
 // imports this behind `import.meta.env.DEV`.
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
   Adjustments,
@@ -100,7 +101,16 @@ export function installMockBackend() {
     await new Promise((r) => setTimeout(r, 15)); // pretend IPC latency
     switch (cmd) {
       case "plugin:dialog|open":
-        return FOLDER;
+        // Open Photo asks for a file, Open Folder for a directory.
+        return (a.options as { directory?: boolean } | undefined)?.directory === false
+          ? `${FOLDER}/L1000583.DNG`
+          : FOLDER;
+      case "photo_extensions":
+        return ["arw", "srf", "sr2", "cr3", "cr2", "crw", "nef", "nrw", "raf", "dng", "jpg", "jpeg", "png", "tif", "tiff"];
+      case "list_files":
+        return filesFor(a.paths as string[]);
+      case "story_arc_files":
+        return storyFor(filesFor(a.paths as string[]).map((f) => f.path));
       case "plugin:dialog|save":
         return (a.options as { defaultPath?: string } | undefined)?.defaultPath ?? `${FOLDER}/export.tif`;
       case "export_image":
@@ -226,7 +236,14 @@ export function installMockBackend() {
       default:
         throw new Error(`mock backend: unhandled command ${cmd}`);
     }
-  });
+  }, { shouldMockEvents: true });
+  // Dev only: simulate files dropped on the window, e.g.
+  // __epikosDrop(["/mock/Sydney shoot/L1000583.DNG", "/tmp/notes.txt"]).
+  (globalThis as { __epikosDrop?: (paths: string[]) => Promise<void> }).__epikosDrop = async (paths) => {
+    await emit("tauri://drag-enter", { paths, position: { x: 400, y: 300 } });
+    await new Promise((r) => setTimeout(r, 400));
+    await emit("tauri://drag-drop", { paths, position: { x: 400, y: 300 } });
+  };
 }
 
 function info(path: string): ImageInfo {
@@ -467,6 +484,27 @@ function analysis(path: string): SceneAnalysis {
     limits: [],
     analysisMs: 3100,
   };
+}
+
+/** The mock's photos among `paths` (a folder path selects all of them). */
+function filesFor(paths: string[]): FileEntry[] {
+  if (paths.includes(FOLDER)) return FILES.map((f) => ({ ...f, hasEdits: f.hasEdits || saved.has(f.path) }));
+  return FILES.filter((f) => paths.includes(f.path)).map((f) => ({ ...f, hasEdits: f.hasEdits || saved.has(f.path) }));
+}
+
+/** The folder's story arc, restricted to `paths`. */
+function storyFor(paths: string[]): StoryArc {
+  const all = story();
+  const groups = all.groups
+    .map((g) => ({ ...g, frames: g.frames.filter((p) => paths.includes(p)) }))
+    .filter((g) => g.frames.length > 0)
+    .map((g, id) => ({
+      ...g,
+      id,
+      label: g.label.replace(/\d+ photos?$/, `${g.frames.length} photo${g.frames.length === 1 ? "" : "s"}`),
+      hero: g.frames.includes(g.hero) ? g.hero : g.frames[0],
+    }));
+  return { ...all, groups, frames: all.frames.filter((f) => paths.includes(f.path)) };
 }
 
 function story(): StoryArc {

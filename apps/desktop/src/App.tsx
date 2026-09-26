@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { inTauri, listFolder, openImage, pickFolder, saveDocument, storyArc } from "./api";
+import {
+  inTauri,
+  listFiles,
+  listFolder,
+  onFileDrag,
+  openImage,
+  pickFolder,
+  pickPhoto,
+  saveDocument,
+  storyArc,
+  storyArcFiles,
+} from "./api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ExportDialog } from "./components/ExportDialog";
 import { captureSummary } from "./format";
@@ -29,6 +40,12 @@ import {
 const AUTOSAVE_MS = 600;
 const MAX_PREVIEW_SIDE = 4096;
 
+/** What the filmstrip shows: a folder, or photos opened one by one (Open Photo, a drop). */
+type Source = { kind: "folder"; dir: string } | { kind: "files"; paths: string[] };
+
+const listSource = (s: Source) => (s.kind === "folder" ? listFolder(s.dir) : listFiles(s.paths));
+const storySource = (s: Source) => (s.kind === "folder" ? storyArc(s.dir) : storyArcFiles(s.paths));
+
 type SaveStatus =
   | { kind: "idle" }
   | { kind: "unsaved" }
@@ -37,10 +54,18 @@ type SaveStatus =
   | { kind: "error"; message: string };
 
 export default function App() {
-  const [folder, setFolder] = useState<string | null>(null);
+  const [source, setSource] = useState<Source | null>(null);
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [story, setStory] = useState<StoryArc | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
+  /** Files are being dragged over the window. */
+  const [dragging, setDragging] = useState(false);
+  // An open failure over a running session is a passing notice, not a state.
+  useEffect(() => {
+    if (!source || !folderError) return;
+    const t = window.setTimeout(() => setFolderError(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [source, folderError]);
   const [selected, setSelected] = useState<string | null>(null);
   const [info, setInfo] = useState<ImageInfo | null>(null);
   const [loading, setLoading] = useState(false);
@@ -241,30 +266,72 @@ export default function App() {
   );
 
   const folderToken = useRef(0);
+  /** Open a folder or a set of photos as the session; `first` is selected if listed. */
+  const openSource = useCallback(
+    async (next: Source, first?: string) => {
+      await flushSave();
+      setFolderError(null);
+      try {
+        const entries = await listSource(next);
+        if (entries.length === 0 && next.kind === "files") {
+          setFolderError(
+            "None of those files is a photo EPIKOS RAW can open (RAW, DNG, JPEG, PNG or TIFF).",
+          );
+          return;
+        }
+        const token = ++folderToken.current;
+        setSource(next);
+        setFiles(entries);
+        setStory(null);
+        setInfo(null);
+        setSelected(null);
+        const pick = entries.find((e) => e.path === first) ?? entries[0];
+        if (pick) void select(pick.path);
+        // Story-arc grouping reads only previews and EXIF, so it's quick; the strip
+        // regroups when it lands. A failure just leaves the plain strip.
+        storySource(next).then(
+          (arc) => token === folderToken.current && setStory(arc),
+          (e) => console.warn("story arc:", e),
+        );
+      } catch (e) {
+        setFolderError(String(e));
+      }
+    },
+    [flushSave, select],
+  );
+
   const chooseFolder = useCallback(async () => {
     const dir = await pickFolder();
-    if (!dir) return;
-    await flushSave();
-    setFolderError(null);
-    try {
-      const entries = await listFolder(dir);
-      const token = ++folderToken.current;
-      setFolder(dir);
-      setFiles(entries);
-      setStory(null);
-      setInfo(null);
-      setSelected(null);
-      if (entries.length > 0) void select(entries[0].path);
-      // Story-arc grouping reads only previews and EXIF, so it's quick; the strip
-      // regroups when it lands. A failure just leaves the plain strip.
-      storyArc(dir).then(
-        (arc) => token === folderToken.current && setStory(arc),
-        (e) => console.warn("story arc:", e),
-      );
-    } catch (e) {
-      setFolderError(String(e));
-    }
-  }, [flushSave, select]);
+    if (dir) await openSource({ kind: "folder", dir });
+  }, [openSource]);
+
+  const choosePhoto = useCallback(async () => {
+    const path = await pickPhoto();
+    if (path) await openSource({ kind: "files", paths: [path] }, path);
+  }, [openSource]);
+
+  // Photos (or folders) dropped anywhere on the window open as a session; unsupported
+  // files among them are skipped.
+  useEffect(() => {
+    if (!inTauri) return;
+    let unlisten: (() => void) | undefined;
+    let alive = true;
+    onFileDrag((e) => {
+      if (e.type === "over") setDragging(true);
+      else if (e.type === "leave") setDragging(false);
+      else {
+        setDragging(false);
+        if (e.paths.length > 0) void openSource({ kind: "files", paths: e.paths }, e.paths[0]);
+      }
+    }).then(
+      (u) => (alive ? (unlisten = u) : u()),
+      (err) => console.warn("drag and drop unavailable:", err),
+    );
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [openSource]);
 
   // Shooting order once the story arc is known (groups in time order), else name order.
   const ordered = useMemo(() => {
@@ -278,9 +345,9 @@ export default function App() {
   );
   // A sync or undo rewrote other photos' sidecars: refresh their edit dots.
   const refreshFiles = useCallback(() => {
-    if (!folder) return;
-    listFolder(folder).then(setFiles, (e) => console.warn("refresh folder:", e));
-  }, [folder]);
+    if (!source) return;
+    listSource(source).then(setFiles, (e) => console.warn("refresh folder:", e));
+  }, [source]);
 
   const step = useCallback(
     (delta: number) => {
@@ -325,7 +392,8 @@ export default function App() {
         promptRef.current?.select();
       } else if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
-        void chooseFolder();
+        if (e.shiftKey) void choosePhoto();
+        else void chooseFolder();
       } else if (!inField && (e.key === "Backspace" || e.key === "Delete") && selectedLight !== null) {
         e.preventDefault();
         const i = selectedLight;
@@ -351,7 +419,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [history.undo, history.redo, history.commit, chooseFolder, step, exportOpen, info, selectedLight]);
+  }, [history.undo, history.redo, history.commit, chooseFolder, choosePhoto, step, exportOpen, info, selectedLight]);
 
   const onResize = useCallback((w: number, h: number) => setViewSize({ w, h }), []);
 
@@ -367,13 +435,16 @@ export default function App() {
   }
 
   return (
-    <div className={`app${folder ? "" : " is-empty"}`}>
+    <div className={`app${source ? "" : " is-empty"}`}>
       <header className="topbar">
         <div className="brand">
           EPIKOS <span>RAW</span>
         </div>
         <button type="button" className="btn" onClick={() => void chooseFolder()} title="Open folder (⌘O)">
           Open folder…
+        </button>
+        <button type="button" className="btn" onClick={() => void choosePhoto()} title="Open photo (⇧⌘O)">
+          Open photo…
         </button>
         <div className="topbar-title">
           {info ? (
@@ -385,7 +456,7 @@ export default function App() {
               {captureSummary(info.capture) && <span className="capture">{captureSummary(info.capture)}</span>}
             </>
           ) : (
-            folder && <span>{folder}</span>
+            source && <span>{sourceLabel(source, files.length)}</span>
           )}
         </div>
         <div className="topbar-actions">
@@ -425,7 +496,7 @@ export default function App() {
         </ErrorBoundary>
       )}
 
-      {folder ? (
+      {source ? (
         <>
           <main className="stage">
             {info && (
@@ -434,7 +505,7 @@ export default function App() {
               </ErrorBoundary>
             )}
             {files.length === 0 ? (
-              <div className="viewer-status">No RAW, DNG, JPEG or PNG files in this folder.</div>
+              <div className="viewer-status">No RAW, DNG, JPEG, PNG or TIFF files in this folder.</div>
             ) : (
               <ErrorBoundary area="the viewer">
                 <Viewer
@@ -513,18 +584,46 @@ export default function App() {
           <h1>
             EPIKOS <span>RAW</span>
           </h1>
-          <p>Open a folder of RAW, DNG, JPEG or PNG files to begin.</p>
-          <button type="button" className="btn primary" onClick={() => void chooseFolder()}>
-            Open folder…
-          </button>
+          <p>Open a folder or a photo to begin, or drop photos anywhere on this window.</p>
+          <div className="welcome-actions">
+            <button type="button" className="btn primary" onClick={() => void chooseFolder()}>
+              Open folder…
+            </button>
+            <button type="button" className="btn primary-outline" onClick={() => void choosePhoto()}>
+              Open photo…
+            </button>
+          </div>
           {folderError && <p className="error">{folderError}</p>}
           <p className="hint">
-            Sony ARW · Canon CR3/CR2 · Nikon NEF · Fujifilm RAF · Leica DNG · Apple ProRAW · JPEG · PNG
+            Sony ARW · Canon CR3/CR2 · Nikon NEF · Fujifilm RAF · Leica DNG · Apple ProRAW · JPEG · PNG · TIFF
           </p>
+        </div>
+      )}
+      {source && folderError && (
+        <div className="notice" role="alert">
+          <span>{folderError}</span>
+          <button type="button" className="btn icon" onClick={() => setFolderError(null)} aria-label="Dismiss">
+            ×
+          </button>
+        </div>
+      )}
+      {dragging && (
+        <div className="drop-overlay" aria-hidden>
+          <div>
+            <strong>Drop to open</strong>
+            <span>RAW, DNG, JPEG, PNG or TIFF (photos or folders)</span>
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+/** Title-bar text for the session: the folder, the photo, or how many were opened. */
+function sourceLabel(s: Source, count: number) {
+  if (s.kind === "folder") return s.dir;
+  if (s.paths.length === 1) return s.paths[0];
+  return `${count} photo${count === 1 ? "" : "s"} opened`;
 }
 
 function SaveBadge({ status }: { status: SaveStatus }) {

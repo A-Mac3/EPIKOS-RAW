@@ -1,4 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   Adjustments,
@@ -30,6 +32,33 @@ export async function pickFolder(): Promise<string | null> {
   return typeof dir === "string" ? dir : null;
 }
 
+/** Native file picker for one photo (RAW, DNG, JPEG, PNG, TIFF); `null` if cancelled. */
+export async function pickPhoto(): Promise<string | null> {
+  const exts = await invoke<string[]>("photo_extensions");
+  const file = await open({
+    directory: false,
+    multiple: false,
+    title: "Open photo",
+    // Both cases: some pickers match extensions case-sensitively (IMG_0001.CR3).
+    filters: [{ name: "Photos", extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
+  });
+  return typeof file === "string" ? file : null;
+}
+
+/** Files dragged over the window: `over` while they hover (with the paths on entry),
+ * `drop` with the paths, `leave` when the drag ends elsewhere. */
+export type FileDrag = { type: "over"; paths?: string[] } | { type: "drop"; paths: string[] } | { type: "leave" };
+
+/** Tauri 2's native drag-and-drop of files onto the window. */
+export function onFileDrag(handler: (e: FileDrag) => void): Promise<UnlistenFn> {
+  return getCurrentWebview().onDragDropEvent(({ payload: p }) => {
+    if (p.type === "enter") handler({ type: "over", paths: p.paths });
+    else if (p.type === "over") handler({ type: "over" });
+    else if (p.type === "drop") handler({ type: "drop", paths: p.paths });
+    else handler({ type: "leave" });
+  });
+}
+
 const SAVE_FILTER: Record<ExportFormat, { title: string; name: string; extensions: string[] }> = {
   tiff: { title: "Export 16-bit TIFF", name: "TIFF image", extensions: ["tif", "tiff"] },
   psd: { title: "Export layered PSD", name: "Photoshop document", extensions: ["psd"] },
@@ -51,6 +80,12 @@ export const exportImage = (
 ) => invoke<ExportReport>("export_image", { path, adjustments, dest, options });
 
 export const listFolder = (dir: string) => invoke<FileEntry[]>("list_folder", { dir });
+
+/** A session of individual photos: the supported ones among `paths` (folders expanded). */
+export const listFiles = (paths: string[]) => invoke<FileEntry[]>("list_files", { paths });
+
+/** Story-arc groups for a session of individual photos. */
+export const storyArcFiles = (paths: string[]) => invoke<StoryArc>("story_arc_files", { paths });
 
 export const openImage = (path: string) => invoke<ImageInfo>("open_image", { path });
 

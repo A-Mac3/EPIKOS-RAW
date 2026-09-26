@@ -1617,3 +1617,64 @@ input[type="range"]::-moz-range-thumb {
 .step-body .field-row select {
   flex: 1;
 }
+
+/* ---- Opening photos: drop overlay, notice ---------------------------------------- */
+
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* The secondary welcome action matches the primary one's size. */
+.welcome-actions .btn.primary-outline {
+  height: 36px;
+  padding: 0 20px;
+  font-weight: 600;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgb(10 10 10 / 55%);
+  pointer-events: none;
+}
+
+.drop-overlay > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 44px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: rgb(35 35 35 / 92%);
+}
+
+.drop-overlay strong {
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.drop-overlay span {
+  color: var(--text-dim);
+}
+
+.notice {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, 90vw);
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 40%);
+  transform: translateX(-50%);
+}

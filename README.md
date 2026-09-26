@@ -1,13 +1,16 @@
 # EPIKOS RAW
 
-Cross-platform RAW/DNG editor (JPEG and PNG too). Product spec: [PRD.md](PRD.md).
+Cross-platform RAW/DNG editor (JPEG, PNG and TIFF too). Product spec: [PRD.md](PRD.md).
+
+Open a folder (⌘O), a single photo (⇧⌘O), or drop photos or folders anywhere on the
+window; photos opened one by one get the same filmstrip, masks and exports as a folder.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `crates/epikos-core` | 32-bit float image types, camera formats, sensor profiles, lens-profile models |
-| `crates/epikos-decode` | RAW/DNG decode via `rawler` (plus the DNG's own lens corrections from `OpcodeList3`), JPEG/PNG decode, crop, embedded thumbnails |
+| `crates/epikos-decode` | RAW/DNG decode via `rawler` (plus the DNG's own lens corrections from `OpcodeList3`), JPEG/PNG/TIFF decode (TIFFs with extra mask channels included), crop, embedded thumbnails |
 | `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, lens profiles and optics, colour, exposure, Step 2 tone and auto-tone, straighten / vertical perspective and auto-upright, Step 3 local mask adjustments, Step 4 texture / retouching, Step 5 HSL, colour wheels, foliage shift and background re-colouration, Step 6 glow / depth fog / light shafts, Step 7 parametric and point curves, split toning, Step 8 grain and vignette, 3D virtual lights, parametric styles and style fusion (`src/look`), preview binning, display transform |
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
 | `crates/epikos-masks` | On-device models via ONNX Runtime (CPU): IS-Net subject and skyseg sky masks, BiSeNet face parsing for eyes and hair (Step 3), Depth Anything V2 Small depth (Steps 3 and 6) |
