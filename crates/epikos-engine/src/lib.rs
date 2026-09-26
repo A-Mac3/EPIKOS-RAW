@@ -26,6 +26,7 @@ use serde::Serialize;
 mod analysis;
 mod dng;
 mod export;
+mod guidance;
 mod lensdb;
 mod luts;
 mod mentor;
@@ -132,6 +133,9 @@ struct Loaded {
     depth: Mutex<Option<(String, Arc<DepthMap>)>>,
     /// The lens profile: the camera's (DNG) or the database's, resolved once.
     lens: OnceLock<Option<Arc<LensProfile>>>,
+    /// Scene analyses of the photo as shot, keyed by the geometry they were made for:
+    /// the mentor re-reads the edit often, the scene never changes.
+    analyses: Mutex<Vec<(String, SceneAnalysis)>>,
 }
 
 impl Loaded {
@@ -527,15 +531,35 @@ impl Engine {
         Ok(interpret_look(prompt, adjustments, subject))
     }
 
-    /// PRD Section 2.1: genre, lighting, skin and palette of one photo, measured on its
-    /// Steps 1–2 develop with the masks and depth map when their models are installed.
+    /// PRD Section 2.1: genre, lighting, skin, palette and histogram of one photo as
+    /// shot, measured on its develop with the masks and depth map when their models are
+    /// installed.
     pub fn analyze(&self, path: &Path, adjustments: &Adjustments) -> Result<SceneAnalysis> {
         let started = std::time::Instant::now();
         let loaded = self.load(path)?;
+        // The scene as shot: edits (white balance, exposure, looks) don't change what
+        // was photographed. Lens corrections and straightening stay (they only fix the
+        // camera's geometry, and the masks are cached for them).
+        let adjustments = &Adjustments {
+            lens: adjustments.lens.clone(),
+            demosaic: adjustments.demosaic,
+            ..Adjustments::default()
+        };
+        let key = format!("{:?}|{:?}", adjustments.lens, adjustments.demosaic);
+        let cached = |analyses: &[(String, SceneAnalysis)]| analyses.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone());
+        if let Some(a) = cached(&loaded.analyses.lock().unwrap_or_else(PoisonError::into_inner)) {
+            return Ok(a);
+        }
         let rgb = loaded.develop_scene(768, adjustments)?;
         let lab = oklab_planes(&rgb);
-        let skin = skin_likelihood(&rgb);
         let (w, h) = (rgb.width, rgb.height);
+        // Skin of every tone: the colour model plus the Step 3 Skin mask (the subject's
+        // skin of any Monk tone, face-parsed skin).
+        let mut skin = skin_likelihood(&rgb);
+        if let Ok(Some(m)) = self.mask_plane(&loaded, adjustments, MaskTarget::Skin) {
+            let m = analysis::fit(&m.data, m.width, m.height, w, h);
+            skin.iter_mut().zip(m).for_each(|(s, m)| *s = s.max(m));
+        }
         let mask = |target: MaskTarget| {
             self.mask_plane(&loaded, adjustments, target)
                 .ok()
@@ -557,15 +581,14 @@ impl Engine {
             .then(|| temperature_for_gains(&p.xyz_to_cam, p.as_shot_wb))
             .flatten()
             .map(|(t, _)| t);
-        Ok(analysis::analyze(
-            &rgb,
-            &lab,
-            &skin,
-            &planes,
-            &loaded.raw.metadata,
-            kelvin,
-            started,
-        ))
+        let result = analysis::analyze(&rgb, &lab, &skin, &planes, &loaded.raw.metadata, kelvin, started);
+        let mut analyses = loaded.analyses.lock().unwrap_or_else(PoisonError::into_inner);
+        analyses.retain(|(k, _)| *k != key);
+        analyses.push((key, result.clone()));
+        if analyses.len() > 4 {
+            analyses.remove(0);
+        }
+        Ok(result)
     }
 
     /// PRD Section 2.2: split the RAW files in `dir` into story-arc groups with a hero
@@ -686,12 +709,6 @@ impl Engine {
         })
     }
 
-    /// Skin likelihood of the scene (Steps 1–2) at mask resolution.
-    fn skin_plane(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<(u32, u32, Vec<f32>)> {
-        let rgb = loaded.develop_scene(MASK_INPUT_SIDE, adjustments)?;
-        Ok((rgb.width, rgb.height, skin_likelihood(&rgb)))
-    }
-
     /// JPEG thumbnail: the camera's embedded preview when available, otherwise a
     /// default EPIKOS develop.
     pub fn thumbnail_jpeg(&self, path: &Path, max_side: u32) -> Result<Vec<u8>> {
@@ -722,6 +739,7 @@ impl Engine {
             planes: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
             lens: OnceLock::new(),
+            analyses: Mutex::new(Vec::new()),
         });
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         cache.retain(|(p, _)| p != path);
@@ -812,8 +830,11 @@ fn source_ref(raw: &DecodedRaw) -> SourceRef {
     SourceRef {
         path: raw.source_path.clone(),
         sha256: raw.source_sha256.clone(),
+/// The scene without the look, and without the crop: the models (masks, depth) and
+/// the scene readings work on the whole upright frame.
         format: raw.profile.format.label().to_string(),
         make: raw.profile.clean_make.clone(),
+        crop: Default::default(),
         model: raw.profile.clean_model.clone(),
     }
 }
@@ -910,6 +931,7 @@ mod tests {
             planes: Mutex::new(Vec::new()),
             depth: Mutex::new(None),
             lens: OnceLock::new(),
+            analyses: Mutex::new(Vec::new()),
         }
     }
 
@@ -1287,6 +1309,27 @@ mod tests {
         let loaded = synthetic_loaded(64, 48);
         let options = ExportOptions { long_edge: Some(32), ..ExportOptions::default() };
         let report =
+    #[test]
+    fn export_writes_jpeg_and_16_bit_png_with_icc() {
+        use image::ImageDecoder;
+        let dir = temp_dir("export-share");
+        let loaded = synthetic_loaded(64, 48);
+        for (format, name) in [(ExportFormat::Jpeg, "out.jpg"), (ExportFormat::Png, "out.png")] {
+            let dest = dir.join(name);
+            let options = ExportOptions { format, ..ExportOptions::default() };
+            let report =
+                export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
+            assert_eq!(report.format, format);
+            let reader = image::ImageReader::open(&dest).unwrap().with_guessed_format().unwrap();
+            let mut dec = reader.into_decoder().unwrap();
+            assert_eq!(dec.dimensions(), (64, 48));
+            let bits16 = dec.color_type() == image::ColorType::Rgb16;
+            assert_eq!(bits16, format == ExportFormat::Png, "{format:?}");
+            assert_eq!(dec.icc_profile().unwrap().unwrap(), OutputSpace::Srgb.icc_profile(), "{format:?}");
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
             export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (32, 24));
         fs::remove_dir_all(&dir).unwrap();

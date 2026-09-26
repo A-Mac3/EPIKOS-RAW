@@ -21,11 +21,26 @@ pub struct SceneAnalysis {
     /// Present when enough skin is detected.
     pub skin: Option<SkinReport>,
     pub composition: Composition,
-    /// Dominant colours, most prominent first.
+    /// The five dominant colours of the photo as shot (before any edit), most
+    /// prominent first.
     pub palette: Vec<Swatch>,
+    /// Luminance distribution of the photo as shot.
+    pub luminance: Luminance,
     /// What the analysis couldn't measure (e.g. a model isn't installed).
     pub limits: Vec<String>,
     pub analysis_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Luminance {
+    /// 64-bin histogram of display luminance (sRGB-encoded, 0 = black, 63 = white),
+    /// each bin a share of the frame.
+    pub histogram: Vec<f32>,
+    /// Mean display luminance, 0–1.
+    pub mean: f32,
+    /// Median display luminance, 0–1.
+    pub median: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,6 +58,12 @@ pub struct GenreScore {
 pub struct Lighting {
     /// The camera's white-balance estimate of the light, in kelvin.
     pub color_temperature: Option<f32>,
+    /// The ambient light's colour temperature measured from the pixels, in kelvin: the
+    /// camera's estimate corrected by the cast left in near-neutral surfaces (for a
+    /// JPEG/PNG/TIFF, which has no estimate, the cast alone).
+    pub ambient_temperature: f32,
+    /// "candle-light", "tungsten", "golden", "warm daylight", "daylight", "shade" or "blue".
+    pub ambient_label: &'static str,
     /// Scene range from the 0.5th to the 99.5th luminance percentile, in stops.
     pub dynamic_range_ev: f32,
     /// % of the frame brighter than display white.
@@ -299,9 +320,13 @@ pub(crate) fn analyze(
     let stars = count_stars(&y, sky, w, h);
 
     let palette = dominant_colors(lab);
+    let luminance = luminance_stats(&y);
+    let ambient_temperature = ambient_temperature(rgb, lab, skin, sky, as_shot_kelvin);
 
     let lighting = Lighting {
         color_temperature: as_shot_kelvin,
+        ambient_temperature,
+        ambient_label: ambient_label(ambient_temperature),
         dynamic_range_ev,
         highlights_clipped: 100.0 * over as f32 / n as f32,
         shadows_crushed: 100.0 * crushed as f32 / n as f32,
@@ -347,8 +372,104 @@ pub(crate) fn analyze(
         skin: skin_report,
         composition,
         palette,
+        luminance,
         limits,
         analysis_ms: started.elapsed().as_millis() as u64,
+    }
+}
+
+/// Display-encoded (sRGB curve) luminance: what the histogram of an editor shows.
+fn display_y(y: f32) -> f32 {
+    let v = y.clamp(0.0, 1.0);
+    if v <= 0.003_130_8 {
+        12.92 * v
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn luminance_stats(y: &[f32]) -> Luminance {
+    const BINS: usize = 64;
+    let n = y.len().max(1);
+    let mut histogram = vec![0.0f32; BINS];
+    let mut sum = 0.0f64;
+    let mut d: Vec<f32> = y.iter().map(|&v| display_y(v)).collect();
+    for &v in &d {
+        histogram[((v * BINS as f32) as usize).min(BINS - 1)] += 1.0;
+        sum += v as f64;
+    }
+    histogram.iter_mut().for_each(|b| *b /= n as f32);
+    Luminance {
+        histogram,
+        mean: (sum / n as f64) as f32,
+        median: percentile(&mut d, 0.5),
+    }
+}
+
+/// Correlated colour temperature of a linear Rec.2020 colour (McCamy's approximation
+/// on its CIE xy chromaticity).
+pub(crate) fn cct_of_rec2020([r, g, b]: [f32; 3]) -> f32 {
+    let x = 0.636_958 * r + 0.144_617 * g + 0.168_881 * b;
+    let y = 0.262_700 * r + 0.677_998 * g + 0.059_302 * b;
+    let z = 0.028_073 * g + 1.060_985 * b;
+    let sum = (x + y + z).max(1e-9);
+    let (cx, cy) = (x / sum, y / sum);
+    let nn = (cx - 0.3320) / (0.1858 - cy);
+    449.0 * nn.powi(3) + 3525.0 * nn.powi(2) + 6823.3 * nn + 5520.33
+}
+
+/// The light's colour temperature, measured. The developed image is white-balanced to
+/// the camera's estimate (D65 white on screen); whatever cast is left in surfaces that
+/// are nearly neutral (not skin, sky or clipped: those have their own colour) is the light the estimate missed, so it
+/// shifts the estimate in mireds. With too few such surfaces, the whole frame's mean
+/// (grey world) stands in.
+fn ambient_temperature(
+    rgb: &ImageRgbF32,
+    lab: &ImageRgbF32,
+    skin: &[f32],
+    sky: Option<&[f32]>,
+    as_shot: Option<f32>,
+) -> f32 {
+    let n = rgb.len();
+    let pick = |neutral_only: bool| {
+        let (mut sum, mut k) = ([0.0f64; 3], 0usize);
+        for i in 0..n {
+            let (r, g, b) = (rgb.r[i], rgb.g[i], rgb.b[i]);
+            if r.max(g).max(b) >= 1.0 || r.min(g).min(b) <= 0.0 || skin[i] > 0.5 || sky.is_some_and(|s| s[i] > 0.5) {
+                continue;
+            }
+            let l = lab.r[i];
+            if neutral_only && !((0.3..0.95).contains(&l) && lab.g[i].hypot(lab.b[i]) < 0.06) {
+                continue;
+            }
+            sum[0] += r as f64;
+            sum[1] += g as f64;
+            sum[2] += b as f64;
+            k += 1;
+        }
+        (k, sum.map(|v| v as f32))
+    };
+    let (k, mean) = match pick(true) {
+        (k, m) if k >= n / 50 => (k, m),
+        _ => pick(false),
+    };
+    const D65: f32 = 6504.0;
+    let residual = if k == 0 { D65 } else { cct_of_rec2020(mean).clamp(1500.0, 20000.0) };
+    let mired = |t: f32| 1.0e6 / t;
+    let base = as_shot.unwrap_or(D65);
+    let t = 1.0e6 / (mired(base) + mired(residual) - mired(D65)).max(1.0e6 / 25000.0);
+    t.clamp(1500.0, 20000.0)
+}
+
+fn ambient_label(k: f32) -> &'static str {
+    match k {
+        k if k < 2300.0 => "candle-light",
+        k if k < 3300.0 => "tungsten",
+        k if k < 4300.0 => "golden",
+        k if k < 5300.0 => "warm daylight",
+        k if k < 6500.0 => "daylight",
+        k if k < 8500.0 => "shade",
+        _ => "blue",
     }
 }
 
@@ -934,5 +1055,29 @@ mod tests {
             ..base
         };
         assert_eq!(score_genres(&bird).first().map(|x| x.id), Some("wildlife"));
+    }
+
+    #[test]
+    fn colour_temperature_is_measured_from_the_pixels() {
+        use epikos_core::ColorSpace;
+        // D65 white reads as ~6500 K.
+        assert!((cct_of_rec2020([1.0, 1.0, 1.0]) - 6504.0).abs() < 150.0);
+        // A frame of grey surfaces under warm light (JPEG: no camera estimate) reads warm;
+        // the same cast on top of a 5000 K camera estimate reads warmer still.
+        let mut img = ImageRgbF32::new(16, 16, ColorSpace::LinearRec2020);
+        for i in 0..img.len() {
+            (img.r[i], img.g[i], img.b[i]) = (0.30, 0.25, 0.17);
+        }
+        let lab = epikos_pipeline::oklab_planes(&img);
+        let skin = vec![0.0; img.len()];
+        let warm = ambient_temperature(&img, &lab, &skin, None, None);
+        assert!((2500.0..5300.0).contains(&warm), "{warm}");
+        let warmer = ambient_temperature(&img, &lab, &skin, None, Some(5000.0));
+        assert!(warmer < warm, "{warmer} vs {warm}");
+        assert!(["tungsten", "golden", "warm daylight"].contains(&ambient_label(warm)));
+
+        let l = luminance_stats(&vec![0.18; 100]);
+        assert!((l.histogram.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        assert!((l.mean - 0.46).abs() < 0.01, "{}", l.mean);
     }
 }

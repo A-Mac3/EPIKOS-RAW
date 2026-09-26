@@ -3,18 +3,22 @@
 //!
 //! Everything here is measured, not generated: the scene analysis (genre, light, skin,
 //! composition), the scene's tonal statistics and colour cast, the auto-tone and
-//! auto-upright suggestions, and which lens profile and masks are available. Each
-//! insight says what was seen, why it matters and what to do.
+//! auto-upright suggestions, the skin's colour in the current edit, subject /
+//! background separation and composition (see [`crate::guidance`]), and which lens
+//! profile and masks are available. Each insight says what was seen, why it matters and
+//! what to do. The reading is cheap to repeat (the scene analysis and masks are
+//! cached), so the app re-reads it as the edit changes.
 
 use std::path::Path;
 use std::time::Instant;
 
 use epikos_core::{ImageRgbF32, Result};
 use epikos_pipeline::{develop_rgb_with, oklab_planes, skin_likelihood, to_display_srgb};
-use epikos_sidecar::{Adjustments, LocalAdjustment, MaskTarget, WbMode};
+use epikos_sidecar::{Adjustments, Crop, LocalAdjustment, MaskTarget, WbMode};
 use serde::Serialize;
 
-use crate::analysis::SceneAnalysis;
+use crate::analysis::{self, SceneAnalysis};
+use crate::guidance::{self, CropAdvice, SkinFix, SkinProblem};
 use crate::{scene_only, Engine};
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,6 +31,8 @@ pub struct MentorReport {
     pub recommended: Adjustments,
     /// What the starting point changes, in words.
     pub changes: Vec<String>,
+    /// A composition crop and straighten, offered separately from the starting point.
+    pub crop: Option<CropAdvice>,
     pub analysis_ms: u64,
 }
 
@@ -136,17 +142,36 @@ impl Engine {
         let scene = self.analyze(path, adjustments)?;
         let neutral = Adjustments { exposure: 0.0, tone: Default::default(), ..scene_only(adjustments) };
         let mut s = stats(&loaded.develop_scene(512, &neutral)?);
-        // Colour is judged on what's on screen (the current look), tone on the scene.
+        // Colour is judged on what's on screen (the current look), tone on the scene. The
+        // whole frame, uncropped: the masks and the composition advice are made for it.
+        let whole = Adjustments { crop: Crop::default(), ..adjustments.clone() };
         let base = loaded.base(512, 512);
-        let prepared = self.prepare(&loaded, adjustments)?;
+        let prepared = self.prepare(&loaded, &whole)?;
         let shown = prepared
-            .with_inputs(|inputs| develop_rgb_with((*base).clone(), &loaded.raw.profile, adjustments, inputs))?;
+            .with_inputs(|inputs| develop_rgb_with((*base).clone(), &loaded.raw.profile, &whole, inputs))?;
         s.cast = stats(&shown).cast;
         let (auto_ev, auto_tone) = self.auto_tone(path, adjustments)?;
         let (rotation, vertical) = self.auto_upright(path, adjustments)?;
         let targets = self.mask_targets();
         let available = |t: MaskTarget| targets.iter().any(|x| x.target == t && x.available);
         let has_profile = loaded.lens_profile().is_some();
+
+        // Regions of the current edit, at its size.
+        let (w, h) = (shown.width, shown.height);
+        let mask = |target: MaskTarget| {
+            self.mask_plane(&loaded, adjustments, target)
+                .ok()
+                .flatten()
+                .map(|m| analysis::fit(&m.data, m.width, m.height, w, h))
+        };
+        let (skin, subject, sky) = (mask(MaskTarget::Skin), mask(MaskTarget::Subject), mask(MaskTarget::Sky));
+        let current_skin = adjustments.local.iter().find(|l| l.mask == MaskTarget::Skin);
+        let skin_fix = skin.as_deref().and_then(|m| guidance::skin_balance(&shown, m, current_skin));
+        let separation = subject.as_deref().and_then(|m| guidance::inside_outside_ev(&shown, m));
+        let background_warmth = subject.as_deref().map(|m| guidance::outside_warmth(&shown, m));
+        let straighten = if rotation.abs() >= 0.3 { rotation } else { adjustments.lens.rotation };
+        let crop = guidance::suggest_crop(subject.as_deref(), sky.as_deref(), w as usize, h as usize, straighten);
+
         Ok(advise(&scene, &s, adjustments, AdviceInputs {
             auto_ev,
             auto_tone,
@@ -156,6 +181,10 @@ impl Engine {
             bitmap: loaded.raw.profile.format.is_bitmap(),
             eyes: available(MaskTarget::Eyes),
             subject: available(MaskTarget::Subject),
+            skin_fix,
+            separation,
+            background_warmth,
+            crop,
             started,
         }))
     }
@@ -164,9 +193,11 @@ impl Engine {
     pub fn critique(&self, path: &Path, adjustments: &Adjustments) -> Result<Vec<Feedback>> {
         let loaded = self.load(path)?;
         let base = loaded.base(512, 512);
-        let prepared = self.prepare(&loaded, adjustments)?;
+        // Compared with the original over the same (whole) frame.
+        let whole = Adjustments { crop: Crop::default(), ..adjustments.clone() };
+        let prepared = self.prepare(&loaded, &whole)?;
         let edited = prepared
-            .with_inputs(|inputs| develop_rgb_with((*base).clone(), &loaded.raw.profile, adjustments, inputs))?;
+            .with_inputs(|inputs| develop_rgb_with((*base).clone(), &loaded.raw.profile, &whole, inputs))?;
         let now = stats(&edited);
         let before = stats(&loaded.develop_scene(512, &Adjustments::default())?);
         Ok(judge(&before, &now, adjustments))
@@ -182,7 +213,26 @@ struct AdviceInputs {
     bitmap: bool,
     eyes: bool,
     subject: bool,
+    /// Skin outside the natural range for its depth, and the correction.
+    skin_fix: Option<SkinFix>,
+    /// Mean stops on the subject and off it, in the current edit.
+    separation: Option<(f32, f32)>,
+    /// Oklab b of the background (warm +, cool −).
+    background_warmth: Option<f32>,
+    crop: Option<CropAdvice>,
     started: Instant,
+}
+
+/// Set (or add) the local adjustment on `mask` in `rec` with `f`.
+fn upsert_local(rec: &mut Adjustments, mask: MaskTarget, f: impl FnOnce(&mut LocalAdjustment)) {
+    match rec.local.iter_mut().find(|l| l.mask == mask) {
+        Some(l) => f(l),
+        None => {
+            let mut l = LocalAdjustment { mask, ..Default::default() };
+            f(&mut l);
+            rec.local.push(l);
+        }
+    }
 }
 
 fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInputs) -> MentorReport {
@@ -346,6 +396,101 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
         }
     }
 
+    // Skin balance for the skin's own depth: every tone is judged against its own
+    // natural range, never pushed towards another.
+    if let Some(fix) = a.skin_fix {
+        let deep = scene.skin.as_ref().is_some_and(|s| s.tone_depth >= 7.0);
+        let (observation, why) = match fix.problem {
+            SkinProblem::Exposure if fix.exposure > 0.0 => (
+                "Much of the skin is close to black, so its shape and texture are lost.".to_string(),
+                "Deep skin carries its detail in the shadows; lifting only the skin brings back that detail without greying it or lightening the rest of the frame.".to_string(),
+            ),
+            SkinProblem::Exposure => (
+                "Much of the skin is at or near clipping.".to_string(),
+                "Fair skin is the first thing to lose detail in bright light; pulling only the skin back keeps its gradation without darkening the scene.".to_string(),
+            ),
+            p => (
+                format!("Skin in the current edit reads {}.", p.words()),
+                if deep && p == SkinProblem::Ashy {
+                    "Deep skin turns grey under cool light or a cool grade; its richness is warmth and colour, not brightness, so the fix is colour on the skin alone.".into()
+                } else if p == SkinProblem::Orange || p == SkinProblem::Magenta {
+                    "Too much colour makes skin look sunburnt or made-up; calming it on the skin alone keeps the rest of the grade.".into()
+                } else {
+                    "A cast on skin reads as ill health or bad light; correcting it on the skin alone leaves the scene's mood intact.".into()
+                },
+            ),
+        };
+        let mut parts = Vec::new();
+        if fix.warmth != 0.0 || fix.tint != 0.0 {
+            parts.push(format!("warmth {:+.0}, tint {:+.0}", fix.warmth, fix.tint));
+        }
+        if fix.saturation != 0.0 {
+            parts.push(format!("saturation {:+.0}", fix.saturation));
+        }
+        if fix.exposure != 0.0 {
+            parts.push(format!("{:+.2} EV", fix.exposure));
+        }
+        insights.push(Insight {
+            topic: "Skin",
+            observation,
+            why,
+            how: format!("Step 3: local adjustment on Skin, {} (measured on this photo's skin).", parts.join(", ")),
+        });
+        upsert_local(&mut rec, MaskTarget::Skin, |l| {
+            if fix.warmth != 0.0 || fix.tint != 0.0 || fix.saturation != 0.0 {
+                (l.warmth, l.tint, l.saturation) = (fix.warmth, fix.tint, fix.saturation);
+            }
+            if fix.exposure != 0.0 {
+                l.exposure = fix.exposure;
+            }
+        });
+        changes.push(format!("Skin {}", parts.join(", ")));
+    }
+
+    // Subject and background separation.
+    let has_subject_local = rec.local.iter().any(|x| x.mask == MaskTarget::Subject);
+    if let (true, Some((on, off))) = (a.subject && !has_subject_local, a.separation) {
+        if on < off - 0.5 {
+            let lift = ((off - on) * 0.4).clamp(0.2, 0.6);
+            insights.push(Insight {
+                topic: "Subject",
+                observation: format!("The subject is {:.1} stops darker than its surroundings.", off - on),
+                why: "The eye goes to the brightest part of a picture first; a subject darker than the background competes with it.".into(),
+                how: format!("Step 3: local adjustment on Subject, about {lift:+.2} EV (rather than brightening everything)."),
+            });
+            upsert_local(&mut rec, MaskTarget::Subject, |l| l.exposure = (lift * 20.0).round() / 20.0);
+            changes.push(format!("Subject {lift:+.2} EV"));
+        }
+    }
+    if let (true, true, Some(warm)) = (a.subject, portrait, a.background_warmth) {
+        if warm > 0.02 && !rec.local.iter().any(|x| x.mask == MaskTarget::Background) {
+            insights.push(Insight {
+                topic: "Subject",
+                observation: "The background is warm, close to the skin's own colour.".into(),
+                why: "Skin separates best against cooler, quieter colour; a warm background blends the person into it.".into(),
+                how: "Step 3: local adjustment on Background, warmth about −20 and saturation −10.".into(),
+            });
+            upsert_local(&mut rec, MaskTarget::Background, |l| {
+                l.warmth = -20.0;
+                l.saturation = -10.0;
+            });
+            changes.push("Background cooler (warmth −20, saturation −10)".into());
+        }
+    }
+
+    // Composition.
+    if let Some(c) = &a.crop {
+        insights.push(Insight {
+            topic: "Framing",
+            observation: format!("A tighter crop {}.", c.reason),
+            why: "Placing the subject and the horizon on the thirds gives the picture direction and room; a centred subject and a horizon through the middle split it in two.".into(),
+            how: format!(
+                "Apply suggested crop below, or Step 1: Crop & straighten{}.",
+                if c.rotation.abs() >= 0.3 { format!(" at {:+.1}°", c.rotation) } else { String::new() }
+            ),
+        });
+    }
+
     // A style to start from, by genre.
     let style = match genre.map(|g| g.id) {
         Some("dark-melanin-fashion") => Some(("dark-melanin-glow", 70.0)),
@@ -385,6 +530,7 @@ fn advise(scene: &SceneAnalysis, s: &Stats, current: &Adjustments, a: AdviceInpu
         insights,
         recommended: rec,
         changes,
+        crop: a.crop.clone(),
         analysis_ms: a.started.elapsed().as_millis() as u64,
     }
 }
