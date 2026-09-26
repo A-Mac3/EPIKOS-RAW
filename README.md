@@ -79,20 +79,26 @@ command becomes an error message in the app instead of closing it.
 
 ## Standalone app
 
+For every Mac (Apple Silicon and Intel), as one universal app:
+
 ```bash
-scripts/fetch-models.sh                # the models are bundled into the app (~510 MB)
-cd apps/desktop && CI=true npm run tauri build
+scripts/fetch-models.sh                     # the models are bundled into the app (~510 MB)
+scripts/build-onnxruntime-universal.sh      # once: ONNX Runtime for arm64 + x86_64 (~15 min, ~1 GB)
+scripts/build-mac-app.sh
 ```
 
-This writes `target/release/bundle/macos/EPIKOS RAW.app` and
-`target/release/bundle/dmg/EPIKOS RAW_0.1.0_aarch64.dmg` (about 480 MB). The models, ONNX
-Runtime (linked statically) and the lens database are inside the app, so it works offline
-with nothing else installed.
+This writes `target/universal-apple-darwin/release/bundle/macos/EPIKOS RAW.app` and a DMG
+beside it in `bundle/dmg/`. The models, ONNX Runtime (linked statically) and the lens
+database are inside the app, so it works offline with nothing else installed. It needs
+macOS 13.3 or later.
 
+- `ort` only ships a prebuilt ONNX Runtime for Apple Silicon, hence the source build:
+  one build per architecture (ONNX Runtime's own two-architecture mode doesn't compile
+  in 1.28), merged with `lipo`, which `build-mac-app.sh` points `ORT_LIB_LOCATION` at.
+  The ONNX Runtime version must match the one `ort` expects (1.28.0 for ort 2.0.0-rc.13).
+- An Apple-Silicon-only build needs none of that: `cd apps/desktop && CI=true npm run tauri build`.
 - `CI=true` skips the Finder AppleScript that arranges the DMG window; without Automation
   access to Finder that step times out and the DMG isn't written.
-- Apple Silicon only: `ort` has no prebuilt ONNX Runtime for Intel Macs, so an Intel or
-  universal build needs ONNX Runtime compiled for `x86_64-apple-darwin` first.
 - Not signed or notarised: on another Mac, the first launch needs right-click → Open (or
   System Settings → Privacy & Security → Open Anyway).
 

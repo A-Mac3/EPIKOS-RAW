@@ -37,6 +37,9 @@
       "../../../models/*.onnx": "models/"
     },
     "category": "Photography",
-    "copyright": "EPIKOS. Lens data: Lensfun (CC BY-SA 3.0)."
+    "copyright": "EPIKOS. Lens data: Lensfun (CC BY-SA 3.0).",
+    "macOS": {
+      "minimumSystemVersion": "13.3"
+    }
   }
 }
