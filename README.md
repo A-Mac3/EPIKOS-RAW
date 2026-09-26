@@ -16,6 +16,14 @@ cooling, and a suggested crop and straighten) and **History** (every step, click
 or pinch over the image to zoom (10–500 % of the actual pixels); drag, or hold Space and
 drag, to pan. The Scene panel shows the photo's as-shot palette next to a live palette of
 the current edit, its luminance histogram and the light's measured colour temperature.
+**Learn Style from Photo** (Presets & Styles) measures a reference photo's look: black
+and white points and midtone curve, skin richness within the skin's own depth and its
+specular highlights, per-band colour, foliage and background saturation. The AI Mentor's
+starting point aims at the built-in Editorial profile (rich anchored blacks, dimensional
+skin, calm olive foliage, a midtone S-curve) or at any learned style, fitted on the
+photo's own render. Learned styles and custom presets are kept in
+`~/.epikos/learned_styles.json` and `~/.epikos/presets.json` (or `$EPIKOS_DATA_DIR`), so
+they persist across sessions and updates.
 Edits save automatically
 to `<photo>.epikos.json` (and an Adobe-compatible `.xmp`) and come back when the photo
 is reopened.
@@ -83,6 +91,8 @@ Scene analysis (Section 2) and story-arc grouping of a folder, as JSON:
 ```bash
 cargo run --release -p epikos-cli -- analyze <RAW>   # genre, light, skin, palette, histogram (~3 s with models)
 cargo run --release -p epikos-cli -- story <DIR>     # groups, hero frames, palettes (previews + EXIF only)
+cargo run --release -p epikos-cli -- learn <PHOTO> --name "My look"   # learn a style (saved in ~/.epikos)
+cargo run --release -p epikos-cli -- mentor <RAW> --target <learned-id>  # starting point aimed at it
 ```
 
 Genres are scored by hand-written rules over measured cues (skin and subject coverage,

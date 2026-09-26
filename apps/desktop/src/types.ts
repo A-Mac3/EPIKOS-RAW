@@ -231,6 +231,8 @@ export interface MentorReport {
   changes: string[];
   /** A composition crop and straighten, offered apart from the starting point. */
   crop: { crop: Crop; rotation: number; reason: string } | null;
+  /** The look the starting point aims for ("Editorial" or a learned style's name). */
+  target: string;
   analysisMs: number;
 }
 
@@ -674,4 +676,28 @@ export interface SyncReport {
     skinProtection: number;
   }[];
   skipped: { path: string; reason: string }[];
+}
+
+/** A look measured from a reference photo (AI Style Learning), kept across sessions. */
+export interface LearnedStyle {
+  id: string;
+  name: string;
+  source: string;
+  createdAt: number;
+  signature: {
+    tone: { black: number; white: number; median: number; contrast: number };
+    skin: { l: number; hue: number; chroma: number; richness: number; relativeL: number; specular: number } | null;
+    bands: { hue: number; chroma: number; share: number }[];
+    foliage: { hue: number; chroma: number; share: number } | null;
+    backgroundChroma: number | null;
+  };
+  palette: Swatch[];
+}
+
+/** A saved look (no framing, white balance or exposure). */
+export interface Preset {
+  id: string;
+  name: string;
+  createdAt: number;
+  adjustments: Adjustments;
 }

@@ -18,6 +18,8 @@ interface Props {
   luts: LutInfo[];
   /** Imported LUTs changed. */
   onLutsChanged: () => void;
+  /** Learned styles and custom presets, shown first. */
+  library?: React.ReactNode;
 }
 
 const SLOTS_KEY = "epikos.fusion.slots";
@@ -37,7 +39,18 @@ function storedSlots(): string[] | null {
  * Presets & Styles: the parametric style library by category, the Style Fusion Matrix
  * and imported 3D LUTs. Resting the pointer on a card previews it on the photo.
  */
-export function StylePanel({ styles, thumbs, adjustments, edit, endEdit, commit, onPreview, luts, onLutsChanged }: Props) {
+export function StylePanel({
+  styles,
+  thumbs,
+  adjustments,
+  edit,
+  endEdit,
+  commit,
+  onPreview,
+  luts,
+  onLutsChanged,
+  library,
+}: Props) {
   const style = adjustments.style;
   const fused = style.blend.length > 0;
   const listed = styles.filter((s) => s.listed);
@@ -92,6 +105,7 @@ export function StylePanel({ styles, thumbs, adjustments, edit, endEdit, commit,
 
   return (
     <section className="styles library">
+      {library}
       {STYLE_CATEGORIES.map((cat) => {
         const inCat = listed.filter((s) => s.category === cat);
         const isOpen = openCats.has(cat);

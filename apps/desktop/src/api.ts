@@ -11,6 +11,8 @@ import type {
   FileEntry,
   HandoffApp,
   ImageInfo,
+  LearnedStyle,
+  Preset,
   LookPrompt,
   AutoTone,
   AutoUpright,
@@ -186,9 +188,38 @@ export const autoTone = (path: string, adjustments: Adjustments) =>
 export const autoUpright = (path: string, adjustments: Adjustments) =>
   invoke<AutoUpright>("auto_upright", { path, adjustments });
 
-/** AI Mentor: insights and a recommended starting point for the photo. */
-export const mentor = (path: string, adjustments: Adjustments) =>
-  invoke<MentorReport>("mentor", { path, adjustments });
+/**
+ * AI Mentor: insights and a recommended starting point for the photo, aimed at
+ * `target` (a learned style's id; `null` for the built-in Editorial profile).
+ */
+export const mentor = (path: string, adjustments: Adjustments, target: string | null = null) =>
+  invoke<MentorReport>("mentor", { path, adjustments, target });
+
+/** AI Style Learning: learn the look of `path` as edited by `adjustments` and keep it. */
+export const learnStyle = (path: string, adjustments: Adjustments, name: string) =>
+  invoke<LearnedStyle>("learn_style", { path, adjustments, name });
+
+export const learnedStyles = () => invoke<LearnedStyle[]>("learned_styles");
+
+export const deleteLearnedStyle = (id: string) => invoke<void>("delete_learned_style", { id });
+
+export const listPresets = () => invoke<Preset[]>("list_presets");
+
+export const savePreset = (name: string, adjustments: Adjustments) => invoke<Preset>("save_preset", { name, adjustments });
+
+export const deletePreset = (id: string) => invoke<void>("delete_preset", { id });
+
+/** Native picker for a reference photo to learn a style from; `null` if cancelled. */
+export async function pickReference(): Promise<string | null> {
+  const exts = await invoke<string[]>("photo_extensions");
+  const file = await open({
+    directory: false,
+    multiple: false,
+    title: "Learn style from photo",
+    filters: [{ name: "Photos", extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
+  });
+  return typeof file === "string" ? file : null;
+}
 
 /** Live feedback on the current edit. */
 export const critique = (path: string, adjustments: Adjustments) =>

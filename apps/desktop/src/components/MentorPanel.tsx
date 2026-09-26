@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { critique, mentor } from "../api";
-import type { Adjustments, Feedback, ImageInfo, MentorReport } from "../types";
+import type { Adjustments, Feedback, ImageInfo, LearnedStyle, MentorReport } from "../types";
 
 type Update = (fn: (a: Adjustments) => Adjustments) => void;
 
@@ -26,7 +26,22 @@ type State =
  * composition), explaining how and why to edit it, with a recommended starting point
  * (global and local) and a suggested crop. It re-reads the edit whenever it pauses.
  */
-export function MentorPanel({ info, adjustments, commit }: { info: ImageInfo; adjustments: Adjustments; commit: Update }) {
+export function MentorPanel({
+  info,
+  adjustments,
+  commit,
+  target,
+  targets,
+  setTarget,
+}: {
+  info: ImageInfo;
+  adjustments: Adjustments;
+  commit: Update;
+  /** Learned style id the starting point aims at; null for Editorial. */
+  target: string | null;
+  targets: LearnedStyle[];
+  setTarget: (id: string | null) => void;
+}) {
   const [state, setState] = useState<State>(() => {
     const hit = cache.get(info.path);
     return hit ? { kind: "done", ...hit } : { kind: "loading" };
@@ -36,13 +51,17 @@ export function MentorPanel({ info, adjustments, commit }: { info: ImageInfo; ad
   const [applying, setApplying] = useState(false);
   const latest = useRef(adjustments);
   latest.current = adjustments;
-  const basis = JSON.stringify(adjustments);
+  // A reading belongs to the edit and the target it aimed at.
+  const basis = JSON.stringify([adjustments, target]);
+  const latestTarget = useRef(target);
+  latestTarget.current = target;
   // Only the newest request may update the panel.
   const request = useRef(0);
 
   const read = async (adj: Adjustments) => {
-    const b = JSON.stringify(adj);
-    const report = await mentor(info.path, adj);
+    const t = latestTarget.current;
+    const b = JSON.stringify([adj, t]);
+    const report = await mentor(info.path, adj, t);
     cache.set(info.path, { basis: b, report });
     return { report, basis: b };
   };
@@ -99,7 +118,7 @@ export function MentorPanel({ info, adjustments, commit }: { info: ImageInfo; ad
     try {
       // Suggestions are made against the settings they were read for; after other
       // edits, read again so none of those edits is lost.
-      const current = JSON.stringify(latest.current);
+      const current = JSON.stringify([latest.current, latestTarget.current]);
       const r = current === state.basis ? state : { kind: "done" as const, ...(await read(latest.current)) };
       setState(r);
       commit(() => r.report.recommended);
@@ -118,6 +137,17 @@ export function MentorPanel({ info, adjustments, commit }: { info: ImageInfo; ad
         <span className={`mentor-dot${updating || stale ? " is-busy" : ""}`} aria-hidden />
         {updating ? "Re-reading your edit…" : stale ? "Waiting for the edit to settle…" : "Live: follows every edit"}
       </p>
+      <label className="mentor-target">
+        <span>Starting target</span>
+        <select value={target ?? ""} onChange={(e) => setTarget(e.currentTarget.value || null)}>
+          <option value="">Editorial (built-in)</option>
+          {targets.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name} (learned)
+            </option>
+          ))}
+        </select>
+      </label>
       {state.kind === "loading" && <p className="note">Reading the photo: histogram, dynamic range, colour, light, skin and subjects…</p>}
       {state.kind === "error" && <p className="error">{state.message}</p>}
       {report && (

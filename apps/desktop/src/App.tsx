@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   inTauri,
+  learnedStyles,
   listFiles,
   listLuts,
+  listPresets,
   listFolder,
   onFileDrag,
   openImage,
@@ -14,7 +16,7 @@ import {
 } from "./api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ExportDialog } from "./components/ExportDialog";
-import { captureSummary } from "./format";
+import { shutter } from "./format";
 import { Filmstrip } from "./components/Filmstrip";
 import { Histogram } from "./components/Histogram";
 import type { LightKind } from "./components/LightPalette";
@@ -23,6 +25,7 @@ import { BatchSyncCard, SceneCard } from "./components/ScenePanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
 import { HistoryPanel, LeftSidebar } from "./components/LeftSidebar";
+import { LearnedLibrary } from "./components/LearnedLibrary";
 import { MentorPanel } from "./components/MentorPanel";
 import { describeChange } from "./historyLabel";
 import { Viewer } from "./components/Viewer";
@@ -38,8 +41,11 @@ import {
   defaultLight,
   type Adjustments,
   type FileEntry,
+  type ExportFormat,
   type ImageInfo,
+  type LearnedStyle,
   type LutInfo,
+  type Preset,
   type PickTarget,
   type StyleInfo,
   type StoryArc,
@@ -47,6 +53,7 @@ import {
 
 const AUTOSAVE_MS = 600;
 const MAX_PREVIEW_SIDE = 4096;
+const MENTOR_TARGET_KEY = "epikos.mentor.target";
 
 /** What the filmstrip shows: a folder, or photos opened one by one (Open Photo, a drop). */
 type Source = { kind: "folder"; dir: string } | { kind: "files"; paths: string[] };
@@ -82,6 +89,8 @@ export default function App() {
   const [before, setBefore] = useState(false);
   const [save, setSave] = useState<SaveStatus>({ kind: "idle" });
   const [exportOpen, setExportOpen] = useState(false);
+  /** The last finished export of the open photo, for the toolbar. */
+  const [lastExport, setLastExport] = useState<{ path: string; label: string } | null>(null);
 
   const stylesRef = useRef<StyleInfo[]>([]);
   const history = useHistory<Adjustments>(defaultAdjustments(), (b, a) => describeChange(b, a, stylesRef.current));
@@ -123,6 +132,32 @@ export default function App() {
   useEffect(() => {
     if (inTauri) refreshLuts();
   }, [refreshLuts]);
+  // Learned styles and presets (~/.epikos), and the AI Mentor's starting target.
+  const [learned, setLearned] = useState<LearnedStyle[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const refreshLibrary = useCallback(() => {
+    learnedStyles().then(setLearned, () => setLearned([]));
+    listPresets().then(setPresets, () => setPresets([]));
+  }, []);
+  useEffect(() => refreshLibrary(), [refreshLibrary]);
+  const [mentorTarget, setMentorTargetState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(MENTOR_TARGET_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const setMentorTarget = useCallback((id: string | null) => {
+    setMentorTargetState(id);
+    try {
+      if (id) localStorage.setItem(MENTOR_TARGET_KEY, id);
+      else localStorage.removeItem(MENTOR_TARGET_KEY);
+    } catch {
+      // Remembering the target is a convenience only.
+    }
+  }, []);
+  // A deleted (or unknown) learned style falls back to Editorial.
+  const activeTarget = mentorTarget && learned.some((s) => s.id === mentorTarget) ? mentorTarget : null;
 
   const previewSize = [Math.min(viewSize.w, MAX_PREVIEW_SIDE), Math.min(viewSize.h, MAX_PREVIEW_SIDE)] as const;
   const shown = before ? beforeAdjustments : (hoverAdjustments ?? adjustments);
@@ -425,6 +460,7 @@ export default function App() {
     setSelectedLight(null);
     setLightDrag(false);
     setCropping(false);
+    setLastExport(null);
   }, [info?.path]);
 
   useEffect(() => {
@@ -528,10 +564,7 @@ export default function App() {
           {info ? (
             <>
               <strong>{info.name}</strong>
-              <span>
-                {info.make} {info.model} · {info.width}×{info.height}
-              </span>
-              {captureSummary(info.capture) && <span className="capture">{captureSummary(info.capture)}</span>}
+              <CaptureBadges info={info} />
             </>
           ) : (
             source && <span>{sourceLabel(source, files.length)}</span>
@@ -574,13 +607,26 @@ export default function App() {
           >
             Export…
           </button>
+          {lastExport && (
+            <span className="export-status" title={lastExport.path}>
+              <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>
+                <path d="M2.5 6.3l2.3 2.3 4.7-5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+              Exported {lastExport.label}
+            </span>
+          )}
           <SaveBadge status={save} />
         </div>
       </header>
 
       {exportOpen && info && (
         <ErrorBoundary area="the export dialog">
-          <ExportDialog info={info} adjustments={adjustments} onClose={() => setExportOpen(false)} />
+          <ExportDialog
+            info={info}
+            adjustments={adjustments}
+            onClose={() => setExportOpen(false)}
+            onExported={(r) => setLastExport({ path: r.path, label: exportLabel(r.format) })}
+          />
         </ErrorBoundary>
       )}
 
@@ -656,12 +702,31 @@ export default function App() {
                       onPreview={setHoverAdjustments}
                       luts={luts}
                       onLutsChanged={refreshLuts}
+                      library={
+                        <LearnedLibrary
+                          info={info}
+                          adjustments={adjustments}
+                          commit={history.commit}
+                          learned={learned}
+                          presets={presets}
+                          onChanged={refreshLibrary}
+                          mentorTarget={activeTarget}
+                          setMentorTarget={setMentorTarget}
+                        />
+                      }
                     />
                   ) : (
                     <p className="note pad">Select a photo to browse styles.</p>
                   ),
                   mentor: info ? (
-                    <MentorPanel info={info} adjustments={adjustments} commit={history.commit} />
+                    <MentorPanel
+                      info={info}
+                      adjustments={adjustments}
+                      commit={history.commit}
+                      target={activeTarget}
+                      targets={learned}
+                      setTarget={setMentorTarget}
+                    />
                   ) : (
                     <p className="note pad">Select a photo for the mentor&apos;s reading.</p>
                   ),
@@ -708,7 +773,13 @@ export default function App() {
             </div>
           </aside>
           <footer className="strip">
-            <Filmstrip files={files} story={story} selected={selected} onSelect={(p) => void select(p)} />
+            <Filmstrip
+              files={files}
+              story={story}
+              selected={selected}
+              onSelect={(p) => void select(p)}
+              masksLoaded={info && Object.keys(masks.masks).length > 0 ? info.path : null}
+            />
           </footer>
         </>
       ) : (
@@ -779,3 +850,45 @@ function SaveBadge({ status }: { status: SaveStatus }) {
       );
   }
 }
+
+const exportLabel = (f: ExportFormat) =>
+  ({ tiff: "TIFF", psd: "PSD", dng: "DNG", jpeg: "JPEG", png: "PNG" })[f];
+
+/** Camera, lens and exposure as small badges in the toolbar. */
+function CaptureBadges({ info }: { info: ImageInfo }) {
+  const c = info.capture;
+  const v = (r: [number, number] | null | undefined) => (r && r[1] ? r[0] / r[1] : 0);
+  const items: { icon: React.ReactNode; text: string; title: string }[] = [];
+  const camera = `${info.make} ${info.model}`.trim();
+  if (camera) items.push({ icon: ICONS.camera, text: camera, title: `Camera · ${info.width}×${info.height}` });
+  if (c.lensModel) items.push({ icon: ICONS.lens, text: c.lensModel, title: "Lens" });
+  if (c.iso) items.push({ icon: null, text: `ISO ${c.iso}`, title: "ISO" });
+  if (c.fNumber) items.push({ icon: null, text: `f/${Number(v(c.fNumber).toFixed(1))}`, title: "Aperture" });
+  if (c.exposureTime) items.push({ icon: null, text: shutter(c.exposureTime), title: "Shutter speed" });
+  if (c.focalLength) items.push({ icon: null, text: `${Number(v(c.focalLength).toFixed(0))} mm`, title: "Focal length" });
+  return (
+    <span className="capture-badges">
+      {items.map((it) => (
+        <span key={it.title} className="capture-badge" title={it.title}>
+          {it.icon}
+          {it.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+const ICONS = {
+  camera: (
+    <svg viewBox="0 0 14 12" width="12" height="11" aria-hidden>
+      <path d="M1.5 3.5h2.4l1.2-1.6h3.8l1.2 1.6h2.4v7h-11z" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <circle cx="7" cy="6.8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  ),
+  lens: (
+    <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>
+      <circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <circle cx="6" cy="6" r="2" fill="none" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  ),
+};

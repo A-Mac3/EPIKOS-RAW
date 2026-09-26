@@ -39,6 +39,23 @@ const FILES: FileEntry[] = [
   hasEdits: false,
 }));
 const saved = new Map<string, DevelopDocument>();
+// ~/.epikos stand-ins for the browser mock (kept in localStorage like the real files persist).
+const LEARNED_KEY = "epikos.mock.learned";
+const PRESETS_KEY = "epikos.mock.presets";
+const load = <T,>(k: string): T[] => {
+  try {
+    return JSON.parse(localStorage.getItem(k) ?? "[]") as T[];
+  } catch {
+    return [];
+  }
+};
+const store = (k: string, v: unknown) => {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch {
+    // Mock only.
+  }
+};
 const presync = new Map<string, DevelopDocument | null>();
 const luts: { name: string; title: string | null; size: number }[] = [];
 const AS_SHOT = { temperature: 5600, tint: 4 };
@@ -335,6 +352,50 @@ export function installMockBackend() {
       }
       case "list_luts":
         return luts;
+      case "learned_styles":
+        return load(LEARNED_KEY);
+      case "learn_style": {
+        await new Promise((r) => setTimeout(r, 700));
+        const src = String(a.path).split("/").pop()!;
+        const name = String(a.name || "").trim() || src.replace(/\.[^.]+$/, "");
+        const created = Math.floor(Date.now() / 1000);
+        const style = {
+          id: `learned-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${created}`,
+          name,
+          source: src,
+          createdAt: created,
+          signature: {
+            tone: { black: 0.12, white: 0.96, median: 0.46, contrast: 0.29 },
+            skin: { l: 0.42, hue: 56, chroma: 0.07, richness: 0.7, relativeL: -0.02, specular: 0.05 },
+            bands: [],
+            foliage: { hue: 118, chroma: 0.06, share: 0.1 },
+            backgroundChroma: 0.03,
+          },
+          palette: [
+            { hex: "#2b2622", weight: 0.3 },
+            { hex: "#6b4a36", weight: 0.22 },
+            { hex: "#a07b5c", weight: 0.2 },
+            { hex: "#556048", weight: 0.16 },
+            { hex: "#e6ddd2", weight: 0.12 },
+          ],
+        };
+        store(LEARNED_KEY, [...load(LEARNED_KEY), style]);
+        return style;
+      }
+      case "delete_learned_style":
+        store(LEARNED_KEY, load<{ id: string }>(LEARNED_KEY).filter((s) => s.id !== a.id));
+        return null;
+      case "list_presets":
+        return load(PRESETS_KEY);
+      case "save_preset": {
+        const created = Date.now();
+        const preset = { id: `preset-${created}`, name: String(a.name || "").trim() || "My preset", createdAt: Math.floor(created / 1000), adjustments: a.adjustments };
+        store(PRESETS_KEY, [...load(PRESETS_KEY), preset]);
+        return preset;
+      }
+      case "delete_preset":
+        store(PRESETS_KEY, load<{ id: string }>(PRESETS_KEY).filter((p) => p.id !== a.id));
+        return null;
       case "import_lut": {
         const name = String(a.path).split("/").pop()!.replace(/\.cube$/i, "");
         if (!luts.some((l) => l.name === name)) luts.push({ name, title: name, size: 33 });
@@ -407,6 +468,33 @@ export function installMockBackend() {
           upsert("background", { warmth: -20, saturation: -10 });
           changes.push("Background cooler (warmth −20, saturation −10)");
         }
+        // The starting target (Editorial or a learned look), as the engine fits it.
+        const learnedTarget = a.target ? load<{ id: string; name: string }>(LEARNED_KEY).find((s) => s.id === a.target) : undefined;
+        const targetName = learnedTarget?.name ?? "Editorial";
+        const fits: string[] = [];
+        if (recommended.tone.blacks > -30) {
+          recommended.tone.blacks = -30;
+          fits.push("Blacks -30 (black point)");
+        }
+        if (!recommended.curves.sCurve.enabled) {
+          recommended.curves = { ...recommended.curves, sCurve: { ...recommended.curves.sCurve, enabled: true, amount: 28 } };
+          fits.push("Midtone S-curve 28");
+        }
+        if (recommended.color.foliage.hue < 12) {
+          recommended.color = { ...recommended.color, foliage: { hue: 12, saturation: -18, luminance: 0 } };
+          fits.push("Foliage hue +12 (towards olive), saturation -18");
+        }
+        if (fits.length) {
+          insights.push({
+            topic: "Style",
+            observation: learnedTarget
+              ? `Starting point aimed at your learned style "${targetName}": its black and white points, midtone curve, skin richness and colour.`
+              : "Starting point aimed at the Editorial profile: rich, anchored blacks, a clean white point, a midtone S-curve, skin rich and warm with its highlights kept, and foliage calmed towards olive.",
+            why: "Contrast and depth read as professional; lifting every shadow reads as flat HDR.",
+            how: `Apply Recommended Starting Point: ${fits.join(", ")}.`,
+          });
+          changes.push(...fits);
+        }
         const cropped = adj.crop && (adj.crop.width < 0.999 || adj.crop.height < 0.999);
         const crop = cropped
           ? null
@@ -429,6 +517,7 @@ export function installMockBackend() {
           recommended,
           changes,
           crop,
+          target: targetName,
           analysisMs: 1400,
         };
       }
