@@ -46,9 +46,18 @@ interface Props {
   story: StoryArc | null;
   selected: string | null;
   onSelect: (path: string) => void;
+  /** The photo whose AI masks are loaded (the open one, once any mask is made). */
+  masksLoaded?: string | null;
 }
 
-export function Filmstrip({ files, story, selected, onSelect }: Props) {
+/** RAW, DNG, JPEG, PNG or TIFF, from the decoder's format label. */
+export function formatBadge(format: string): string {
+  const f = format.toUpperCase();
+  for (const k of ["DNG", "JPEG", "PNG", "TIFF"]) if (f.includes(k)) return k === "JPEG" ? "JPG" : k === "TIFF" ? "TIF" : k;
+  return "RAW";
+}
+
+export function Filmstrip({ files, story, selected, onSelect, masksLoaded = null }: Props) {
   const strip = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,7 +68,14 @@ export function Filmstrip({ files, story, selected, onSelect }: Props) {
   }, [selected]);
 
   const thumb = (f: FileEntry, hero = false) => (
-    <Thumb key={f.path} file={f} hero={hero} selected={f.path === selected} onSelect={onSelect} />
+    <Thumb
+      key={f.path}
+      file={f}
+      hero={hero}
+      selected={f.path === selected}
+      masks={f.path === masksLoaded}
+      onSelect={onSelect}
+    />
   );
   const byPath = new Map(files.map((f) => [f.path, f]));
   const grouped = new Set(story?.groups.flatMap((g) => g.frames) ?? []);
@@ -98,11 +114,13 @@ function Thumb({
   file,
   hero,
   selected,
+  masks,
   onSelect,
 }: {
   file: FileEntry;
   hero: boolean;
   selected: boolean;
+  masks: boolean;
   onSelect: (p: string) => void;
 }) {
   const el = useRef<HTMLButtonElement>(null);
@@ -143,7 +161,25 @@ function Thumb({
     >
       {url ? <img src={url} alt="" draggable={false} /> : <span className="thumb-ph">{failed ? "No preview" : ""}</span>}
       <span className="thumb-name">{file.name}</span>
-      {file.hasEdits && <span className="thumb-dot" title="Has EPIKOS edits" />}
+      <span className="thumb-badges" aria-hidden>
+        <span className={`thumb-badge is-${formatBadge(file.format).toLowerCase()}`}>{formatBadge(file.format)}</span>
+        {masks && (
+          <span className="thumb-badge is-icon" title="AI masks loaded">
+            <svg viewBox="0 0 12 12" width="10" height="10">
+              <circle cx="6" cy="4.2" r="2.3" fill="none" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M1.8 11c.5-2.3 2.2-3.6 4.2-3.6s3.7 1.3 4.2 3.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+          </span>
+        )}
+        {file.hasEdits && (
+          <span className="thumb-badge is-icon is-saved" title="Edits saved to .epikos sidecar">
+            <svg viewBox="0 0 12 12" width="10" height="10">
+              <path d="M3 1.5h4l2.5 2.5v6.5H3z" fill="none" stroke="currentColor" strokeWidth="1.1" />
+              <path d="M4.4 7.2l1.2 1.2 2.2-2.4" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+          </span>
+        )}
+      </span>
       {hero && (
         <span className="thumb-hero" title="Hero frame of this group">
           ★

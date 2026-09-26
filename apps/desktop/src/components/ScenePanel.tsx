@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { analyzeImage, syncLook, undoSync } from "../api";
-import { dominantColors } from "../palette";
+import { dominantColors, hexToLab } from "../palette";
 import type { Adjustments, ImageInfo, Preview, SceneAnalysis, ShotGroup, Swatch, SyncReport } from "../types";
 
 /** The live palette follows the preview once renders pause (slider drags render often). */
@@ -204,12 +204,26 @@ function LumaHistogram({ bins, mean }: { bins: number[]; mean: number }) {
   );
 }
 
+/** Rounded vector swatches sized by share; hover shows HEX and CIE L*a*b*. Swatches
+ * are keyed by position, so an updating live palette glides between colours. */
 export function Palette({ swatches, compact = false }: { swatches: Swatch[]; compact?: boolean }) {
   return (
-    <div className={`palette${compact ? " is-compact" : ""}`} aria-label="Dominant colours">
-      {swatches.map((s) => (
-        <span key={s.hex} style={{ background: s.hex, flexGrow: s.weight }} title={`${s.hex} · ${Math.round(s.weight * 100)}%`} />
-      ))}
+    <div className={`palette${compact ? " is-compact" : ""}`} role="list" aria-label="Dominant colours">
+      {swatches.map((s, i) => {
+        const [l, a, b] = hexToLab(s.hex);
+        const tip = `${s.hex.toUpperCase()} · L ${l.toFixed(0)} a ${a.toFixed(0)} b ${b.toFixed(0)} · ${Math.round(s.weight * 100)}%`;
+        return (
+          <span
+            key={i}
+            role="listitem"
+            className="swatch-chip"
+            style={{ background: s.hex, flexGrow: s.weight }}
+            data-tip={compact ? undefined : tip}
+            title={compact ? tip : undefined}
+            aria-label={tip}
+          />
+        );
+      })}
     </div>
   );
 }

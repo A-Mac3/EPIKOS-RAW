@@ -339,7 +339,9 @@ export function Viewer({
             }}
           >
             <span className="viewer-split-knob" aria-hidden>
-              ⇔
+              <svg viewBox="0 0 20 12" width="20" height="12">
+                <path d="M7 2L3 6l4 4M13 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </span>
             <span className="viewer-split-label is-before">Before</span>
             <span className="viewer-split-label is-after">After</span>

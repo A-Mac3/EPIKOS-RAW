@@ -115,6 +115,17 @@ export function FusionWheel({ styles, slots, onSlots, blend, onBlend, onCommit }
         onPointerUp={onCommit}
       >
         <defs>
+          <filter id="fusion-glow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="3" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <radialGradient id="fusion-vignette" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0.55" stopColor="#000" stopOpacity="0" />
+            <stop offset="1" stopColor="#000" stopOpacity="0.45" />
+          </radialGradient>
           {slots.map((id, i) => (
             <radialGradient
               key={i}
@@ -128,16 +139,38 @@ export function FusionWheel({ styles, slots, onSlots, blend, onBlend, onCommit }
             </radialGradient>
           ))}
         </defs>
-        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} className="fusion-disc" />
+        {/* Spectrum mesh: a conic hue ring softened towards a neutral centre, with each
+            corner style's colour blooming from its anchor. */}
+        <foreignObject x={SIZE / 2 - R} y={SIZE / 2 - R} width={R * 2} height={R * 2}>
+          <div className="fusion-spectrum" />
+        </foreignObject>
         {slots.map((_, i) => (
-          <circle key={i} cx={SIZE / 2} cy={SIZE / 2} r={R} fill={`url(#fusion-g${i})`} />
+          <circle key={i} cx={SIZE / 2} cy={SIZE / 2} r={R} fill={`url(#fusion-g${i})`} className="fusion-bloom" />
         ))}
+        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="url(#fusion-vignette)" />
+        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} className="fusion-rim" />
+        <line x1={SIZE / 2 - R} y1={SIZE / 2} x2={SIZE / 2 + R} y2={SIZE / 2} className="fusion-axis" />
+        <line x1={SIZE / 2} y1={SIZE / 2 - R} x2={SIZE / 2} y2={SIZE / 2 + R} className="fusion-axis" />
         {slots.map((id, i) => {
           const p = label(i);
           return <circle key={`a${i}`} cx={p.x} cy={p.y} r={5} className="fusion-anchor" fill={style(id)?.swatch[1]} />;
         })}
+        {slots.map((_, i) => {
+          // Live share of each corner, just inside its anchor.
+          const [ax, ay] = ANCHORS[i];
+          const x = SIZE / 2 + ax * (R - 20);
+          const y = SIZE / 2 + ay * (R - 20) + 3;
+          return (
+            <text key={`p${i}`} x={x} y={y} className={`fusion-pct${shown[i] > 0.005 ? " is-on" : ""}`} textAnchor="middle">
+              {Math.round(shown[i] * 100)}%
+            </text>
+          );
+        })}
         {blend.length > 0 && (
-          <circle cx={SIZE / 2 + puck[0] * R} cy={SIZE / 2 + puck[1] * R} r={7} className="fusion-puck" />
+          <g filter="url(#fusion-glow)">
+            <circle cx={SIZE / 2 + puck[0] * R} cy={SIZE / 2 + puck[1] * R} r={9} className="fusion-puck-halo" />
+            <circle cx={SIZE / 2 + puck[0] * R} cy={SIZE / 2 + puck[1] * R} r={6} className="fusion-puck" />
+          </g>
         )}
       </svg>
     </div>

@@ -16,6 +16,8 @@ interface Props {
   info: ImageInfo;
   adjustments: Adjustments;
   onClose: () => void;
+  /** An export finished (for the toolbar's status). */
+  onExported?: (report: ExportReport) => void;
 }
 
 const SPACES: { value: OutputSpace; label: string; hint: string }[] = [
@@ -103,7 +105,7 @@ type State =
  * PNG (every format for every source), carrying the AI masks when the format can, then
  * opened in the next editor.
  */
-export function ExportDialog({ info, adjustments, onClose }: Props) {
+export function ExportDialog({ info, adjustments, onClose, onExported }: Props) {
   const [format, setFormat] = useState<ExportFormat>(() => {
     const last = stored(FORMAT_KEY) as ExportFormat | null;
     return last && FORMATS.some((f) => f.value === last) ? last : "tiff";
@@ -167,6 +169,7 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         }
       }
       setState({ kind: "done", report, opened, openError });
+      onExported?.(report);
     } catch (e) {
       setState({ kind: "error", message: String(e) });
     }

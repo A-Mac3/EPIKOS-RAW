@@ -80,3 +80,15 @@ export function dominantColors(rgba: Uint8ClampedArray, k = 5): Swatch[] {
     .filter((s) => s.weight > 0)
     .sort((x, y) => y.weight - x.weight);
 }
+
+/** CIE L*a*b* (D65) of a display sRGB hex colour, for swatch tooltips. */
+export function hexToLab(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(toLinear);
+  const x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+  const f = (t: number) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+  const [fx, fy, fz] = [f(x), f(y), f(z)];
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}

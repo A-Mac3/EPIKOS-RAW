@@ -1,5 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { curvePoints, isIdentity, sCurveY } from "../curve";
+import { smoothPath } from "../spline";
 import { CURVE_CHANNELS, type CurveChannel, type Curves } from "../types";
 
 const SIZE = 200;
@@ -17,13 +18,19 @@ const REMOVE_MARGIN = 0.12;
 type Pt = [number, number];
 
 const toSvg = ([x, y]: Pt) => [PAD + x * INNER, PAD + (1 - y) * INNER] as const;
-const path = (pts: Pt[]) =>
-  pts
-    .map((p, i) => {
-      const [x, y] = toSvg(p);
-      return `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join("");
+/** The curve as a smooth vector spline (dense samples thinned, then Bézier-joined). */
+const path = (pts: Pt[]) => {
+  const step = Math.max(1, Math.floor(pts.length / 48));
+  const thinned = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+  return smoothPath(thinned.map((p) => toSvg(p) as [number, number]));
+};
+/** Tonal ramp under the graph, per channel. */
+const RAMP: Record<CurveChannel, string> = {
+  rgb: "#ffffff",
+  red: "#ff5a5a",
+  green: "#62d474",
+  blue: "#5c92ff",
+};
 
 interface Props {
   curves: Curves;
@@ -138,7 +145,28 @@ export function CurveGraph({ curves, channel, histogram, onPoints, onCommit }: P
       onKeyDown={onKeyDown}
       onKeyUp={(e) => e.key.startsWith("Arrow") && onCommit()}
     >
-      {histogram && <path d={histogramPath(histogram, channel)} className={`curve-histogram is-${channel}`} />}
+      <defs>
+        <filter id="curve-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2.2" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <linearGradient id={`curve-hist-${channel}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={STROKE[channel]} stopOpacity="0.32" />
+          <stop offset="1" stopColor={STROKE[channel]} stopOpacity="0.03" />
+        </linearGradient>
+        <linearGradient id={`curve-ramp-${channel}`} x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="#000" />
+          <stop offset="1" stopColor={RAMP[channel]} />
+        </linearGradient>
+      </defs>
+      <rect x={PAD} y={PAD} width={INNER} height={INNER} rx="3" className="curve-bg" />
+      {histogram && (
+        <path d={histogramPath(histogram, channel)} fill={`url(#curve-hist-${channel})`} className="curve-histogram" />
+      )}
+      <rect x={PAD} y={SIZE - PAD + 1.5} width={INNER} height={3} rx="1.5" fill={`url(#curve-ramp-${channel})`} opacity="0.8" />
       {[0.25, 0.5, 0.75].map((t) => (
         <g key={t} className="curve-grid">
           <line x1={PAD + t * INNER} y1={PAD} x2={PAD + t * INNER} y2={PAD + INNER} />
@@ -155,6 +183,7 @@ export function CurveGraph({ curves, channel, histogram, onPoints, onCommit }: P
           className="curve-s"
         />
       )}
+      <path d={path(curvePoints(curve))} stroke={STROKE[channel]} className="curve-main-glow" />
       <path d={path(curvePoints(curve))} stroke={STROKE[channel]} className="curve-main" />
       {points.map((p, i) => {
         const [cx, cy] = toSvg(p);
@@ -163,8 +192,9 @@ export function CurveGraph({ curves, channel, histogram, onPoints, onCommit }: P
             key={i}
             cx={cx}
             cy={cy}
-            r={i === active ? 5 : 4}
+            r={i === active ? 5.5 : 4}
             className={`curve-handle${i === active ? " is-active" : ""}`}
+            filter={i === active ? "url(#curve-glow)" : undefined}
             onDoubleClick={(e) => {
               e.stopPropagation();
               if (i > 0 && i < points.length - 1) {
@@ -187,11 +217,14 @@ function histogramPath(h: [Uint32Array, Uint32Array, Uint32Array], channel: Curv
   const bins = Array.from({ length: 256 }, (_, i) => (idx < 0 ? h[0][i] + h[1][i] + h[2][i] : h[idx][i]));
   // Ignore the clipped end bins when scaling, or one spike flattens the rest.
   const peak = Math.sqrt(Math.max(1, ...bins.slice(1, 255)));
-  const pts = bins.map((v, i) => {
-    const [x, y] = toSvg([i / 255, Math.min(1, Math.sqrt(v) / peak) * 0.9]);
-    return `L${x.toFixed(1)},${y.toFixed(1)}`;
+  // 64 smoothed points joined by a spline: a soft silhouette, not a bar chart.
+  const pts: [number, number][] = Array.from({ length: 64 }, (_, k) => {
+    let s = 0;
+    for (let j = k * 4; j < k * 4 + 4; j++) s += bins[j];
+    return toSvg([(k + 0.5) / 64, Math.min(1, Math.sqrt(s / 4) / peak) * 0.9]) as [number, number];
   });
   const [x0, y0] = toSvg([0, 0]);
   const [x1] = toSvg([1, 0]);
-  return `M${x0},${y0}${pts.join("")}L${x1},${y0}Z`;
+  const [fx, fy] = pts[0];
+  return `M${x0},${y0}L${fx},${fy}${smoothPath(pts).replace(/^M[^C]*/, "")}L${x1},${y0}Z`;
 }

@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 
 interface Props {
   label: string;
@@ -6,7 +6,8 @@ interface Props {
   min: number;
   max: number;
   step: number;
-  /** Value restored on double-click. */
+  /** Value restored on double-click; on a bi-directional slider (e.g. 0 on −100…100)
+   * the fill runs from it and a centre tick marks it. */
   defaultValue: number;
   format?: (v: number) => string;
   /** Map between slider position and value (e.g. logarithmic Kelvin). */
@@ -20,6 +21,14 @@ interface Props {
   track?: string;
 }
 
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+
+/**
+ * Pro slider: a dark track with an amber fill trail (from the default for
+ * bi-directional controls, with a centre-zero tick), a live value tooltip with its
+ * unit while hovered or dragged, and double-click to reset. A native range input
+ * underneath keeps keyboard and screen-reader behaviour.
+ */
 export function Slider({
   label,
   value,
@@ -36,36 +45,67 @@ export function Slider({
   track,
 }: Props) {
   const id = useId();
+  const [hover, setHover] = useState(false);
+  const [active, setActive] = useState(false);
   const pos = toPosition(value);
-  const fill = ((pos - min) / (max - min)) * 100;
+  const frac = (v: number) => clamp01((v - min) / (max - min));
+  const p = frac(pos);
+  const zero = frac(toPosition(defaultValue));
+  // Bi-directional: the range crosses zero (Exposure, Contrast…) or the track is a
+  // colour scale around the as-shot value (Temperature, Tint).
+  const bipolar = zero > 0.001 && zero < 0.999 && (min < 0 || !!track);
+  const [from, to] = bipolar ? [Math.min(zero, p), Math.max(zero, p)] : [0, p];
+  const changed = Math.abs(pos - toPosition(defaultValue)) > step / 2;
+  const at = (f: number) => `calc(var(--knob) / 2 + ${f} * (100% - var(--knob)))`;
+  const end = () => {
+    setActive(false);
+    onCommit();
+  };
   return (
-    <div className={`slider${disabled ? " is-disabled" : ""}`}>
+    <div className={`slider${disabled ? " is-disabled" : ""}${changed ? " is-changed" : ""}`}>
       <div className="slider-head">
         <label htmlFor={id}>{label}</label>
         <output htmlFor={id}>{format(value)}</output>
       </div>
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={pos}
-        disabled={disabled}
-        style={{
-          ["--fill" as string]: `${fill}%`,
-          ...(track ? { ["--track" as string]: track } : {}),
-        }}
-        onChange={(e) => onChange(fromPosition(Number(e.currentTarget.value)))}
-        onPointerUp={onCommit}
-        onKeyUp={onCommit}
-        onBlur={onCommit}
-        onDoubleClick={() => {
-          onChange(defaultValue);
-          onCommit();
-        }}
-        title="Double-click to reset"
-      />
+      <div
+        className={`pro-slider${active ? " is-active" : ""}`}
+        onPointerEnter={() => setHover(true)}
+        onPointerLeave={() => setHover(false)}
+      >
+        <span className="pro-track" style={track ? { background: track } : undefined}>
+          {!track && <span className="pro-fill" style={{ left: `${from * 100}%`, width: `${(to - from) * 100}%` }} />}
+        </span>
+        {bipolar && <span className="pro-zero" style={{ left: at(zero) }} aria-hidden />}
+        <span className="pro-thumb" style={{ left: at(p) }} aria-hidden />
+        {(hover || active) && !disabled && (
+          <span className="pro-tip" style={{ left: at(p) }} aria-hidden>
+            {format(value)}
+          </span>
+        )}
+        <input
+          id={id}
+          type="range"
+          className="pro-input"
+          min={min}
+          max={max}
+          step={step}
+          value={pos}
+          disabled={disabled}
+          onChange={(e) => onChange(fromPosition(Number(e.currentTarget.value)))}
+          onPointerDown={() => setActive(true)}
+          onPointerUp={end}
+          onKeyUp={onCommit}
+          onBlur={() => {
+            setActive(false);
+            onCommit();
+          }}
+          onDoubleClick={() => {
+            onChange(defaultValue);
+            onCommit();
+          }}
+          title="Double-click to reset"
+        />
+      </div>
     </div>
   );
 }
