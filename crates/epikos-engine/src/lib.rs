@@ -830,11 +830,8 @@ fn source_ref(raw: &DecodedRaw) -> SourceRef {
     SourceRef {
         path: raw.source_path.clone(),
         sha256: raw.source_sha256.clone(),
-/// The scene without the look, and without the crop: the models (masks, depth) and
-/// the scene readings work on the whole upright frame.
         format: raw.profile.format.label().to_string(),
         make: raw.profile.clean_make.clone(),
-        crop: Default::default(),
         model: raw.profile.clean_model.clone(),
     }
 }
@@ -1309,27 +1306,6 @@ mod tests {
         let loaded = synthetic_loaded(64, 48);
         let options = ExportOptions { long_edge: Some(32), ..ExportOptions::default() };
         let report =
-    #[test]
-    fn export_writes_jpeg_and_16_bit_png_with_icc() {
-        use image::ImageDecoder;
-        let dir = temp_dir("export-share");
-        let loaded = synthetic_loaded(64, 48);
-        for (format, name) in [(ExportFormat::Jpeg, "out.jpg"), (ExportFormat::Png, "out.png")] {
-            let dest = dir.join(name);
-            let options = ExportOptions { format, ..ExportOptions::default() };
-            let report =
-                export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
-            assert_eq!(report.format, format);
-            let reader = image::ImageReader::open(&dest).unwrap().with_guessed_format().unwrap();
-            let mut dec = reader.into_decoder().unwrap();
-            assert_eq!(dec.dimensions(), (64, 48));
-            let bits16 = dec.color_type() == image::ColorType::Rgb16;
-            assert_eq!(bits16, format == ExportFormat::Png, "{format:?}");
-            assert_eq!(dec.icc_profile().unwrap().unwrap(), OutputSpace::Srgb.icc_profile(), "{format:?}");
-        }
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
             export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
         assert_eq!((report.width, report.height), (32, 24));
         fs::remove_dir_all(&dir).unwrap();
