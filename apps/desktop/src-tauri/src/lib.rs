@@ -7,7 +7,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod ai;
 mod handoff;
+mod share;
 
 use epikos_core::CameraFormat;
 use epikos_engine::{
@@ -125,6 +127,41 @@ async fn export_image(
     blocking(move || engine.export(&path, &adjustments, &dest, options)).await
 }
 
+/// Export to a temporary file (JPEG, PNG or TIFF; other formats fall back to JPEG)
+/// and send it with AirDrop.
+#[tauri::command]
+async fn airdrop_export(
+    app: tauri::AppHandle,
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+    mut options: ExportOptions,
+) -> CmdResult<ExportReport> {
+    use epikos_engine::ExportFormat;
+    let path = raw_path(&path)?;
+    let ext = match options.format {
+        ExportFormat::Png => "png",
+        ExportFormat::Tiff => "tif",
+        _ => {
+            options.format = ExportFormat::Jpeg;
+            "jpg"
+        }
+    };
+    // Masks and depth ride in TIFF channels that other devices don't use.
+    (options.ai_masks, options.depth_channel) = (false, false);
+    let dir = std::env::temp_dir().join("EPIKOS RAW AirDrop");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stem = path.file_stem().map_or("photo".into(), |s| s.to_string_lossy().into_owned());
+    let dest = dir.join(format!("{stem}.{ext}"));
+    let engine = engine.inner().clone();
+    let report = blocking(move || engine.export(&path, &adjustments, &dest, options)).await?;
+    let file = PathBuf::from(&report.path);
+    tauri::async_runtime::spawn_blocking(move || share::airdrop(&app, vec![file]))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(report)
+}
+
 #[tauri::command]
 async fn mask_models(engine: EngineState<'_>) -> CmdResult<MaskModels> {
     let engine = engine.inner().clone();
@@ -158,6 +195,48 @@ async fn interpret_look(
     let path = raw_path(&path)?;
     let engine = engine.inner().clone();
     blocking(move || engine.interpret_look(&path, &prompt, &adjustments)).await
+}
+
+/// "Describe a look" through the user's AI provider: the local interpretation first
+/// (lights on the face, vocabulary), then the model's bounded changes on top.
+#[tauri::command]
+async fn interpret_look_ai(
+    engine: EngineState<'_>,
+    path: String,
+    prompt: String,
+    adjustments: Adjustments,
+    provider: String,
+    model: String,
+) -> CmdResult<epikos_engine::LookPrompt> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    let p = prompt.clone();
+    let local = blocking(move || engine.interpret_look(&path, &p, &adjustments)).await?;
+    let reply = tauri::async_runtime::spawn_blocking(move || ai::interpret(&provider, &model, &prompt))
+        .await
+        .map_err(|e| e.to_string())??;
+    let mut ai = epikos_engine::apply_ai_look(&local.adjustments, &reply);
+    let mut matched = local.matched;
+    matched.append(&mut ai.matched);
+    ai.matched = matched;
+    Ok(ai)
+}
+
+/// Save an AI provider's API key in the macOS Keychain (never returned to the UI).
+#[tauri::command]
+fn save_ai_key(provider: String, key: String) -> CmdResult<()> {
+    ai::save_key(&provider, &key)
+}
+
+/// Whether a key is saved for `provider` (the key itself stays in the Keychain).
+#[tauri::command]
+fn has_ai_key(provider: String) -> CmdResult<bool> {
+    ai::has_key(&provider)
+}
+
+#[tauri::command]
+fn delete_ai_key(provider: String) -> CmdResult<()> {
+    ai::delete_key(&provider)
 }
 
 /// Section 2.1: genre, light and skin reading of one photo.
@@ -501,6 +580,11 @@ pub fn run() {
             import_lut,
             remove_lut,
             learn_style,
+            airdrop_export,
+            interpret_look_ai,
+            save_ai_key,
+            has_ai_key,
+            delete_ai_key,
             learned_styles,
             delete_learned_style,
             list_presets,

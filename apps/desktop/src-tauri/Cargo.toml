@@ -20,3 +20,12 @@ serde_json.workspace = true
 epikos-core.workspace = true
 epikos-engine.workspace = true
 epikos-sidecar.workspace = true
+# HTTPS for the optional AI look interpretation (the system's TLS).
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
+
+# AirDrop (NSSharingService) and the macOS Keychain for the optional AI API key.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", features = ["NSSharingService"] }
+security-framework = "3"
