@@ -54,6 +54,8 @@ export interface Tone {
   blacks: number;
   vibrance: number;
   saturation: number;
+  /** −100…100: removes (+) or adds (−) haze. */
+  dehaze: number;
 }
 
 export const TONE_KEYS = ["contrast", "highlights", "shadows", "whites", "blacks", "vibrance", "saturation"] as const;
@@ -71,7 +73,25 @@ export interface LocalAdjustment {
   saturation: number;
   warmth: number;
   clarity: number;
+  /** Greener (−) or more magenta (+). */
+  tint: number;
 }
+
+/** Aspect presets of the crop tool. */
+export type CropAspect = "free" | "original" | "1:1" | "4:5" | "16:9" | "9:16";
+
+/** A crop of the upright frame, as fractions of its width and height. */
+export interface Crop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  aspect: CropAspect;
+}
+
+export const defaultCrop = (): Crop => ({ x: 0, y: 0, width: 1, height: 1, aspect: "free" });
+
+export const cropIsActive = (c: Crop) => c.x > 1e-4 || c.y > 1e-4 || c.width < 1 - 1e-4 || c.height < 1 - 1e-4;
 
 /** Hue in degrees, amount 0…100, saturation and luminance −100…100. */
 export interface BackgroundTint {
@@ -209,6 +229,8 @@ export interface MentorReport {
   insights: Insight[];
   recommended: Adjustments;
   changes: string[];
+  /** A composition crop and straighten, offered apart from the starting point. */
+  crop: { crop: Crop; rotation: number; reason: string } | null;
   analysisMs: number;
 }
 
@@ -300,6 +322,8 @@ export interface Adjustments {
   finishing: Finishing;
   style: StyleRef;
   lut: LutRef;
+  /** Step 1 crop of the upright (straightened) frame. */
+  crop: Crop;
 }
 
 export interface SourceRef {
@@ -338,7 +362,7 @@ export interface CaptureMetadata {
   gps: { latitude: Ratio[] | null; longitude: Ratio[] | null } | null;
 }
 
-export type ExportFormat = "tiff" | "psd" | "dng";
+export type ExportFormat = "tiff" | "psd" | "dng" | "jpeg" | "png";
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -513,15 +537,16 @@ export function defaultAdjustments(): Adjustments {
     },
     style: { id: "", amount: 100, skinProtection: 0, blend: [] },
     lut: { name: "", amount: 100 },
+    crop: defaultCrop(),
   };
 }
 
 export function defaultTone(): Tone {
-  return { contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, vibrance: 0, saturation: 0 };
+  return { contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, vibrance: 0, saturation: 0, dehaze: 0 };
 }
 
 export function defaultLocal(mask: MaskTarget): LocalAdjustment {
-  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0 };
+  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0, tint: 0 };
 }
 
 export function defaultToneCurve(): ToneCurve {
@@ -563,7 +588,11 @@ export function defaultColorGrade(): ColorGrade {
 export interface SceneAnalysis {
   genres: { id: string; label: string; score: number; evidence: string }[];
   lighting: {
+    /** The camera's white-balance estimate (RAW only). */
     colorTemperature: number | null;
+    /** Measured from the pixels. */
+    ambientTemperature: number;
+    ambientLabel: string;
     dynamicRangeEv: number;
     highlightsClipped: number;
     shadowsCrushed: number;
@@ -593,7 +622,10 @@ export interface SceneAnalysis {
     depthRange: number | null;
     lineStrength: number;
   };
+  /** Five dominant colours of the photo as shot (before any edit). */
   palette: Swatch[];
+  /** Luminance of the photo as shot: 64-bin display histogram (shares), mean, median. */
+  luminance: { histogram: number[]; mean: number; median: number };
   limits: string[];
   analysisMs: number;
 }

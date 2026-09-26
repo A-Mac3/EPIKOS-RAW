@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { analyzeImage, syncLook, undoSync } from "../api";
-import type { Adjustments, ImageInfo, SceneAnalysis, ShotGroup, Swatch, SyncReport } from "../types";
+import { dominantColors } from "../palette";
+import type { Adjustments, ImageInfo, Preview, SceneAnalysis, ShotGroup, Swatch, SyncReport } from "../types";
+
+/** The live palette follows the preview once renders pause (slider drags render often). */
+const LIVE_PALETTE_DELAY_MS = 200;
 
 /** Let the first preview render before the (≈3 s) analysis competes for the engine. */
 const START_DELAY_MS = 700;
 
-// One analysis per photo per session: it reads the scene, which edits don't change.
+// One analysis per photo per session: it reads the scene as shot, which edits don't change.
 const cache = new Map<string, Promise<SceneAnalysis>>();
 
 function analysisFor(info: ImageInfo): Promise<SceneAnalysis> {
@@ -20,10 +24,20 @@ function analysisFor(info: ImageInfo): Promise<SceneAnalysis> {
 
 type State = { kind: "loading" } | { kind: "done"; analysis: SceneAnalysis } | { kind: "error"; message: string };
 
-/** PRD Section 2.1: what the engine reads in this photo (genre, light, skin). */
-export function SceneCard({ info }: { info: ImageInfo }) {
+/**
+ * PRD Section 2.1: what the engine reads in this photo as shot (genre, light, skin,
+ * histogram, palette), next to the live palette of the current edit.
+ */
+export function SceneCard({ info, preview }: { info: ImageInfo; preview: Preview | null }) {
   const [open, setOpen] = useState(true);
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [live, setLive] = useState<Swatch[]>([]);
+
+  useEffect(() => {
+    if (!preview || !open) return;
+    const t = window.setTimeout(() => setLive(dominantColors(preview.rgba)), LIVE_PALETTE_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [preview, open]);
 
   useEffect(() => {
     let alive = true;
@@ -60,14 +74,14 @@ export function SceneCard({ info }: { info: ImageInfo }) {
         <div className="step-body scene-body">
           {state.kind === "loading" && <p className="note">Reading genre, light and skin…</p>}
           {state.kind === "error" && <p className="error">{state.message}</p>}
-          {state.kind === "done" && <Analysis a={state.analysis} />}
+          {state.kind === "done" && <Analysis a={state.analysis} live={live} />}
         </div>
       )}
     </section>
   );
 }
 
-function Analysis({ a }: { a: SceneAnalysis }) {
+function Analysis({ a, live }: { a: SceneAnalysis; live: Swatch[] }) {
   const L = a.lighting;
   const light = [L.hardnessLabel, L.direction, L.backlit ? "backlit" : null].filter(Boolean).join(" · ");
   const clip = L.highlightsClipped >= 0.05 ? `, ${L.highlightsClipped.toFixed(1)}% clipped` : "";
@@ -101,12 +115,13 @@ function Analysis({ a }: { a: SceneAnalysis }) {
       <div className="scene-group">
         <h4>Light</h4>
         <dl className="facts">
-          {L.colorTemperature !== null && (
-            <>
-              <dt>Colour</dt>
-              <dd>{Math.round(L.colorTemperature / 50) * 50} K as shot</dd>
-            </>
-          )}
+          <dt>Colour</dt>
+          <dd title="Measured from near-neutral surfaces (not skin or sky)">
+            {Math.round(L.ambientTemperature / 50) * 50} K, {L.ambientLabel}
+            {L.colorTemperature !== null && (
+              <span className="muted"> · camera {Math.round(L.colorTemperature / 50) * 50} K</span>
+            )}
+          </dd>
           <dt>Light</dt>
           <dd>{light}</dd>
           <dt>Range</dt>
@@ -145,8 +160,21 @@ function Analysis({ a }: { a: SceneAnalysis }) {
       )}
 
       <div className="scene-group">
+        <h4>Luminance as shot</h4>
+        <LumaHistogram bins={a.luminance.histogram} mean={a.luminance.mean} />
+        <p className="note">
+          Mean {Math.round(a.luminance.mean * 100)}%, median {Math.round(a.luminance.median * 100)}% of white.
+        </p>
+      </div>
+
+      <div className="scene-group">
         <h4>Palette</h4>
-        <Palette swatches={a.palette} />
+        <div className="palette-pair">
+          <span className="palette-label">As shot</span>
+          <Palette swatches={a.palette} />
+          <span className="palette-label">Live edit</span>
+          {live.length > 0 ? <Palette swatches={live} /> : <p className="note">Waiting for the preview…</p>}
+        </div>
       </div>
 
       {a.limits.map((l) => (
@@ -158,6 +186,21 @@ function Analysis({ a }: { a: SceneAnalysis }) {
         Rule-based reading in {(a.analysisMs / 1000).toFixed(1)} s. Hover a genre to see why it matched.
       </p>
     </>
+  );
+}
+
+/** The as-shot luminance histogram, square-root scaled like the RGB one. */
+function LumaHistogram({ bins, mean }: { bins: number[]; mean: number }) {
+  const peak = Math.sqrt(Math.max(1e-9, ...bins.slice(1, -1)));
+  const w = 100 / bins.length;
+  return (
+    <svg className="luma-histogram" viewBox="0 0 100 30" preserveAspectRatio="none" aria-label="Luminance histogram as shot">
+      {bins.map((b, i) => {
+        const h = Math.min(30, (Math.sqrt(b) / peak) * 30);
+        return <rect key={i} x={i * w} y={30 - h} width={w + 0.05} height={h} />;
+      })}
+      <line x1={mean * 100} x2={mean * 100} y1={0} y2={30} className="luma-mean" />
+    </svg>
   );
 }
 

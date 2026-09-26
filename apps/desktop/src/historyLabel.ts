@@ -11,6 +11,7 @@ const TONE: Record<string, string> = {
   blacks: "Blacks",
   vibrance: "Vibrance",
   saturation: "Saturation",
+  dehaze: "Dehaze",
 };
 
 /** A short name for what changed between two edits (for the History panel). */
@@ -34,6 +35,10 @@ export function describeChange(before: Adjustments, after: Adjustments, styles: 
     parts.push("Straighten / perspective");
   } else if (!same(before.lens, after.lens)) {
     parts.push(before.lens.profile !== after.lens.profile ? `Lens profile ${after.lens.profile ? "on" : "off"}` : "Lens corrections");
+  }
+  if (!same(before.crop, after.crop)) {
+    const c = after.crop;
+    parts.push(c.width >= 0.9999 && c.height >= 0.9999 ? "Crop reset" : `Crop${c.aspect !== "free" ? ` ${c.aspect}` : ""}`);
   }
   if (before.highlightRecovery !== after.highlightRecovery) parts.push("Highlight recovery");
   if (!same(before.noiseReduction, after.noiseReduction)) parts.push("Noise reduction");

@@ -23,6 +23,8 @@ import {
   type Tone,
   type WbMode,
   type WheelRange,
+  cropIsActive,
+  defaultCrop,
 } from "../types";
 import { ColorWheel } from "./ColorWheel";
 import { CurveGraph } from "./CurveGraph";
@@ -49,6 +51,9 @@ interface Props {
   setPicking: (target: PickTarget) => void;
   selectedLight: number | null;
   setSelectedLight: (i: number | null) => void;
+  /** Open or close the crop tool on the image. */
+  cropping: boolean;
+  setCropping: (on: boolean) => void;
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
@@ -71,6 +76,7 @@ const TONE_SLIDERS: [keyof Tone, string][] = [
   ["blacks", "Blacks"],
   ["vibrance", "Vibrance"],
   ["saturation", "Saturation"],
+  ["dehaze", "Dehaze"],
 ];
 
 // Temperature slider is logarithmic so the useful 2 000–10 000 K range gets most travel.
@@ -130,6 +136,8 @@ export function StepsPanel({
   setPicking,
   selectedLight,
   setSelectedLight,
+  cropping,
+  setCropping,
 }: Props) {
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
   const [hslMode, setHslMode] = useState<HslMode>("saturation");
@@ -143,7 +151,8 @@ export function StepsPanel({
     try {
       if (kind === "tone") {
         const r = await autoTone(info.path, a);
-        commit((x) => ({ ...x, exposure: r.exposure, tone: r.tone }));
+        // Auto tone doesn't judge haze: keep the Dehaze setting.
+        commit((x) => ({ ...x, exposure: r.exposure, tone: { ...r.tone, dehaze: x.tone.dehaze } }));
       } else {
         const r = await autoUpright(info.path, a);
         commit((x) => ({ ...x, lens: { ...x.lens, rotation: r.rotation, vertical: r.vertical } }));
@@ -353,12 +362,30 @@ export function StepsPanel({
           <button type="button" className="btn" disabled={auto.busy !== null} onClick={() => void runAuto("upright")}>
             {auto.busy === "upright" ? "Measuring…" : "Auto upright"}
           </button>
+          <button
+            type="button"
+            className={`btn${cropping ? " is-active" : ""}`}
+            aria-pressed={cropping}
+            title="Crop & straighten on the image (C)"
+            onClick={() => setCropping(!cropping)}
+          >
+            {cropping ? "Done cropping" : "Crop & straighten"}
+          </button>
         </div>
+        {cropIsActive(a.crop) && (
+          <p className="hint">
+            Cropped to {Math.round(a.crop.width * info.width)}×{Math.round(a.crop.height * info.height)} px
+            {a.crop.aspect !== "free" ? ` (${a.crop.aspect})` : ""}.{" "}
+            <button type="button" className="btn link" onClick={() => commit((x) => ({ ...x, crop: defaultCrop() }))}>
+              Reset crop
+            </button>
+          </p>
+        )}
         <Slider
           label="Straighten"
           value={a.lens.rotation}
-          min={-15}
-          max={15}
+          min={-45}
+          max={45}
           step={0.05}
           defaultValue={0}
           format={fmtSigned(2, "°")}
@@ -1110,8 +1137,12 @@ const LOCAL_SLIDERS: [Exclude<keyof LocalAdjustment, "mask">, string][] = [
   ["contrast", "Contrast"],
   ["saturation", "Saturation"],
   ["warmth", "Warmth"],
+  ["tint", "Tint"],
   ["clarity", "Clarity"],
 ];
+
+/** Green to magenta, for local Tint. */
+const TINT_TRACK = "linear-gradient(90deg, #4caf50, #d8d8d8 50%, #d04fb0)";
 
 /** Step 3 edits confined to a mask. */
 function LocalAdjustments({
@@ -1170,7 +1201,7 @@ function LocalAdjustments({
               step={key === "exposure" ? 0.01 : 1}
               defaultValue={0}
               format={key === "exposure" ? fmtSigned(2, " EV") : fmtSigned(0)}
-              track={key === "warmth" ? WARMTH_TRACK : undefined}
+              track={key === "warmth" ? WARMTH_TRACK : key === "tint" ? TINT_TRACK : undefined}
               onChange={(v) => edit(setLocal(i, { [key]: v }))}
               onCommit={endEdit}
             />

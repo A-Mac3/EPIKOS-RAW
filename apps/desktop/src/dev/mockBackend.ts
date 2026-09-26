@@ -9,13 +9,14 @@ import type {
   DevelopDocument,
   FileEntry,
   ImageInfo,
+  LocalAdjustment,
   MaskTarget,
   SceneAnalysis,
   StoryArc,
   StyleInfo,
   SyncReport,
 } from "../types";
-import { defaultAdjustments } from "../types";
+import { defaultAdjustments, defaultLocal } from "../types";
 
 const FOLDER = "/mock/Sydney shoot";
 const FILES: FileEntry[] = [
@@ -345,38 +346,90 @@ export function installMockBackend() {
       case "mentor": {
         await new Promise((r) => setTimeout(r, 400));
         const adj = structuredClone(a.adjustments as Adjustments);
-        const recommended = {
-          ...adj,
-          exposure: 1.24,
-          tone: { ...adj.tone, highlights: -66, blacks: -13 },
-          lens: { ...adj.lens, rotation: 0.69, vertical: 19 },
-          style: adj.style.id ? adj.style : { id: "dark-melanin-glow", amount: 70, skinProtection: 70, blend: [] },
+        // Like the engine: only what the current edit still needs.
+        const insights: { topic: string; observation: string; why: string; how: string }[] = [];
+        const changes: string[] = [];
+        const recommended: Adjustments = structuredClone(adj);
+        const upsert = (mask: LocalAdjustment["mask"], patch: Partial<LocalAdjustment>) => {
+          const l = recommended.local.find((x) => x.mask === mask);
+          if (l) Object.assign(l, patch);
+          else recommended.local.push({ ...defaultLocal(mask), ...patch });
         };
+        if (Math.abs(adj.lens.rotation - 0.69) > 0.3) {
+          insights.push({
+            topic: "Framing",
+            observation: "The lines in the frame lean and converge (+0.7° tilt, +19 vertical perspective).",
+            why: "A tilted horizon or falling buildings read as a mistake and pull the eye to the edges.",
+            how: "Step 1: Auto upright, then fine-tune Straighten if the subject itself leans on purpose.",
+          });
+          recommended.lens = { ...adj.lens, rotation: 0.69, vertical: 19 };
+          changes.push("Straighten +0.69°, vertical +19");
+        }
+        if (Math.abs(adj.exposure - 1.24) >= 0.3) {
+          insights.push({
+            topic: "Exposure",
+            observation: `The mid-tones sit about ${Math.abs(1.24 - adj.exposure).toFixed(1)} stops ${adj.exposure < 1.24 ? "below" : "above"} mid-grey.`,
+            why: "Exposure sets where every other decision starts. This reading uses the whole frame, not the skin, so deep skin keeps its natural depth.",
+            how: "Step 2: Exposure to +1.24 EV (or Auto exposure & tone).",
+          });
+          recommended.exposure = 1.24;
+          recommended.tone = { ...adj.tone, highlights: -42, blacks: -8 };
+          changes.push("Exposure +1.24 EV", "Highlights -42", "Blacks -8");
+        }
+        const skin = adj.local.find((l) => l.mask === "skin");
+        if (!skin || skin.warmth < 10) {
+          insights.push({
+            topic: "Skin",
+            observation: "Skin in the current edit reads grey / ashy (too little colour).",
+            why: "Deep skin turns grey under cool light or a cool grade; its richness is warmth and colour, not brightness, so the fix is colour on the skin alone.",
+            how: "Step 3: local adjustment on Skin, warmth +15, tint +5, saturation +10 (measured on this photo's skin).",
+          });
+          upsert("skin", { warmth: 15, tint: 5, saturation: 10 });
+          changes.push("Skin warmth +15, tint +5, saturation +10");
+        }
+        if (!adj.local.some((l) => l.mask === "subject")) {
+          insights.push({
+            topic: "Subject",
+            observation: "The subject is 1.1 stops darker than its surroundings.",
+            why: "The eye goes to the brightest part of a picture first; a subject darker than the background competes with it.",
+            how: "Step 3: local adjustment on Subject, about +0.45 EV (rather than brightening everything).",
+          });
+          upsert("subject", { exposure: 0.45 });
+          changes.push("Subject +0.45 EV");
+        }
+        if (!adj.local.some((l) => l.mask === "background")) {
+          insights.push({
+            topic: "Subject",
+            observation: "The background is warm, close to the skin's own colour.",
+            why: "Skin separates best against cooler, quieter colour; a warm background blends the person into it.",
+            how: "Step 3: local adjustment on Background, warmth about −20 and saturation −10.",
+          });
+          upsert("background", { warmth: -20, saturation: -10 });
+          changes.push("Background cooler (warmth −20, saturation −10)");
+        }
+        const cropped = adj.crop && (adj.crop.width < 0.999 || adj.crop.height < 0.999);
+        const crop = cropped
+          ? null
+          : {
+              crop: { x: 0.12, y: 0.08, width: 0.8, height: 0.8, aspect: "original" as const },
+              rotation: 0.69,
+              reason: "puts the subject on the upper-left third, sets the horizon on the lower third line, keeps 80% of the frame",
+            };
+        if (crop) {
+          insights.push({
+            topic: "Framing",
+            observation: `A tighter crop ${crop.reason}.`,
+            why: "Placing the subject and the horizon on the thirds gives the picture direction and room.",
+            how: "Apply suggested crop below, or Step 1: Crop & straighten at +0.7°.",
+          });
+        }
         return {
-          summary: "Close-up Portrait · first priority: framing",
-          insights: [
-            {
-              topic: "Framing",
-              observation: "The lines in the frame lean and converge (+0.7° tilt, +19 vertical perspective).",
-              why: "A tilted horizon or falling buildings read as a mistake and pull the eye to the edges.",
-              how: "Step 1: Auto upright, then fine-tune Straighten if the subject itself leans on purpose.",
-            },
-            {
-              topic: "Exposure",
-              observation: "The mid-tones sit about 1.2 stops below mid-grey.",
-              why: "Exposure sets where every other decision starts. This reading uses the whole frame, not the skin, so deep skin keeps its natural depth.",
-              how: "Step 2: Exposure to +1.24 EV (or Auto exposure & tone).",
-            },
-            {
-              topic: "Skin",
-              observation: "Skin covers 7.3% of the frame: deep tone (Monk ~8/10), neutral undertone, shine: some shine.",
-              why: "Deep skin loses its richness quickly: a warm grade or heavy contrast can turn it grey or muddy.",
-              how: "Keep Skin tone protection at 40–70% when grading (Step 5).",
-            },
-          ],
+          summary: insights.length ? `Close-up Portrait · first priority: ${insights[0].topic.toLowerCase()}` : "Close-up Portrait: well exposed and level, a good base to grade from",
+          insights,
           recommended,
-          changes: ["Straighten +0.69°, vertical +19", "Exposure +1.24 EV", "Highlights -66", "Blacks -13"],
-          analysisMs: 3100,
+          changes,
+          crop,
+          analysisMs: 1400,
         };
       }
       case "critique": {
@@ -397,9 +450,6 @@ export function installMockBackend() {
       case "plugin:dialog|save":
         return (a.options as { defaultPath?: string } | undefined)?.defaultPath ?? `${FOLDER}/export.tif`;
       case "export_image":
-        if ((a.options as { format: string }).format === "dng" && String(a.path).endsWith(".JPG")) {
-          throw new Error("a JPEG or PNG has no sensor data for an enhanced DNG; export a TIFF or PSD");
-        }
         await new Promise((r) => setTimeout(r, 900));
         console.info("[mock] export", a);
         return {
@@ -412,6 +462,7 @@ export function installMockBackend() {
           wroteExif: true,
           wroteLocation: (a.options as { includeLocation: boolean }).includeLocation,
           alphaChannels: (a.options as { aiMasks: boolean }).aiMasks ? ["Subject", "Sky", "Skin"] : [],
+          // (the dialog never asks a JPEG or PNG for masks)
           developMs: 1180,
           writeMs: 850,
         };
@@ -605,7 +656,8 @@ function hsv(h: number, s: number, v: number): [number, number, number] {
 }
 
 function render(adj: Adjustments, maxW: number, maxH: number, path: string): ArrayBuffer {
-  const aspect = 3 / 2;
+  const crop = adj.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+  const aspect = (3 / 2) * (crop.width / crop.height);
   let w = Math.min(maxW, 1600);
   let h = Math.round(w / aspect);
   if (h > maxH) {
@@ -634,7 +686,7 @@ function render(adj: Adjustments, maxW: number, maxH: number, path: string): Arr
   const px = new Uint8ClampedArray(out, 8 + hist.byteLength);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const raw = scene(x / w, y / h, hue);
+      const raw = scene(crop.x + (x / w) * crop.width, crop.y + (y / h) * crop.height, hue);
       const grey = 0.2627 * raw[0] + 0.678 * raw[1] + 0.0593 * raw[2];
       const lin = raw.map((v, c) => (v + (grey - v) * mono) * warm[c]);
       const i = (y * w + x) * 4;
@@ -731,6 +783,8 @@ function analysis(path: string): SceneAnalysis {
         : [{ id: "environmental-portrait", label: "Environmental Portrait", score: 0.72, evidence: "skin 0.7% in a wider scene, depth range 0.95" }],
     lighting: {
       colorTemperature: bird ? 4239 : 6156,
+      ambientTemperature: bird ? 4063 : 6025,
+      ambientLabel: bird ? "golden" : "daylight",
       dynamicRangeEv: 7.5,
       highlightsClipped: 0.4,
       shadowsCrushed: 0.1,
@@ -764,6 +818,12 @@ function analysis(path: string): SceneAnalysis {
       { hex: "#1f1a18", weight: 0.19 },
       { hex: "#c9c3b8", weight: 0.16 },
     ],
+    luminance: {
+      // A mid-key frame: a broad hump around 35%, a little sky near white.
+      histogram: Array.from({ length: 64 }, (_, i) => Math.exp(-(((i - 22) / 10) ** 2)) / 17.7 + (i > 56 ? 0.004 : 0)),
+      mean: 0.36,
+      median: 0.34,
+    },
     limits: [],
     analysisMs: 3100,
   };

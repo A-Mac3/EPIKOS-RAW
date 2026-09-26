@@ -43,7 +43,22 @@ const FORMATS: { value: ExportFormat; label: string; ext: string; hint: string }
     ext: "dng",
     hint: "Scene-referred linear DNG (demosaiced, denoised, lens-corrected, white balance and exposure applied; no creative look) for raw-style editing in Lightroom, Camera Raw or Capture One. AI masks become DNG 1.6 semantic masks.",
   },
+  {
+    value: "jpeg",
+    label: "JPEG",
+    ext: "jpg",
+    hint: "The finished look, 8-bit at quality 92 with the ICC profile: for sharing, the web and clients. No room for mask channels.",
+  },
+  {
+    value: "png",
+    label: "16-bit PNG",
+    ext: "png",
+    hint: "The finished look, lossless 16-bit with the ICC profile. No room for mask channels.",
+  },
 ];
+
+/** Formats that carry the AI masks (and depth) with the image. */
+const carriesMasks = (f: ExportFormat) => f === "tiff" || f === "psd" || f === "dng";
 
 const FORMAT_KEY = "epikos.export.format";
 const SPACE_KEY = "epikos.export.space";
@@ -84,15 +99,14 @@ type State =
   | { kind: "error"; message: string };
 
 /**
- * PRD Step 8 handoff: full-resolution 16-bit TIFF, layered PSD or enhanced DNG, carrying
- * the AI masks when asked, then opened in the next editor.
+ * PRD Step 8 handoff: full-resolution 16-bit TIFF, layered PSD, enhanced DNG, JPEG or
+ * PNG (every format for every source), carrying the AI masks when the format can, then
+ * opened in the next editor.
  */
 export function ExportDialog({ info, adjustments, onClose }: Props) {
-  // A JPEG or PNG has no sensor data to put in an enhanced DNG.
-  const formats = info.bitmap ? FORMATS.filter((f) => f.value !== "dng") : FORMATS;
   const [format, setFormat] = useState<ExportFormat>(() => {
     const last = stored(FORMAT_KEY) as ExportFormat | null;
-    return last && formats.some((f) => f.value === last) ? last : "tiff";
+    return last && FORMATS.some((f) => f.value === last) ? last : "tiff";
   });
   const [space, setSpace] = useState<OutputSpace>(() => (stored(SPACE_KEY) as OutputSpace | null) ?? "srgb");
   const [includeLocation, setIncludeLocation] = useState(() => stored(LOCATION_KEY) !== "false");
@@ -138,8 +152,8 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         format,
         colorSpace: space,
         includeLocation,
-        aiMasks,
-        depthChannel: depthChannel && depthAvailable,
+        aiMasks: aiMasks && carriesMasks(format),
+        depthChannel: depthChannel && depthAvailable && carriesMasks(format),
         longEdge: size === "full" ? null : Number(size),
       });
       let opened: string | null = null;
@@ -171,7 +185,7 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
     >
       <h2>Export</h2>
       <p className="modal-sub">
-        {info.name} · {info.width}×{info.height} · 16-bit, 300 ppi
+        {info.name} · {info.width}×{info.height} · {format === "jpeg" ? "8-bit" : "16-bit"}, 300 ppi
       </p>
 
       <div className="field">
@@ -179,12 +193,15 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         <Segmented<ExportFormat>
           label="Format"
           value={format}
-          options={formats.map(({ value, label }) => ({ value, label }))}
+          options={FORMATS.map(({ value, label }) => ({ value, label }))}
           onChange={setFormat}
         />
         <span className="hint">{FORMATS.find((f) => f.value === format)!.hint}</span>
-        {info.bitmap && (
-          <span className="hint">Enhanced DNG is for RAW files: a JPEG or PNG has no sensor data to carry.</span>
+        {info.bitmap && format === "dng" && (
+          <span className="hint">
+            From a {info.format}: the DNG holds the decoded pixels made linear, so it edits like a raw file in
+            Lightroom or Camera Raw, but has no more highlight or shadow latitude than the original.
+          </span>
         )}
       </div>
 
@@ -207,6 +224,12 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
         <span className="hint">Long edge. Smaller sizes never upscale.</span>
       </div>
 
+      {!carriesMasks(format) ? (
+      <div className="field">
+        <span className="field-label">AI layers</span>
+        <span className="hint">A {format === "jpeg" ? "JPEG" : "PNG"} has no mask channels; choose TIFF, PSD or DNG to take the AI masks along.</span>
+      </div>
+      ) : (
       <div className="field">
         <span className="field-label">AI layers</span>
         <Toggle
@@ -236,11 +259,12 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
             "Stored as DNG 1.6 semantic masks and a DNG 1.5 depth map, as Apple ProRAW does; readers without DNG 1.6 support ignore them."}
         </span>
       </div>
+      )}
 
       <div className="field">
         <span className="field-label">Metadata</span>
         <span className="hint">
-          Camera, lens, exposure and capture time are copied from the RAW.
+          Camera, lens, exposure and capture time are copied from the original.
         </span>
         {photoHasLocation ? (
           <Toggle label="Include location (GPS)" checked={includeLocation} onChange={setIncludeLocation} />
@@ -265,7 +289,7 @@ export function ExportDialog({ info, adjustments, onClose }: Props) {
 
       {state.kind === "exporting" && (
         <p className="modal-status">
-          Developing at full resolution{aiMasks || depthChannel ? " and fitting the AI layers" : ""}…
+          Developing at full resolution{carriesMasks(format) && (aiMasks || depthChannel) ? " and fitting the AI layers" : ""}…
         </p>
       )}
       {state.kind === "done" && (

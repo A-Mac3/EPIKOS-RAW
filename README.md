@@ -8,8 +8,15 @@ window; photos opened one by one get the same filmstrip, masks and exports as a 
 The left panel (◧) holds **Presets & Styles** (17 styles in four categories, the Style
 Fusion Matrix with any four styles in its corners, and imported `.cube` 3D LUTs; rest the
 pointer on a card to preview it), the **AI Mentor** (a rule-based reading of the photo
-with a recommended starting point and live feedback on the edit) and **History** (every
-step, clickable). **Split** (Y) wipes between before and after. Edits save automatically
+that re-reads the edit whenever it pauses: a recommended starting point with global and
+local moves, skin balance judged for each skin's own depth, subject lift and background
+cooling, and a suggested crop and straighten) and **History** (every step, clickable).
+**Split** (Y) wipes between before and after. **Crop & straighten** (C) has aspect presets
+(Free, Original, 1:1, 4:5, 16:9, 9:16), a rule-of-thirds grid and a straighten knob. Scroll
+or pinch over the image to zoom (10–500 % of the actual pixels); drag, or hold Space and
+drag, to pan. The Scene panel shows the photo's as-shot palette next to a live palette of
+the current edit, its luminance histogram and the light's measured colour temperature.
+Edits save automatically
 to `<photo>.epikos.json` (and an Adobe-compatible `.xmp`) and come back when the photo
 is reopened.
 
@@ -22,7 +29,7 @@ is reopened.
 | `crates/epikos-pipeline` | Demosaic, highlights, white balance, noise reduction, lens profiles and optics, colour, exposure, Step 2 tone and auto-tone, straighten / vertical perspective and auto-upright, Step 3 local mask adjustments, Step 4 texture / retouching, Step 5 HSL, colour wheels, foliage shift and background re-colouration, Step 6 glow / depth fog / light shafts, Step 7 parametric and point curves, split toning, Step 8 grain and vignette, 3D virtual lights, parametric styles and style fusion (`src/look`), preview binning, display transform |
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
 | `crates/epikos-masks` | On-device models via ONNX Runtime (CPU): IS-Net subject and skyseg sky masks, BiSeNet face parsing for eyes and hair (Step 3), Depth Anything V2 Small depth (Steps 3 and 6) |
-| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy, Step 3 masks (subject, background, sky, skin, eyes, hair, foreground), the Lensfun lens database (`data/lensfun`, CC BY-SA 3.0), TIFF / layered PSD / enhanced DNG export, natural-language look prompts, scene analysis and story-arc sync |
+| `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy, Step 3 masks (subject, background, sky, skin, eyes, hair, foreground), the Lensfun lens database (`data/lensfun`, CC BY-SA 3.0), TIFF / layered PSD / enhanced DNG / JPEG / PNG export, natural-language look prompts, scene analysis and story-arc sync |
 | `crates/epikos-cli` | `epikos inspect / sidecar / develop / export / analyze / story / mentor / styles` |
 | `apps/desktop` | Tauri 2 + React/TypeScript desktop app (`src-tauri` = Rust commands) |
 
@@ -60,7 +67,13 @@ a PSD, DNG 1.6 semantic masks and a DNG 1.5 depth map in an enhanced (linear) DN
 cargo run --release -p epikos-cli -- export <RAW> -o out.tif --space prophoto --masks --depth
 cargo run --release -p epikos-cli -- export <RAW> -o out.psd --masks
 cargo run --release -p epikos-cli -- export <RAW> -o out.dng --masks --depth
+cargo run --release -p epikos-cli -- export <RAW> -o out.jpg --long-edge 2048   # 8-bit JPEG, ICC + EXIF
+cargo run --release -p epikos-cli -- export <RAW> -o out.png                    # 16-bit PNG
 ```
+
+Every format works for every source. An enhanced DNG made from a JPEG, PNG or TIFF holds
+its decoded pixels made linear: it edits like a raw file, but has no more latitude than
+the original. JPEG and PNG have no room for mask channels.
 
 The app's Export dialog can then open the TIFF in an installed editor (Photoshop, Lightroom,
 Capture One, DxO PhotoLab, Affinity Photo, Pixelmator Pro).
@@ -68,7 +81,7 @@ Capture One, DxO PhotoLab, Affinity Photo, Pixelmator Pro).
 Scene analysis (Section 2) and story-arc grouping of a folder, as JSON:
 
 ```bash
-cargo run --release -p epikos-cli -- analyze <RAW>   # genre, light, skin, palette (~3 s with models)
+cargo run --release -p epikos-cli -- analyze <RAW>   # genre, light, skin, palette, histogram (~3 s with models)
 cargo run --release -p epikos-cli -- story <DIR>     # groups, hero frames, palettes (previews + EXIF only)
 ```
 

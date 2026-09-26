@@ -32,7 +32,9 @@ import { useMasks } from "./hooks/useMasks";
 import { usePreview } from "./hooks/usePreview";
 import { useStyles } from "./hooks/useStyles";
 import {
+  cropIsActive,
   defaultAdjustments,
+  defaultCrop,
   defaultLight,
   type Adjustments,
   type FileEntry,
@@ -86,8 +88,14 @@ export default function App() {
   const adjustments = history.value;
   // The unedited image in the same framing (lens, straighten), so Before and the
   // split view line up with the edit.
-  const lensKey = JSON.stringify(adjustments.lens);
-  const beforeAdjustments = useMemo(() => ({ ...defaultAdjustments(), lens: adjustments.lens }), [lensKey]);
+  const lensKey = JSON.stringify([adjustments.lens, adjustments.crop]);
+  const beforeAdjustments = useMemo(
+    () => ({ ...defaultAdjustments(), lens: adjustments.lens, crop: adjustments.crop }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lensKey],
+  );
+  /** The crop tool is open: the image shows the whole straightened frame. */
+  const [cropping, setCropping] = useState(false);
   /** A style or LUT previewed while the pointer rests on its card. */
   const [hoverAdjustments, setHoverAdjustments] = useState<Adjustments | null>(null);
   /** Split view divider (0–1 across), or null when off. */
@@ -117,16 +125,23 @@ export default function App() {
   }, [refreshLuts]);
 
   const previewSize = [Math.min(viewSize.w, MAX_PREVIEW_SIDE), Math.min(viewSize.h, MAX_PREVIEW_SIDE)] as const;
+  const shown = before ? beforeAdjustments : (hoverAdjustments ?? adjustments);
+  const uncropped = useMemo(() => ({ ...shown, crop: defaultCrop() }), [shown]);
   const { preview, error: renderError, busy } = usePreview(
     info?.path ?? null,
-    info ? (before ? beforeAdjustments : (hoverAdjustments ?? adjustments)) : null,
+    info ? (cropping ? uncropped : shown) : null,
     ...previewSize,
   );
   const { preview: beforePreview } = usePreview(
-    split !== null ? (info?.path ?? null) : null,
+    split !== null && !cropping ? (info?.path ?? null) : null,
     info && split !== null ? beforeAdjustments : null,
     ...previewSize,
   );
+  // The part of the frame on screen, and its size in actual pixels.
+  const shownCrop = !cropping && cropIsActive(shown.crop) ? shown.crop : null;
+  const pixelSize = info
+    ? { w: info.width * (shownCrop?.width ?? 1), h: info.height * (shownCrop?.height ?? 1) }
+    : null;
   useEffect(() => setHoverAdjustments(null), [info?.path]);
 
   const masks = useMasks(info?.path ?? null, adjustments);
@@ -409,12 +424,16 @@ export default function App() {
     setPicking(null);
     setSelectedLight(null);
     setLightDrag(false);
+    setCropping(false);
   }, [info?.path]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (exportOpen) return; // the modal owns the keyboard
-      if (e.key === "Escape") setPicking(null);
+      if (e.key === "Escape") {
+        setPicking(null);
+        setCropping(false);
+      }
       const mod = e.metaKey || e.ctrlKey;
       const inField =
         e.target instanceof HTMLInputElement ||
@@ -450,6 +469,8 @@ export default function App() {
         step(1);
       } else if (!inField && e.key === "ArrowLeft") {
         step(-1);
+      } else if (!inField && !mod && e.key.toLowerCase() === "c" && info) {
+        setCropping((c) => !c);
       } else if (!inField && !mod && e.key.toLowerCase() === "y") {
         setSplit((v) => (v === null ? 0.5 : null));
       } else if (e.key === "\\" && !e.repeat) {
@@ -549,7 +570,7 @@ export default function App() {
             className="btn primary-outline"
             disabled={!info}
             onClick={() => setExportOpen(true)}
-            title="Export TIFF, layered PSD or enhanced DNG (⌘E)"
+            title="Export TIFF, layered PSD, enhanced DNG, JPEG or PNG (⌘E)"
           >
             Export…
           </button>
@@ -596,6 +617,26 @@ export default function App() {
                   onLightDepth={nudgeLightDepth}
                   onDropLight={dropLight}
                   onLightPrepare={() => setLightDrag(true)}
+                  frame={shownCrop}
+                  pixelSize={pixelSize}
+                  cropTool={
+                    cropping
+                      ? {
+                          crop: adjustments.crop,
+                          rotation: adjustments.lens.rotation,
+                          onChange: (crop) => history.edit((a) => ({ ...a, crop })),
+                          onRotate: (rotation) => history.edit((a) => ({ ...a, lens: { ...a.lens, rotation } })),
+                          onEnd: history.endEdit,
+                          onReset: () =>
+                            history.commit((a) => ({
+                              ...a,
+                              crop: { ...defaultCrop(), aspect: a.crop.aspect },
+                              lens: { ...a.lens, rotation: 0 },
+                            })),
+                          onDone: () => setCropping(false),
+                        }
+                      : null
+                  }
                 />
               </ErrorBoundary>
             )}
@@ -633,7 +674,7 @@ export default function App() {
             <Histogram preview={preview} />
             <div className="panel-scroll">
               <ErrorBoundary area="the side panel">
-                {info && <SceneCard info={info} />}
+                {info && <SceneCard info={info} preview={preview} />}
                 {info && (
                   <BatchSyncCard
                     info={info}
@@ -657,6 +698,8 @@ export default function App() {
                     setPicking={setPicking}
                     selectedLight={selectedLight}
                     setSelectedLight={setSelectedLight}
+                    cropping={cropping}
+                    setCropping={setCropping}
                   />
                 ) : (
                   <p className="note pad">Select a photo to start editing.</p>

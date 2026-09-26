@@ -398,10 +398,198 @@ code {
   height: 100%;
 }
 
+.viewer {
+  overflow: hidden;
+}
+
+.viewer.can-pan {
+  cursor: grab;
+}
+
+.viewer.is-panning,
+.viewer.is-panning * {
+  cursor: grabbing;
+}
+
+.viewer-overlay-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .viewer-image .viewer-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
+}
+
+/* Zoom: Fit / 100% / − readout +, bottom right. */
+.viewer-zoom {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 60%);
+  font-size: 11px;
+  color: #fff;
+}
+
+.viewer-zoom button {
+  min-width: 24px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.viewer-zoom button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+.viewer-zoom button.is-active {
+  color: var(--accent);
+}
+
+.viewer-zoom output {
+  min-width: 40px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Crop tool: the kept rectangle over a dimmed frame, thirds grid, handles, and a
+   straighten knob above. */
+.crop-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.crop-shade {
+  position: absolute;
+  box-shadow: 0 0 0 100vmax rgb(0 0 0 / 55%);
+}
+
+.crop-box {
+  position: absolute;
+  border: 1px solid rgb(255 255 255 / 90%);
+  cursor: move;
+  touch-action: none;
+}
+
+.crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - 0.5px), rgb(255 255 255 / 45%) calc(33.333% - 0.5px) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px) calc(66.667% - 0.5px), rgb(255 255 255 / 45%) calc(66.667% - 0.5px) calc(66.667% + 0.5px), transparent calc(66.667% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.333% - 0.5px), rgb(255 255 255 / 45%) calc(33.333% - 0.5px) calc(33.333% + 0.5px), transparent calc(33.333% + 0.5px) calc(66.667% - 0.5px), rgb(255 255 255 / 45%) calc(66.667% - 0.5px) calc(66.667% + 0.5px), transparent calc(66.667% + 0.5px));
+}
+
+.crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid #fff;
+  background: rgb(0 0 0 / 35%);
+  touch-action: none;
+}
+
+.crop-handle.is-nw { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle.is-n { left: 50%; top: 0; cursor: ns-resize; }
+.crop-handle.is-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-handle.is-e { left: 100%; top: 50%; cursor: ew-resize; }
+.crop-handle.is-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-handle.is-s { left: 50%; top: 100%; cursor: ns-resize; }
+.crop-handle.is-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.crop-handle.is-w { left: 0; top: 50%; cursor: ew-resize; }
+
+.crop-rotate {
+  position: absolute;
+  left: 50%;
+  top: -30px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 60%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.crop-rotate::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  width: 1px;
+  height: 14px;
+  background: rgb(255 255 255 / 80%);
+}
+
+.crop-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(20 20 20 / 88%);
+  font-size: 12px;
+}
+
+.crop-aspects {
+  display: flex;
+  gap: 2px;
+}
+
+.crop-aspect {
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.crop-aspect.is-active {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.crop-angle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+
+.crop-angle input {
+  width: 140px;
+}
+
+.crop-angle output {
+  min-width: 44px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .viewer-status {
@@ -1564,6 +1752,40 @@ input[type="range"]::-moz-range-thumb {
   flex-basis: 0;
 }
 
+.palette-pair {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.palette-label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.luma-histogram {
+  display: block;
+  width: 100%;
+  height: 40px;
+  background: var(--panel-2);
+  border-radius: 4px;
+}
+
+.luma-histogram rect {
+  fill: var(--text-dim);
+}
+
+.luma-histogram .luma-mean {
+  stroke: var(--accent);
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
 .confirm {
   display: flex;
   flex-direction: column;
@@ -2019,4 +2241,38 @@ input[type="range"]::-moz-range-thumb {
   stroke-dasharray: 4 3;
   stroke-width: 1.5;
   opacity: 0.8;
+}
+
+/* AI Mentor live status. */
+.mentor-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.mentor-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.mentor-dot.is-busy {
+  background: var(--accent);
+  animation: mentor-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mentor-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mentor-dot.is-busy {
+    animation: none;
+  }
 }

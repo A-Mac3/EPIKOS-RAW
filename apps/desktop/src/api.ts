@@ -66,6 +66,8 @@ const SAVE_FILTER: Record<ExportFormat, { title: string; name: string; extension
   tiff: { title: "Export 16-bit TIFF", name: "TIFF image", extensions: ["tif", "tiff"] },
   psd: { title: "Export layered PSD", name: "Photoshop document", extensions: ["psd"] },
   dng: { title: "Export enhanced DNG", name: "DNG raw", extensions: ["dng"] },
+  jpeg: { title: "Export JPEG", name: "JPEG image", extensions: ["jpg", "jpeg"] },
+  png: { title: "Export 16-bit PNG", name: "PNG image", extensions: ["png"] },
 };
 
 /** Native save dialog for an export; `null` if cancelled. */
