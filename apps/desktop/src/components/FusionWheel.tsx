@@ -79,10 +79,16 @@ export function FusionWheel({ styles, slots, onSlots, blend, onBlend, onCommit }
                 onSlots(next);
               }}
             >
-              {styles.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
+              {[...new Set(styles.map((s) => s.category))].map((cat) => (
+                <optgroup key={cat} label={cat}>
+                  {styles
+                    .filter((s) => s.category === cat)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                </optgroup>
               ))}
             </select>
             <output>{Math.round(shown[i] * 100)}%</output>

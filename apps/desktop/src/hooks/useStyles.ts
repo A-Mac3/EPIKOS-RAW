@@ -32,7 +32,8 @@ export function useStyles(path: string | null, adjustments: Adjustments) {
     const token = ++latest.current;
     const base = JSON.parse(baseKey) as Omit<Adjustments, "style">;
     const timer = window.setTimeout(async () => {
-      for (const s of styles) {
+      // Listed styles only, in the order the library shows them.
+      for (const s of styles.filter((x) => x.listed)) {
         if (token !== latest.current) return;
         const adj: Adjustments = { ...base, style: { id: s.id, amount: 100, skinProtection: s.skinProtection, blend: [] } };
         try {

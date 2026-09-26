@@ -5,6 +5,14 @@ Cross-platform RAW/DNG editor (JPEG, PNG and TIFF too). Product spec: [PRD.md](P
 Open a folder (⌘O), a single photo (⇧⌘O), or drop photos or folders anywhere on the
 window; photos opened one by one get the same filmstrip, masks and exports as a folder.
 
+The left panel (◧) holds **Presets & Styles** (17 styles in four categories, the Style
+Fusion Matrix with any four styles in its corners, and imported `.cube` 3D LUTs; rest the
+pointer on a card to preview it), the **AI Mentor** (a rule-based reading of the photo
+with a recommended starting point and live feedback on the edit) and **History** (every
+step, clickable). **Split** (Y) wipes between before and after. Edits save automatically
+to `<photo>.epikos.json` (and an Adobe-compatible `.xmp`) and come back when the photo
+is reopened.
+
 ## Layout
 
 | Path | What |
@@ -15,7 +23,7 @@ window; photos opened one by one get the same filmstrip, masks and exports as a 
 | `crates/epikos-sidecar` | Non-destructive `.epikos.json` (canonical) and Adobe-compatible `.xmp` |
 | `crates/epikos-masks` | On-device models via ONNX Runtime (CPU): IS-Net subject and skyseg sky masks, BiSeNet face parsing for eyes and hair (Step 3), Depth Anything V2 Small depth (Steps 3 and 6) |
 | `crates/epikos-engine` | Session layer for front-ends: image cache, previews, sidecar policy, Step 3 masks (subject, background, sky, skin, eyes, hair, foreground), the Lensfun lens database (`data/lensfun`, CC BY-SA 3.0), TIFF / layered PSD / enhanced DNG export, natural-language look prompts, scene analysis and story-arc sync |
-| `crates/epikos-cli` | `epikos inspect / sidecar / develop` |
+| `crates/epikos-cli` | `epikos inspect / sidecar / develop / export / analyze / story / mentor / styles` |
 | `apps/desktop` | Tauri 2 + React/TypeScript desktop app (`src-tauri` = Rust commands) |
 
 ## Develop

@@ -13,6 +13,10 @@ interface Props {
   error: string | null;
   loading: boolean;
   showingBefore: boolean;
+  /** Split view: the unedited render, and where the divider is (0–1 across). */
+  before?: Preview | null;
+  split?: number | null;
+  onSplit?: (x: number) => void;
   /** Mask drawn over the image, stretched to its frame. */
   overlay: Mask | null;
   /** Reports the drawable area in device pixels so previews match the screen. */
@@ -41,6 +45,9 @@ export function Viewer({
   error,
   loading,
   showingBefore,
+  before = null,
+  split = null,
+  onSplit,
   overlay,
   onResize,
   marker,
@@ -58,6 +65,7 @@ export function Viewer({
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlayCanvas = useRef<HTMLCanvasElement>(null);
+  const beforeCanvas = useRef<HTMLCanvasElement>(null);
   const [cssSize, setCssSize] = useState({ w: 0, h: 0 });
 
   useLayoutEffect(() => {
@@ -82,6 +90,17 @@ export function Viewer({
     }
     c.getContext("2d")!.putImageData(new ImageData(preview.rgba, preview.width, preview.height), 0, 0);
   }, [preview]);
+
+  useEffect(() => {
+    const c = beforeCanvas.current;
+    if (!c || !before) return;
+    if (c.width !== before.width || c.height !== before.height) {
+      c.width = before.width;
+      c.height = before.height;
+    }
+    c.getContext("2d")!.putImageData(new ImageData(before.rgba, before.width, before.height), 0, 0);
+  }, [before]);
+  const splitting = split !== null && before !== null && !showingBefore;
 
   useEffect(() => {
     const c = overlayCanvas.current;
@@ -120,7 +139,41 @@ export function Viewer({
           onPick(clamp((e.clientX - box.left) / box.width), clamp((e.clientY - box.top) / box.height));
         }}
       >
-        <canvas ref={canvas} />
+        {/* Split view: the unedited render under the edit, which is clipped to the right. */}
+        <canvas ref={beforeCanvas} className="viewer-before" style={{ display: splitting ? "block" : "none" }} />
+        <canvas ref={canvas} style={splitting ? { clipPath: `inset(0 0 0 ${split! * 100}%)` } : undefined} />
+        {splitting && (
+          <div
+            className="viewer-split"
+            style={{ left: `${split! * 100}%` }}
+            role="slider"
+            aria-label="Before / after divider"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(split! * 100)}
+            tabIndex={0}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+              const b = imageRef.current!.getBoundingClientRect();
+              onSplit?.(Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)));
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowLeft") onSplit?.(Math.max(0, split! - 0.02));
+              if (e.key === "ArrowRight") onSplit?.(Math.min(1, split! + 0.02));
+            }}
+          >
+            <span className="viewer-split-knob" aria-hidden>
+              ⇔
+            </span>
+            <span className="viewer-split-label is-before">Before</span>
+            <span className="viewer-split-label is-after">After</span>
+          </div>
+        )}
         {/* Always mounted so hiding it (e.g. while showing Before) keeps the drawing. */}
         <canvas
           ref={overlayCanvas}

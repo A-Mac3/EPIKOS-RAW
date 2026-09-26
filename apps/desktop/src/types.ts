@@ -172,7 +172,50 @@ export interface ToneCurve {
 
 export const CURVE_CHANNELS = ["rgb", "red", "green", "blue"] as const;
 export type CurveChannel = (typeof CURVE_CHANNELS)[number];
-export type Curves = Record<CurveChannel, ToneCurve>;
+export type Curves = Record<CurveChannel, ToneCurve> & {
+  /** Standard contrast S-curve under the master curve. */
+  sCurve: SCurve;
+};
+
+/** Amount 0…100; pivot 0…100 is the tone it turns around (50 = middle). */
+export interface SCurve {
+  enabled: boolean;
+  amount: number;
+  pivot: number;
+}
+
+/** An imported `.cube` LUT by name, blended at `amount` 0…100; empty name = none. */
+export interface LutRef {
+  name: string;
+  amount: number;
+}
+
+export interface LutInfo {
+  name: string;
+  title: string | null;
+  size: number;
+}
+
+/** AI Mentor: what it sees, why it matters and what to do. */
+export interface Insight {
+  topic: string;
+  observation: string;
+  why: string;
+  how: string;
+}
+
+export interface MentorReport {
+  summary: string;
+  insights: Insight[];
+  recommended: Adjustments;
+  changes: string[];
+  analysisMs: number;
+}
+
+export interface Feedback {
+  level: "praise" | "warning" | "tip";
+  text: string;
+}
 
 /** Hue in degrees on the HSV wheel, saturation 0…100, balance −100…100. */
 export interface SplitToning {
@@ -216,10 +259,16 @@ export interface LookPrompt {
   unknown: string[];
 }
 
+export const STYLE_CATEGORIES = ["Film Simulations", "Portraits & Skin", "Landscape & Nature", "Cinematic"] as const;
+
 export interface StyleInfo {
   id: string;
   name: string;
   world: string;
+  /** Library tab (one of STYLE_CATEGORIES; "Legacy" for unlisted styles). */
+  category: string;
+  /** Offered in the library (earlier styles still resolve but aren't listed). */
+  listed: boolean;
   description: string;
   skinProtection: number;
   swatch: [string, string];
@@ -250,6 +299,7 @@ export interface Adjustments {
   splitToning: SplitToning;
   finishing: Finishing;
   style: StyleRef;
+  lut: LutRef;
 }
 
 export interface SourceRef {
@@ -449,6 +499,7 @@ export function defaultAdjustments(): Adjustments {
       red: defaultToneCurve(),
       green: defaultToneCurve(),
       blue: defaultToneCurve(),
+      sCurve: { enabled: false, amount: 50, pivot: 50 },
     },
     splitToning: { highlightHue: 40, highlightSaturation: 0, shadowHue: 215, shadowSaturation: 0, balance: 0 },
     finishing: {
@@ -461,6 +512,7 @@ export function defaultAdjustments(): Adjustments {
       vignetteRoundness: 0,
     },
     style: { id: "", amount: 100, skinProtection: 0, blend: [] },
+    lut: { name: "", amount: 100 },
   };
 }
 

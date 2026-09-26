@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   inTauri,
   listFiles,
+  listLuts,
   listFolder,
   onFileDrag,
   openImage,
@@ -21,6 +22,9 @@ import { LookPromptBar } from "./components/LookPromptBar";
 import { BatchSyncCard, SceneCard } from "./components/ScenePanel";
 import { StepsPanel } from "./components/StepsPanel";
 import { StylePanel } from "./components/StylePanel";
+import { HistoryPanel, LeftSidebar } from "./components/LeftSidebar";
+import { MentorPanel } from "./components/MentorPanel";
+import { describeChange } from "./historyLabel";
 import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
 import { depthAt, useDepth } from "./hooks/useDepth";
@@ -33,7 +37,9 @@ import {
   type Adjustments,
   type FileEntry,
   type ImageInfo,
+  type LutInfo,
   type PickTarget,
+  type StyleInfo,
   type StoryArc,
 } from "./types";
 
@@ -75,19 +81,57 @@ export default function App() {
   const [save, setSave] = useState<SaveStatus>({ kind: "idle" });
   const [exportOpen, setExportOpen] = useState(false);
 
-  const history = useHistory<Adjustments>(defaultAdjustments());
+  const stylesRef = useRef<StyleInfo[]>([]);
+  const history = useHistory<Adjustments>(defaultAdjustments(), (b, a) => describeChange(b, a, stylesRef.current));
   const adjustments = history.value;
-  const beforeAdjustments = useMemo(defaultAdjustments, []);
+  // The unedited image in the same framing (lens, straighten), so Before and the
+  // split view line up with the edit.
+  const lensKey = JSON.stringify(adjustments.lens);
+  const beforeAdjustments = useMemo(() => ({ ...defaultAdjustments(), lens: adjustments.lens }), [lensKey]);
+  /** A style or LUT previewed while the pointer rests on its card. */
+  const [hoverAdjustments, setHoverAdjustments] = useState<Adjustments | null>(null);
+  /** Split view divider (0–1 across), or null when off. */
+  const [split, setSplit] = useState<number | null>(null);
+  const [leftOpen, setLeftOpen] = useState(() => {
+    try {
+      return localStorage.getItem("epikos.sidebar.open") !== "false";
+    } catch {
+      return true;
+    }
+  });
+  const toggleLeft = () =>
+    setLeftOpen((o) => {
+      try {
+        localStorage.setItem("epikos.sidebar.open", String(!o));
+      } catch {
+        // Remembering the panel is a convenience only.
+      }
+      return !o;
+    });
+  const [luts, setLuts] = useState<LutInfo[]>([]);
+  const refreshLuts = useCallback(() => {
+    listLuts().then(setLuts, () => setLuts([]));
+  }, []);
+  useEffect(() => {
+    if (inTauri) refreshLuts();
+  }, [refreshLuts]);
 
+  const previewSize = [Math.min(viewSize.w, MAX_PREVIEW_SIDE), Math.min(viewSize.h, MAX_PREVIEW_SIDE)] as const;
   const { preview, error: renderError, busy } = usePreview(
     info?.path ?? null,
-    info ? (before ? beforeAdjustments : adjustments) : null,
-    Math.min(viewSize.w, MAX_PREVIEW_SIDE),
-    Math.min(viewSize.h, MAX_PREVIEW_SIDE),
+    info ? (before ? beforeAdjustments : (hoverAdjustments ?? adjustments)) : null,
+    ...previewSize,
   );
+  const { preview: beforePreview } = usePreview(
+    split !== null ? (info?.path ?? null) : null,
+    info && split !== null ? beforeAdjustments : null,
+    ...previewSize,
+  );
+  useEffect(() => setHoverAdjustments(null), [info?.path]);
 
   const masks = useMasks(info?.path ?? null, adjustments);
   const { styles, thumbs } = useStyles(info?.path ?? null, adjustments);
+  stylesRef.current = styles;
   const [picking, setPicking] = useState<PickTarget>(null);
   const promptRef = useRef<HTMLInputElement>(null);
   const [lightDrag, setLightDrag] = useState(false);
@@ -406,6 +450,8 @@ export default function App() {
         step(1);
       } else if (!inField && e.key === "ArrowLeft") {
         step(-1);
+      } else if (!inField && !mod && e.key.toLowerCase() === "y") {
+        setSplit((v) => (v === null ? 0.5 : null));
       } else if (e.key === "\\" && !e.repeat) {
         setBefore(true);
       }
@@ -435,11 +481,22 @@ export default function App() {
   }
 
   return (
-    <div className={`app${source ? "" : " is-empty"}`}>
+    <div className={`app${source ? "" : " is-empty"}${leftOpen ? "" : " left-collapsed"}`}>
       <header className="topbar">
         <div className="brand">
           EPIKOS <span>RAW</span>
         </div>
+        {source && (
+          <button
+            type="button"
+            className={`btn icon${leftOpen ? " is-active" : ""}`}
+            onClick={toggleLeft}
+            title={leftOpen ? "Hide the left panel" : "Show Presets & Styles, AI Mentor and History"}
+            aria-pressed={leftOpen}
+          >
+            ◧
+          </button>
+        )}
         <button type="button" className="btn" onClick={() => void chooseFolder()} title="Open folder (⌘O)">
           Open folder…
         </button>
@@ -479,6 +536,16 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={`btn${split !== null ? " is-active" : ""}`}
+            disabled={!info}
+            onClick={() => setSplit((v) => (v === null ? 0.5 : null))}
+            title="Split view: drag the divider to wipe between before and after (Y)"
+            aria-pressed={split !== null}
+          >
+            Split
+          </button>
+          <button
+            type="button"
             className="btn primary-outline"
             disabled={!info}
             onClick={() => setExportOpen(true)}
@@ -514,6 +581,9 @@ export default function App() {
                   error={openError ?? renderError}
                   loading={loading}
                   showingBefore={before}
+                  before={beforePreview}
+                  split={split}
+                  onSplit={setSplit}
                   overlay={depth.depth ?? masks.overlayMask}
                   onResize={onResize}
                   marker={lightMarker}
@@ -530,6 +600,35 @@ export default function App() {
               </ErrorBoundary>
             )}
           </main>
+          {leftOpen && (
+            <ErrorBoundary area="the left panel">
+              <LeftSidebar
+                content={{
+                  styles: info ? (
+                    <StylePanel
+                      styles={styles}
+                      thumbs={thumbs}
+                      adjustments={adjustments}
+                      edit={history.edit}
+                      endEdit={history.endEdit}
+                      commit={history.commit}
+                      onPreview={setHoverAdjustments}
+                      luts={luts}
+                      onLutsChanged={refreshLuts}
+                    />
+                  ) : (
+                    <p className="note pad">Select a photo to browse styles.</p>
+                  ),
+                  mentor: info ? (
+                    <MentorPanel info={info} adjustments={adjustments} commit={history.commit} />
+                  ) : (
+                    <p className="note pad">Select a photo for the mentor&apos;s reading.</p>
+                  ),
+                  history: <HistoryPanel steps={history.steps} index={history.index} goTo={history.goTo} />,
+                }}
+              />
+            </ErrorBoundary>
+          )}
           <aside className="panel">
             <Histogram preview={preview} />
             <div className="panel-scroll">
@@ -542,16 +641,6 @@ export default function App() {
                     group={group}
                     flushSave={flushSave}
                     onChanged={refreshFiles}
-                  />
-                )}
-                {info && (
-                  <StylePanel
-                    styles={styles}
-                    thumbs={thumbs}
-                    adjustments={adjustments}
-                    edit={history.edit}
-                    endEdit={history.endEdit}
-                    commit={history.commit}
                   />
                 )}
                 {info ? (
@@ -594,9 +683,7 @@ export default function App() {
             </button>
           </div>
           {folderError && <p className="error">{folderError}</p>}
-          <p className="hint">
-            Sony ARW · Canon CR3/CR2 · Nikon NEF · Fujifilm RAF · Leica DNG · Apple ProRAW · JPEG · PNG · TIFF
-          </p>
+          <p className="hint">ARW · CR3/CR2 · NEF · RAF · DNG · Apple ProRAW · JPEG · PNG · TIFF</p>
         </div>
       )}
       {source && folderError && (

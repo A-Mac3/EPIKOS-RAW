@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { curvePoints, isIdentity } from "../curve";
-import type { CurveChannel, Curves } from "../types";
+import { curvePoints, isIdentity, sCurveY } from "../curve";
+import { CURVE_CHANNELS, type CurveChannel, type Curves } from "../types";
 
 const SIZE = 200;
 const PAD = 6;
@@ -48,7 +48,8 @@ export function CurveGraph({ curves, channel, histogram, onPoints, onCommit }: P
   const curve = curves[channel];
   // Without a point curve, show the implied corners as handles.
   const points: Pt[] = curve.points.length > 0 ? curve.points : [[0, 0], [1, 1]];
-  const others = (Object.keys(curves) as CurveChannel[]).filter((c) => c !== channel && !isIdentity(curves[c]));
+  const others = CURVE_CHANNELS.filter((c) => c !== channel && !isIdentity(curves[c]));
+  const sActive = channel === "rgb" && curves.sCurve.enabled && curves.sCurve.amount > 0;
 
   const toCurve = (e: PointerEvent): Pt => {
     const box = svg.current!.getBoundingClientRect();
@@ -148,6 +149,12 @@ export function CurveGraph({ curves, channel, histogram, onPoints, onCommit }: P
       {others.map((c) => (
         <path key={c} d={path(curvePoints(curves[c]))} stroke={STROKE[c]} className="curve-other" />
       ))}
+      {sActive && (
+        <path
+          d={path(Array.from({ length: 65 }, (_, i) => [i / 64, sCurveY(curves.sCurve, i / 64)] as Pt))}
+          className="curve-s"
+        />
+      )}
       <path d={path(curvePoints(curve))} stroke={STROKE[channel]} className="curve-main" />
       {points.map((p, i) => {
         const [cx, cy] = toSvg(p);

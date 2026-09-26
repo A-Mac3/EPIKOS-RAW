@@ -1,6 +1,6 @@
 // The Step 7 curve shape, mirrored from crates/epikos-pipeline/src/look/tone.rs so
 // the curve graph draws exactly what the engine applies. Keep the two in step.
-import type { ToneCurve } from "./types";
+import type { ToneCurve, SCurve } from "./types";
 
 const REGION_AMPLITUDE = 0.12;
 const POINT_RANGE = 0.15;
@@ -118,4 +118,16 @@ export function bakeCurve(c: ToneCurve): ToneCurve {
     white: 0,
     points: BAKE_AT.map((x) => [x, at(x)] as [number, number]),
   };
+}
+
+/**
+ * The standard S-curve (mirrors `s_curve` in tone.rs): a power curve on each side of
+ * the pivot, black, white and pivot fixed.
+ */
+export function sCurveY(s: SCurve, x: number): number {
+  if (!s.enabled || s.amount <= 0) return x;
+  const p = 0.25 + 0.5 * Math.min(1, Math.max(0, s.pivot / 100));
+  const g = 1 + 1.5 * Math.min(1, Math.max(0, s.amount / 100));
+  const v = Math.min(1, Math.max(0, x));
+  return v <= p ? p * (v / p) ** g : 1 - (1 - p) * ((1 - v) / (1 - p)) ** g;
 }

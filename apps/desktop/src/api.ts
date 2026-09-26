@@ -14,8 +14,11 @@ import type {
   LookPrompt,
   AutoTone,
   AutoUpright,
+  Feedback,
+  LutInfo,
   Mask,
   MaskModels,
+  MentorReport,
   MaskTarget,
   Preview,
   SaveReport,
@@ -180,3 +183,27 @@ export const autoTone = (path: string, adjustments: Adjustments) =>
 /** Step 1 auto-geometry: straighten angle and vertical perspective. */
 export const autoUpright = (path: string, adjustments: Adjustments) =>
   invoke<AutoUpright>("auto_upright", { path, adjustments });
+
+/** AI Mentor: insights and a recommended starting point for the photo. */
+export const mentor = (path: string, adjustments: Adjustments) =>
+  invoke<MentorReport>("mentor", { path, adjustments });
+
+/** Live feedback on the current edit. */
+export const critique = (path: string, adjustments: Adjustments) =>
+  invoke<Feedback[]>("critique", { path, adjustments });
+
+export const listLuts = () => invoke<LutInfo[]>("list_luts");
+
+/** Pick a `.cube` file and import it; `null` if cancelled. */
+export async function importLut(): Promise<LutInfo | null> {
+  const file = await open({
+    directory: false,
+    multiple: false,
+    title: "Import 3D LUT",
+    filters: [{ name: "3D LUT", extensions: ["cube", "CUBE"] }],
+  });
+  if (typeof file !== "string") return null;
+  return invoke<LutInfo>("import_lut", { path: file });
+}
+
+export const removeLut = (name: string) => invoke<void>("remove_lut", { name });

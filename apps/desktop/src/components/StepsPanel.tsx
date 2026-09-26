@@ -943,6 +943,40 @@ export function StepsPanel({
           Reset {CURVE_LABEL[curveChannel]} curve
         </button>
 
+        <Toggle
+          label="Standard S-Curve"
+          checked={a.curves.sCurve.enabled}
+          onChange={(v) => commit((x) => ({ ...x, curves: { ...x.curves, sCurve: { ...x.curves.sCurve, enabled: v } } }))}
+        />
+        <Slider
+          label="S-Curve strength"
+          value={a.curves.sCurve.amount}
+          min={0}
+          max={100}
+          step={1}
+          defaultValue={50}
+          format={(v) => v.toFixed(0)}
+          disabled={!a.curves.sCurve.enabled}
+          onChange={(v) => edit((x) => ({ ...x, curves: { ...x.curves, sCurve: { ...x.curves.sCurve, amount: v } } }))}
+          onCommit={endEdit}
+        />
+        <Slider
+          label="S-Curve contrast pivot"
+          value={a.curves.sCurve.pivot}
+          min={0}
+          max={100}
+          step={1}
+          defaultValue={50}
+          format={(v) => (v === 50 ? "mid" : v < 50 ? `darker ${50 - v}` : `brighter ${v - 50}`)}
+          disabled={!a.curves.sCurve.enabled}
+          onChange={(v) => edit((x) => ({ ...x, curves: { ...x.curves, sCurve: { ...x.curves.sCurve, pivot: v } } }))}
+          onCommit={endEdit}
+        />
+        <p className="hint">
+          A classic contrast S under your RGB curve (shown dashed): tones below the pivot darken, above it brighten, and
+          black and white stay put. Move the pivot down to keep shadows open, up to protect highlights.
+        </p>
+
         <span className="field-label">Split toning</span>
         {toneRow("Highlights", "highlightHue", "highlightSaturation", 40)}
         {toneRow("Shadows", "shadowHue", "shadowSaturation", 215)}

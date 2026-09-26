@@ -39,58 +39,284 @@ const FILES: FileEntry[] = [
 }));
 const saved = new Map<string, DevelopDocument>();
 const presync = new Map<string, DevelopDocument | null>();
+const luts: { name: string; title: string | null; size: number }[] = [];
 const AS_SHOT = { temperature: 5600, tint: 4 };
 
-// Copy of the engine's built-in styles (crates/epikos-pipeline/src/look/style.rs).
+// Generated with `epikos styles` (crates/epikos-pipeline/src/look/style.rs).
 const STYLES: StyleInfo[] = [
   {
-    id: "dark-melanin-glow",
-    name: "Dark Melanin Glow",
-    world: "High-Fashion & Melanin Precision",
-    description: "Rich chocolate and bronze undertones with a clean, luminous glow.",
-    skinProtection: 70,
-    swatch: ["#3b2116", "#c98a4b"],
+    "id": "portra-400",
+    "name": "Portra 400",
+    "world": "Cinematic & Film Emulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Kodak's portrait stock: warm, forgiving skin, soft contrast, gently faded blacks and pastel greens and blues.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#b99a7e",
+      "#f0d5b8"
+    ]
   },
   {
-    id: "silver-charcoal",
-    name: "Silver & Charcoal",
-    world: "Character & High-Contrast Portraiture",
-    description: "Black and white with deep blacks and crisp midtone texture.",
-    skinProtection: 60,
-    swatch: ["#111214", "#d9dadc"],
+    "id": "fuji-pro-400h",
+    "name": "Fuji Pro 400H",
+    "world": "Cinematic & Film Emulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Fujifilm's wedding stock: airy pastels, minty greens, cool-green shadows and soft, bright highlights.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#8fb3a3",
+      "#eef2e6"
+    ]
   },
   {
-    id: "volumetric-golden-hour",
-    name: "Volumetric Golden Hour",
-    world: "Atmospheric & Environmental Landscapes",
-    description: "Warm low-sun light with soft bloom and a hazy, lifted atmosphere.",
-    skinProtection: 75,
-    swatch: ["#5a3a1c", "#f2b45a"],
+    "id": "cinestill-800t",
+    "name": "CineStill 800T",
+    "world": "Cinematic & Film Emulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Tungsten motion-picture stock: cool blue night colour, a red-orange halation glow around lights and visible grain.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#1d2b4a",
+      "#e0503a"
+    ]
   },
   {
-    id: "teal-orange",
-    name: "Teal & Orange",
-    world: "Cinematic & Film Emulation",
-    description: "Blockbuster grade: teal shadows against warm highlights.",
-    skinProtection: 80,
-    swatch: ["#0f4c55", "#e08a3c"],
+    "id": "leica-monochrom",
+    "name": "Leica Monochrom",
+    "world": "Character & High-Contrast Portraiture",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Black and white with the smooth, deep tonality of a monochrome sensor: rich midtones, fine texture, skin lifted from dark clothing.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#1a1a1a",
+      "#e8e8e8"
+    ]
   },
   {
-    id: "moody-earthy",
-    name: "Moody & Earthy",
-    world: "Atmospheric & Environmental Landscapes",
-    description: "Muted foliage, slate blues, earth-tone shadows.",
-    skinProtection: 70,
-    swatch: ["#2d2a22", "#6b7a5e"],
+    "id": "ilford-hp5",
+    "name": "Ilford HP5",
+    "world": "Character & High-Contrast Portraiture",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Classic black-and-white press film: punchy contrast, dark skies and a gritty, visible grain.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#0e0e0e",
+      "#cfcfcf"
+    ]
   },
   {
-    id: "high-key-editorial",
-    name: "High-Key Editorial",
-    world: "High-Fashion & Melanin Precision",
-    description: "Luminous skin, pastel shadows, gentle contrast.",
-    skinProtection: 60,
-    swatch: ["#d9d2e6", "#f7efe9"],
+    "id": "dark-melanin-glow",
+    "name": "Dark Melanin Glow",
+    "world": "High-Fashion & Melanin Precision",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Rich chocolate and bronze undertones with a clean, luminous glow. Shine is balanced, not flattened; whites stay neutral.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#3b2116",
+      "#c98a4b"
+    ]
   },
+  {
+    "id": "soft-editorial",
+    "name": "Soft Editorial",
+    "world": "High-Fashion & Melanin Precision",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Magazine-clean and gentle: soft skin, lifted shadows, quiet background colour and low contrast.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#c7b6ae",
+      "#f6ede8"
+    ]
+  },
+  {
+    "id": "amber-warmth",
+    "name": "Amber Warmth",
+    "world": "High-Fashion & Melanin Precision",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Golden-amber light: warm, glowing skin and honeyed highlights against cooled-down greens and blues.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#6b3a18",
+      "#f2a54a"
+    ]
+  },
+  {
+    "id": "high-key-beauty",
+    "name": "High-Key Beauty",
+    "world": "High-Fashion & Melanin Precision",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Bright beauty light: luminous, evenly smoothed skin, pastel shadows and gentle contrast.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#e3d6dc",
+      "#fbf5f1"
+    ]
+  },
+  {
+    "id": "moody-pacific",
+    "name": "Moody Pacific",
+    "world": "Atmospheric & Environmental Landscapes",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Cold coast light: deep slate blues and teals, muted greens, dark shadows and a cool sea mist.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#1f2f3a",
+      "#8aa1ab"
+    ]
+  },
+  {
+    "id": "golden-hour-flare",
+    "name": "Golden Hour Flare",
+    "world": "Atmospheric & Environmental Landscapes",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Low sun straight into the lens: warm light, a strong golden bloom and rays through the bright sky.",
+    "skinProtection": 75.0,
+    "swatch": [
+      "#5a3a1c",
+      "#ffc15e"
+    ]
+  },
+  {
+    "id": "deep-emerald",
+    "name": "Deep Emerald",
+    "world": "Atmospheric & Environmental Landscapes",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Rich, dark forest greens and teals with deep shadows and crisp leaf texture.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#0d2a1c",
+      "#3f8a5a"
+    ]
+  },
+  {
+    "id": "vivid-alpine",
+    "name": "Vivid Alpine",
+    "world": "Atmospheric & Environmental Landscapes",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Crisp mountain air: deep blue skies, clear greens, bright snow and strong detail.",
+    "skinProtection": 75.0,
+    "swatch": [
+      "#1a5fa8",
+      "#e8f4ff"
+    ]
+  },
+  {
+    "id": "teal-orange",
+    "name": "Teal & Orange",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Blockbuster grade: teal shadows and backgrounds against warm highlights. Skin stays warm and natural.",
+    "skinProtection": 80.0,
+    "swatch": [
+      "#0f4c55",
+      "#e08a3c"
+    ]
+  },
+  {
+    "id": "bleach-bypass",
+    "name": "Bleach Bypass",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "The skipped-bleach film process: muted, silvery colour with hard contrast and gritty detail.",
+    "skinProtection": 30.0,
+    "swatch": [
+      "#2b2e30",
+      "#b8b4a8"
+    ]
+  },
+  {
+    "id": "cyberpunk",
+    "name": "Cyberpunk",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Neon night city: purple shadows, magenta and cyan light, glowing highlights.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#2a0f4a",
+      "#ff3cac"
+    ]
+  },
+  {
+    "id": "vintage-pastel",
+    "name": "Vintage Pastel",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "A faded 1970s print: soft pastels, pink highlights, green-cyan shadows and gentle grain.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#a8c9c2",
+      "#f5d6d9"
+    ]
+  },
+  {
+    "id": "silver-charcoal",
+    "name": "Silver & Charcoal",
+    "world": "Character & High-Contrast Portraiture",
+    "category": "Legacy",
+    "listed": false,
+    "description": "Black and white with deep blacks and crisp midtone texture. Skin keeps its tonal separation instead of sinking into mud.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#111214",
+      "#d9dadc"
+    ]
+  },
+  {
+    "id": "volumetric-golden-hour",
+    "name": "Volumetric Golden Hour",
+    "world": "Atmospheric & Environmental Landscapes",
+    "category": "Legacy",
+    "listed": false,
+    "description": "Warm low-sun light with soft bloom around the brights and a hazy, lifted atmosphere. Skin stays natural rather than orange.",
+    "skinProtection": 75.0,
+    "swatch": [
+      "#5a3a1c",
+      "#f2b45a"
+    ]
+  },
+  {
+    "id": "moody-earthy",
+    "name": "Moody & Earthy",
+    "world": "Atmospheric & Environmental Landscapes",
+    "category": "Legacy",
+    "listed": false,
+    "description": "Muted foliage, deep slate blues and rich earth-tone shadows, with warm accents on skin.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#2d2a22",
+      "#6b7a5e"
+    ]
+  },
+  {
+    "id": "high-key-editorial",
+    "name": "High-Key Editorial",
+    "world": "High-Fashion & Melanin Precision",
+    "category": "Legacy",
+    "listed": false,
+    "description": "Bright and clean: luminous skin, soft pastel shadows, gentle contrast.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#d9d2e6",
+      "#f7efe9"
+    ]
+  }
 ];
 
 export function installMockBackend() {
@@ -100,11 +326,68 @@ export function installMockBackend() {
     const a = args as Record<string, unknown>;
     await new Promise((r) => setTimeout(r, 15)); // pretend IPC latency
     switch (cmd) {
-      case "plugin:dialog|open":
-        // Open Photo asks for a file, Open Folder for a directory.
-        return (a.options as { directory?: boolean } | undefined)?.directory === false
-          ? `${FOLDER}/L1000583.DNG`
-          : FOLDER;
+      case "plugin:dialog|open": {
+        // Open Photo asks for a file, Open Folder for a directory, Import LUT for a .cube.
+        const o = a.options as { directory?: boolean; filters?: { extensions: string[] }[] } | undefined;
+        if (o?.filters?.some((f) => f.extensions.includes("cube"))) return "/mock/luts/Kodak 2383.cube";
+        return o?.directory === false ? `${FOLDER}/L1000583.DNG` : FOLDER;
+      }
+      case "list_luts":
+        return luts;
+      case "import_lut": {
+        const name = String(a.path).split("/").pop()!.replace(/\.cube$/i, "");
+        if (!luts.some((l) => l.name === name)) luts.push({ name, title: name, size: 33 });
+        return luts.find((l) => l.name === name);
+      }
+      case "remove_lut":
+        luts.splice(luts.findIndex((l) => l.name === a.name), 1);
+        return null;
+      case "mentor": {
+        await new Promise((r) => setTimeout(r, 400));
+        const adj = structuredClone(a.adjustments as Adjustments);
+        const recommended = {
+          ...adj,
+          exposure: 1.24,
+          tone: { ...adj.tone, highlights: -66, blacks: -13 },
+          lens: { ...adj.lens, rotation: 0.69, vertical: 19 },
+          style: adj.style.id ? adj.style : { id: "dark-melanin-glow", amount: 70, skinProtection: 70, blend: [] },
+        };
+        return {
+          summary: "Close-up Portrait · first priority: framing",
+          insights: [
+            {
+              topic: "Framing",
+              observation: "The lines in the frame lean and converge (+0.7° tilt, +19 vertical perspective).",
+              why: "A tilted horizon or falling buildings read as a mistake and pull the eye to the edges.",
+              how: "Step 1: Auto upright, then fine-tune Straighten if the subject itself leans on purpose.",
+            },
+            {
+              topic: "Exposure",
+              observation: "The mid-tones sit about 1.2 stops below mid-grey.",
+              why: "Exposure sets where every other decision starts. This reading uses the whole frame, not the skin, so deep skin keeps its natural depth.",
+              how: "Step 2: Exposure to +1.24 EV (or Auto exposure & tone).",
+            },
+            {
+              topic: "Skin",
+              observation: "Skin covers 7.3% of the frame: deep tone (Monk ~8/10), neutral undertone, shine: some shine.",
+              why: "Deep skin loses its richness quickly: a warm grade or heavy contrast can turn it grey or muddy.",
+              how: "Keep Skin tone protection at 40–70% when grading (Step 5).",
+            },
+          ],
+          recommended,
+          changes: ["Straighten +0.69°, vertical +19", "Exposure +1.24 EV", "Highlights -66", "Blacks -13"],
+          analysisMs: 3100,
+        };
+      }
+      case "critique": {
+        const adj = a.adjustments as Adjustments;
+        const out: { level: string; text: string }[] = [];
+        if (adj.exposure > 2) out.push({ level: "warning", text: "2.4% of the image is clipping to white: lower Highlights or Exposure, or check Whites." });
+        if (adj.style.id) out.push({ level: "praise", text: "Skin tones are balanced: natural hue and depth, kept through the grade." });
+        if (adj.lens.rotation) out.push({ level: "praise", text: "Framing straightened: lines now read as intentional." });
+        if (out.length === 0) out.push({ level: "praise", text: "Nothing to flag: highlights, shadows and colour are all in a healthy range." });
+        return out;
+      }
       case "photo_extensions":
         return ["arw", "srf", "sr2", "cr3", "cr2", "crw", "nef", "nrw", "raf", "dng", "jpg", "jpeg", "png", "tif", "tiff"];
       case "list_files":
