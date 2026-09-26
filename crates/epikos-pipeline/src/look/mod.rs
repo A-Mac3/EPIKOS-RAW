@@ -74,6 +74,14 @@ pub fn look_masks(adj: &Adjustments) -> Vec<MaskTarget> {
     if look.needs_subject() {
         out.push(MaskTarget::Subject);
     }
+    if look.needs_skin() {
+        out.push(MaskTarget::Skin);
+    }
+    // Glow and light shafts keep the light source in the sky and off the subject.
+    if look.atmosphere.glow > 0.0 || look.atmosphere.shafts > 0.0 {
+        out.push(MaskTarget::Sky);
+        out.push(MaskTarget::Subject);
+    }
     // Background is the subject's inverse: the subject model serves both.
     for t in out.iter_mut() {
         if *t == MaskTarget::Background {
@@ -85,9 +93,22 @@ pub fn look_masks(adj: &Adjustments) -> Vec<MaskTarget> {
     out
 }
 
+/// One Step 3 local adjustment with its mask (0–1, one value per pixel, already
+/// fitted), exactly as the render applies it: for tools that preview or search a
+/// correction on a sample of pixels.
+pub fn apply_local_adjustment(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[f32]) {
+    local::apply_local(rgb, adj, mask);
+}
+
 /// Box blur of a plane (radius `r`), for other modules.
 pub(crate) fn box_plane(p: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     blur::box_blur(p, w, h, r)
+}
+
+/// Smooth `p` while snapping its edges to `guide`'s (joint guided filter), for other
+/// modules.
+pub(crate) fn guided_joint_plane(guide: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    blur::guided_joint(guide, p, w, h, r, eps)
 }
 
 /// Edge-aware smoothing of a plane (guided filter), for other modules.
@@ -120,6 +141,13 @@ pub fn skin_likelihood(rgb: &ImageRgbF32) -> Vec<f32> {
     let mut lab = rgb.clone();
     Oklab::new().planes_to_lab(&mut lab);
     skin::skin_map(&lab)
+}
+
+/// Skin likelihood of any Monk tone, fair to deepest (see `skin_pixel_relaxed`): too
+/// broad for a whole frame, meant to be multiplied by the subject mask.
+pub fn skin_likelihood_relaxed(rgb: &ImageRgbF32) -> Vec<f32> {
+    let lab = oklab_planes(rgb);
+    (0..lab.len()).into_par_iter().map(|i| skin::skin_pixel_relaxed(lab.r[i], lab.g[i], lab.b[i])).collect()
 }
 
 /// Everything Steps 4–5 and the style ask for, normalised.
@@ -281,6 +309,7 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         Some(if target == MaskTarget::Background { plane.iter().map(|v| 1.0 - v).collect() } else { plane })
     };
     let subject = look.needs_subject().then(|| mask(rgb, MaskTarget::Subject)).flatten();
+    let skin_mask = look.needs_skin().then(|| mask(rgb, MaskTarget::Skin)).flatten();
 
     for l in &look.local {
         // A mask whose model isn't installed does nothing, rather than everything.
@@ -296,6 +325,13 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         } else {
             vec![0.0; rgb.len()]
         };
+        // The engine's Skin mask (every Monk tone on the subject, and face-parsed skin)
+        // extends the colour model where it has one.
+        if look.needs_skin() {
+            if let Some(m) = skin_mask.as_ref() {
+                skin.iter_mut().zip(m).for_each(|(k, m)| *k = k.max(*m));
+            }
+        }
         if look.retouch_subject_only {
             if let Some(s) = &subject {
                 skin.iter_mut().zip(s).for_each(|(k, s)| *k *= s);
@@ -315,7 +351,19 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         .flatten()
         .map(|d| fit_depth(rgb, d));
     let glow_mask = if look.glow_subject_only { subject.as_deref() } else { None };
-    apply_atmosphere(rgb, &look.atmosphere, depth.as_deref(), glow_mask);
+    let lit = look.atmosphere.glow > 0.0 || look.atmosphere.shafts > 0.0;
+    let sky = lit.then(|| mask(rgb, MaskTarget::Sky)).flatten();
+    let scene_subject = if lit && subject.is_none() { mask(rgb, MaskTarget::Subject) } else { None };
+    apply_atmosphere(
+        rgb,
+        &look.atmosphere,
+        atmosphere::Scene {
+            depth: depth.as_deref(),
+            glow_mask,
+            sky: sky.as_deref(),
+            subject: subject.as_deref().or(scene_subject.as_deref()),
+        },
+    );
     lights::apply_lights(rgb, &look.lights, depth.as_deref());
     tone::apply_tone(rgb, &look.curves, &look.split);
     // A missing LUT file does nothing rather than failing the render.
@@ -420,7 +468,8 @@ fn atmosphere_params(a: &Atmosphere) -> AtmosphereParams {
         shafts: pct(a.shafts),
         shaft_length: pct(a.shaft_length),
         shaft_warmth: signed_pct(a.shaft_warmth),
-        light: (!a.shaft_auto).then(|| (a.shaft_x.clamp(0.0, 1.0), a.shaft_y.clamp(0.0, 1.0))),
+        // Beyond the frame is allowed (a crop can leave the sun outside it).
+        light: (!a.shaft_auto).then(|| (a.shaft_x.clamp(-0.5, 1.5), a.shaft_y.clamp(-0.5, 1.5))),
         ..Default::default()
     }
 }
@@ -595,7 +644,29 @@ mod tests {
         let mut adj = Adjustments::default();
         adj.atmosphere.glow = 50.0;
         adj.atmosphere.glow_subject_only = true;
-        assert_eq!(look_masks(&adj), vec![MaskTarget::Subject]);
+        // Glow also keeps its light source in the sky and off the subject.
+        assert_eq!(look_masks(&adj), vec![MaskTarget::Subject, MaskTarget::Sky]);
+    }
+
+    #[test]
+    fn fusion_weights_are_normalised() {
+        // However many styles (and whatever raw weights), the blend is a weighted
+        // average: fusing a style with itself renders exactly as that style alone.
+        let render = |style: epikos_sidecar::StyleRef| {
+            let adj = Adjustments { style, ..Default::default() };
+            let mut img = portrait();
+            apply_look(&mut img, &adj, &LookInputs::default());
+            img
+        };
+        let weight = |id: &str, weight: f32| epikos_sidecar::StyleWeight { id: id.into(), weight };
+        let one = render(epikos_sidecar::StyleRef { id: "golden-hour-flare".into(), ..Default::default() });
+        let fused = render(epikos_sidecar::StyleRef {
+            blend: vec![weight("golden-hour-flare", 3.0), weight("golden-hour-flare", 5.0), weight("golden-hour-flare", 2.0)],
+            ..Default::default()
+        });
+        for i in 0..one.len() {
+            assert!((one.g[i] - fused.g[i]).abs() < 1e-4, "pixel {i}: {} vs {}", one.g[i], fused.g[i]);
+        }
     }
 
     #[test]

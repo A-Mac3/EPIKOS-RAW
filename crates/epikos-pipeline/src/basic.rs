@@ -9,20 +9,32 @@
 //!   towards the extremes so it never clips outright.
 //! - **Saturation** scales colour around luminance; **Vibrance** favours muted colours
 //!   and spares skin.
+//! - **Dehaze** runs first (see [`crate::dehaze`]): haze is a property of the scene
+//!   light, so it is removed before any tone move.
 
 use epikos_core::ImageRgbF32;
 use epikos_sidecar::Tone;
 use rayon::prelude::*;
 
+use crate::dehaze::apply_dehaze;
 use crate::look::{guided_plane, skin_likelihood};
 
 const MID_GREY: f32 = 0.18;
-/// Stops of gain at ±100 for highlights/shadows and whites/blacks.
-const REGION_STOPS: f32 = 1.6;
-const ENDS_STOPS: f32 = 1.0;
+/// Stops of gain at ±100 for highlights/shadows and whites/blacks: strong enough that
+/// a small move is visible straight away, as in other raw editors.
+const REGION_STOPS: f32 = 2.5;
+const ENDS_STOPS: f32 = 1.5;
+/// Contrast slope at ±100: log-luminance steepens by this factor around mid-grey.
+const CONTRAST_SLOPE: f32 = 0.8;
 
 pub fn apply_tone(rgb: &mut ImageRgbF32, t: &Tone) {
     if t.is_neutral() || rgb.width < 2 || rgb.height < 2 {
+        return;
+    }
+    if t.dehaze != 0.0 {
+        apply_dehaze(rgb, t.dehaze);
+    }
+    if (Tone { dehaze: 0.0, ..*t }).is_neutral() {
         return;
     }
     let (w, h) = (rgb.width as usize, rgb.height as usize);
@@ -62,7 +74,7 @@ pub fn apply_tone(rgb: &mut ImageRgbF32, t: &Tone) {
             }
             if contrast != 0.0 {
                 // Steeper around mid-grey, easing off past ±5 stops.
-                d += contrast * 0.5 * e / (1.0 + (e / 5.0).powi(2));
+                d += contrast * CONTRAST_SLOPE * e / (1.0 + (e / 5.0).powi(2));
             }
             if luma[i] <= 0.0 {
                 return 1.0;
@@ -127,16 +139,19 @@ pub fn auto_tone(rgb: &ImageRgbF32) -> (f32, Tone) {
     let (p02, p995) = (pct(0.02) + exposure, pct(0.995) + exposure);
     let mut tone = Tone::default();
     // Clipping starts at 1.0 linear ≈ +2.47 stops over mid-grey.
+    // Slider points are per stop of gain, so these follow REGION_STOPS / ENDS_STOPS.
+    let (region, ends) = (100.0 / REGION_STOPS, 100.0 / ENDS_STOPS);
     if p995 > 2.2 {
-        tone.highlights = -((p995 - 2.2) * 45.0).clamp(0.0, 80.0);
+        // About 0.7 stop of pull per stop past the clipping margin.
+        tone.highlights = -((p995 - 2.2) * 0.72 * region).clamp(0.0, 1.28 * region);
     }
     let dark_share = ev.iter().filter(|&&e| e + exposure < -3.0).count() as f32 / ev.len() as f32;
     if dark_share > 0.1 {
-        tone.shadows = (dark_share * 120.0).clamp(0.0, 60.0);
+        tone.shadows = (dark_share * 1.92 * region).clamp(0.0, 0.96 * region);
     }
     if p02 > -4.0 {
         // Nothing near black: set a black point.
-        tone.blacks = -((p02 + 4.0) * 12.0).clamp(0.0, 30.0);
+        tone.blacks = -((p02 + 4.0) * 0.12 * ends).clamp(0.0, 0.3 * ends);
     }
     tone.vibrance = 10.0;
     ((exposure * 100.0).round() / 100.0, round_tone(tone))

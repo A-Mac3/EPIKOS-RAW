@@ -76,7 +76,7 @@ pub struct ImageInfo {
     /// Where the Step 1 lens profile comes from ("Camera (DNG)", "Lensfun: …"), if
     /// there is one for this lens.
     pub lens_profile: Option<String>,
-    /// A JPEG or PNG: no sensor data (and no enhanced-DNG export).
+    /// A JPEG, PNG or TIFF: no sensor data (an enhanced DNG holds its decoded pixels).
     pub bitmap: bool,
 }
 
@@ -451,8 +451,9 @@ impl Engine {
         })
     }
 
-    /// Develop at full resolution and write a TIFF, layered PSD or enhanced DNG to
-    /// `dest` (Step 8 handoff), with the AI masks when asked for.
+    /// Develop at full resolution and write a TIFF, layered PSD, enhanced DNG, JPEG or
+    /// PNG to `dest` (Step 8 handoff), with the AI masks when asked for (TIFF, PSD and
+    /// DNG). Every format works for every source, RAW or not.
     pub fn export(
         &self,
         path: &Path,
@@ -461,13 +462,12 @@ impl Engine {
         options: ExportOptions,
     ) -> Result<ExportReport> {
         let loaded = self.load(path)?;
-        if options.format == ExportFormat::Dng && loaded.raw.profile.format.is_bitmap() {
-            return Err(Error::InvalidImage {
-                reason: "a JPEG or PNG has no sensor data for an enhanced DNG; export a TIFF or PSD".into(),
-            });
-        }
         let prepared = self.prepare(&loaded, adjustments)?;
-        let aux = self.export_channels(&loaded, adjustments, &options, prepared.depth.as_deref())?;
+        let aux = if options.format.carries_masks() {
+            self.export_channels(&loaded, adjustments, &options, prepared.depth.as_deref())?
+        } else {
+            Vec::new()
+        };
         export::export(&loaded, adjustments, dest, options, &prepared, aux)
     }
 
@@ -744,7 +744,15 @@ fn render_with(
     max_h: u32,
     prepared: &Prepared,
 ) -> Result<DisplayImage> {
-    let base = loaded.base(max_w, max_h);
+    // A crop keeps part of the frame: develop enough pixels that the part still fills
+    // the requested size.
+    let c = adjustments.crop.clamped();
+    let (bw, bh) = if adjustments.crop.is_active() {
+        ((max_w as f32 / c.width).ceil() as u32, (max_h as f32 / c.height).ceil() as u32)
+    } else {
+        (max_w, max_h)
+    };
+    let base = loaded.base(bw, bh);
     let developed = prepared.with_inputs(|inputs| {
         develop_rgb_with((*base).clone(), &loaded.raw.profile, adjustments, inputs)
     })?;
@@ -783,8 +791,11 @@ impl Prepared {
 
 /// Steps 1–2 only. Models describe the scene, not the look: a black-and-white or
 /// golden style would only make sky, subject and depth harder to read.
+/// The scene without the look, and without the crop: the models (masks, depth) and
+/// the scene readings work on the whole upright frame.
 pub(crate) fn scene_only(adjustments: &Adjustments) -> Adjustments {
     Adjustments {
+        crop: Default::default(),
         local: Vec::new(),
         texture: Default::default(),
         color: Default::default(),
@@ -1233,6 +1244,27 @@ mod tests {
         assert_eq!(raw.mosaic.samples_per_pixel, 3);
         let d = fs::read(&dest).unwrap();
         assert!(d.windows(7).any(|w| w == b"Subject"), "semantic mask name");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn export_writes_jpeg_and_16_bit_png_with_icc() {
+        use image::ImageDecoder;
+        let dir = temp_dir("export-share");
+        let loaded = synthetic_loaded(64, 48);
+        for (format, name) in [(ExportFormat::Jpeg, "out.jpg"), (ExportFormat::Png, "out.png")] {
+            let dest = dir.join(name);
+            let options = ExportOptions { format, ..ExportOptions::default() };
+            let report =
+                export::export(&loaded, &Adjustments::default(), &dest, options, &Prepared::empty(), Vec::new()).unwrap();
+            assert_eq!(report.format, format);
+            let reader = image::ImageReader::open(&dest).unwrap().with_guessed_format().unwrap();
+            let mut dec = reader.into_decoder().unwrap();
+            assert_eq!(dec.dimensions(), (64, 48));
+            let bits16 = dec.color_type() == image::ColorType::Rgb16;
+            assert_eq!(bits16, format == ExportFormat::Png, "{format:?}");
+            assert_eq!(dec.icc_profile().unwrap().unwrap(), OutputSpace::Srgb.icc_profile(), "{format:?}");
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use epikos_core::{Error, Result};
 
 use crate::document::{
-    Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
+    Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Crop, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
     LocalAdjustment, LutRef, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
     ToneCurve, VirtualLight, WbMode, WhiteBalance,
@@ -110,7 +110,10 @@ fn render_xmp(doc: &DevelopDocument) -> String {
     epikos:caBlue="{ca_b}"
     epikos:lensProfile="{lens_profile}"
     epikos:geometry="{rotation},{vertical}"
-    epikos:tone="{tone}"{look}/>
+    epikos:crop="{crop_x},{crop_y},{crop_w},{crop_h}"
+    epikos:cropAspect="{crop_aspect}"
+    epikos:tone="{tone}"
+    epikos:dehaze="{dehaze}"{look}/>
  </rdf:RDF>
 </x:xmpmeta>
 "#,
@@ -145,7 +148,13 @@ fn render_xmp(doc: &DevelopDocument) -> String {
         lens_profile = a.lens.profile,
         rotation = a.lens.rotation,
         vertical = a.lens.vertical,
+        crop_x = a.crop.x,
+        crop_y = a.crop.y,
+        crop_w = a.crop.width,
+        crop_h = a.crop.height,
+        crop_aspect = esc(&a.crop.aspect),
         tone = a.tone.to_array().map(|v| v.to_string()).join(","),
+        dehaze = a.tone.dehaze,
         look = render_look(a),
     )
 }
@@ -158,12 +167,23 @@ fn render_look(a: &Adjustments) -> String {
         "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"\n    epikos:characterLines=\"{}\"\n    epikos:retouchSubjectOnly=\"{}\"",
         t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance, t.character_lines, t.retouch_subject_only
     );
-    // Local adjustments: "mask,exposure,contrast,saturation,warmth,clarity;…".
+    // Local adjustments: "mask,exposure,contrast,saturation,warmth,clarity,tint;…".
     if !a.local.is_empty() {
         let local: Vec<String> = a
             .local
             .iter()
-            .map(|l| format!("{},{},{},{},{},{}", l.mask.id(), l.exposure, l.contrast, l.saturation, l.warmth, l.clarity))
+            .map(|l| {
+                format!(
+                    "{},{},{},{},{},{},{}",
+                    l.mask.id(),
+                    l.exposure,
+                    l.contrast,
+                    l.saturation,
+                    l.warmth,
+                    l.clarity,
+                    l.tint
+                )
+            })
             .collect();
         out += &format!("\n    epikos:local=\"{}\"", local.join(";"));
     }
@@ -352,13 +372,28 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
             highlight_recovery: flag("epikos:highlightRecovery")
                 .unwrap_or(defaults.highlight_recovery),
             exposure: num("epikos:exposure").unwrap_or(defaults.exposure),
-            tone: get("epikos:tone").and_then(numbers::<7>).map(Tone::from_array).unwrap_or_default(),
+            tone: Tone {
+                dehaze: num("epikos:dehaze").unwrap_or(0.0),
+                ..get("epikos:tone").and_then(numbers::<7>).map(Tone::from_array).unwrap_or_default()
+            },
+            crop: get("epikos:crop")
+                .and_then(numbers::<4>)
+                .map(|[x, y, width, height]| Crop {
+                    x,
+                    y,
+                    width,
+                    height,
+                    aspect: get("epikos:cropAspect").map(unescape).unwrap_or_else(|| "free".into()),
+                })
+                .unwrap_or_default(),
             local: get("epikos:local")
                 .map(|v| {
                     v.split(';')
                         .filter_map(|l| {
                             let (mask, rest) = l.split_once(',')?;
-                            let [exposure, contrast, saturation, warmth, clarity] = numbers::<5>(rest)?;
+                            // Tint came later: five values in older sidecars.
+                            let [exposure, contrast, saturation, warmth, clarity, tint] = numbers::<6>(rest)
+                                .or_else(|| numbers::<5>(rest).map(|[e, c, s, w, k]| [e, c, s, w, k, 0.0]))?;
                             Some(LocalAdjustment {
                                 mask: MaskTarget::from_id(mask.trim())?,
                                 exposure,
@@ -366,6 +401,7 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                                 saturation,
                                 warmth,
                                 clarity,
+                                tint,
                             })
                         })
                         .collect()
@@ -620,6 +656,15 @@ mod tests {
     }
 
     #[test]
+    fn older_local_adjustments_without_tint_still_load() {
+        let mut doc = sample_doc();
+        doc.adjustments.local = vec![LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, ..Default::default() }];
+        let xml = render_xmp(&doc).replace("eyes,0.4,0,0,0,0,0", "eyes,0.4,0,0,0,0");
+        assert!(xml.contains(r#"epikos:local="eyes,0.4,0,0,0,0""#), "{xml}");
+        assert_eq!(parse_xmp(&xml).unwrap().adjustments.local, doc.adjustments.local);
+    }
+
+    #[test]
     fn xmp_roundtrip_preserves_adjustments() {
         let mut doc = sample_doc();
         doc.adjustments.highlight_recovery = true;
@@ -674,9 +719,12 @@ mod tests {
         doc.adjustments.lens.rotation = -1.25;
         doc.adjustments.lens.vertical = 30.0;
         doc.adjustments.tone = Tone::from_array([10.0, -40.0, 35.5, 5.0, -8.0, 20.0, -3.0]);
+        doc.adjustments.tone.dehaze = 35.0;
+        doc.adjustments.crop = Crop { x: 0.1, y: 0.05, width: 0.8, height: 0.64, aspect: "4:5".into() };
         doc.adjustments.local = vec![
             LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, clarity: 25.0, ..Default::default() },
             LocalAdjustment { mask: MaskTarget::Background, saturation: -30.0, warmth: 12.0, ..Default::default() },
+            LocalAdjustment { mask: MaskTarget::Skin, warmth: -6.0, tint: 4.5, ..Default::default() },
         ];
         doc.adjustments.texture.character_lines = 40.0;
         doc.adjustments.texture.retouch_subject_only = true;

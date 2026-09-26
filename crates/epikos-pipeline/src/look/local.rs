@@ -1,4 +1,4 @@
-//! PRD Step 3 local adjustments: exposure, contrast, saturation, warmth and clarity
+//! PRD Step 3 local adjustments: exposure, contrast, saturation, warmth, tint and clarity
 //! inside an AI mask, on scene-linear Rec.2020. The mask (0–1, already fitted to the
 //! photo's edges) scales every change, so soft mask edges give soft transitions.
 
@@ -34,6 +34,13 @@ pub(crate) fn apply_local(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[
     });
     // Tint at full warmth, blended per pixel by the mask.
     let hue = tint(0.5 * warmth);
+    // Green (−) / magenta (+) at full strength, luminance kept.
+    let magenta = 0.15 * pct(adj.tint);
+    let tint_gain = {
+        let g = [1.0 + magenta, 1.0 - magenta, 1.0 + magenta];
+        let y = 0.2627 * g[0] + 0.678 * g[1] + 0.0593 * g[2];
+        g.map(|v| v / y)
+    };
 
     rgb.r
         .par_iter_mut()
@@ -59,6 +66,11 @@ pub(crate) fn apply_local(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[
                 pr *= 1.0 + m * (hue[0] - 1.0);
                 pg *= 1.0 + m * (hue[1] - 1.0);
                 pb *= 1.0 + m * (hue[2] - 1.0);
+            }
+            if magenta != 0.0 {
+                pr *= 1.0 + m * (tint_gain[0] - 1.0);
+                pg *= 1.0 + m * (tint_gain[1] - 1.0);
+                pb *= 1.0 + m * (tint_gain[2] - 1.0);
             }
             if saturation != 0.0 {
                 let y = 0.2627 * pr + 0.678 * pg + 0.0593 * pb;
@@ -98,6 +110,11 @@ mod tests {
         let mut warm = img.clone();
         apply_local(&mut warm, &LocalAdjustment { warmth: 60.0, ..Default::default() }, &mask);
         assert!(warm.r[0] / warm.b[0] > img.r[0] / img.b[0]);
+        let mut magenta = img.clone();
+        apply_local(&mut magenta, &LocalAdjustment { tint: 50.0, ..Default::default() }, &mask);
+        assert!(magenta.g[0] / magenta.r[0] < img.g[0] / img.r[0]);
+        let y = |i: &ImageRgbF32| 0.2627 * i.r[0] + 0.678 * i.g[0] + 0.0593 * i.b[0];
+        assert!((y(&magenta) / y(&img) - 1.0).abs() < 0.02, "tint keeps brightness");
         let mut grey = img.clone();
         apply_local(&mut grey, &LocalAdjustment { saturation: -100.0, ..Default::default() }, &mask);
         assert!((grey.r[0] - grey.b[0]).abs() < 1e-5);

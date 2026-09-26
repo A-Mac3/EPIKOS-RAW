@@ -114,7 +114,8 @@ fn local_contrast(lab: &mut ImageRgbF32, skin: &[f32], p: &TextureParams, r_clar
     // Core the fine band at its own noise level (MAD) so boosting doesn't lift grain.
     let core = base_m.as_ref().map_or(0.0, |b| noise_sigma(l, b));
 
-    let clarity = p.clarity * if p.clarity > 0.0 { 1.0 } else { 0.85 };
+    // Gain so that a small move shows: ±100 is strong local contrast.
+    let clarity = p.clarity * if p.clarity > 0.0 { 1.6 } else { 1.2 };
     let micro = p.micro * if p.micro > 0.0 { 1.4 } else { 1.0 };
     lab.r.par_iter_mut().enumerate().for_each(|(i, v)| {
         let l = *v;

@@ -7,7 +7,8 @@
 //! | Subject     | IS-Net                                                   |
 //! | Background  | 1 − subject (formed in the pipeline)                     |
 //! | Sky         | U²-Net skyseg                                            |
-//! | Skin        | the colour skin model                                    |
+//! | Skin        | colour model; wider (all Monk tones) inside the subject; |
+//! |             | plus face-parsed skin                                    |
 //! | Eyes, Hair  | BiSeNet face parsing on face crops found from skin blobs |
 //! | Foreground  | depth, split at its Otsu threshold                       |
 
@@ -15,6 +16,7 @@ use std::sync::{Arc, PoisonError};
 
 use epikos_core::{resize_plane, Result};
 use epikos_masks::{MaskKind, RgbImage};
+use epikos_pipeline::{skin_likelihood, skin_likelihood_relaxed};
 use epikos_sidecar::{Adjustments, MaskTarget};
 use serde::Serialize;
 
@@ -62,7 +64,7 @@ impl Engine {
                     MaskTarget::Subject => (model(MaskKind::Subject), "IS-Net"),
                     MaskTarget::Background => (model(MaskKind::Subject), "inverse of the subject"),
                     MaskTarget::Sky => (model(MaskKind::Sky), "U²-Net skyseg"),
-                    MaskTarget::Skin => (true, "colour model"),
+                    MaskTarget::Skin => (true, "colour model, subject and face parsing"),
                     MaskTarget::Eyes | MaskTarget::Hair => (self.masker.face_available(), "BiSeNet face parsing"),
                     MaskTarget::Foreground => (self.masker.depth_available(), "Depth Anything V2"),
                 };
@@ -104,7 +106,7 @@ impl Engine {
                 }]
             }
             MaskTarget::Skin => {
-                let (width, height, data) = self.skin_plane(loaded, adjustments)?;
+                let (width, height, data) = self.inclusive_skin(loaded, adjustments)?;
                 vec![MaskData { target, width, height, data, infer_ms: 0 }]
             }
             MaskTarget::Eyes | MaskTarget::Hair => self.face_planes(loaded, adjustments)?,
@@ -134,15 +136,89 @@ impl Engine {
         Ok(out)
     }
 
-    /// Eyes and hair from one face-parsing pass over every face found in the frame.
+    /// A loose skin map for finding faces: the strict colour model everywhere and the
+    /// relaxed one (every Monk tone, but also beige and sand) inside the subject.
+    fn person_skin(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<(u32, u32, Vec<f32>)> {
+        let rgb = loaded.develop_scene(MASK_INPUT_SIDE, adjustments)?;
+        let (w, h) = (rgb.width, rgb.height);
+        let mut skin = skin_likelihood(&rgb);
+        if let Some(subject) = self.mask_plane(loaded, adjustments, MaskTarget::Subject)? {
+            let subject = crate::analysis::fit(&subject.data, subject.width, subject.height, w, h);
+            let relaxed = skin_likelihood_relaxed(&rgb);
+            for ((s, r), m) in skin.iter_mut().zip(relaxed).zip(subject) {
+                *s = s.max(r * m);
+            }
+        }
+        Ok((w, h, skin))
+    }
+
+    /// The Step 3 Skin mask, for every Monk tone: the strict colour model, face-parsed
+    /// skin, and — inside the subject — pixels close in colour to that person's own skin
+    /// (learnt from face-parsed skin, else from confident colour skin). A fair or a very
+    /// deep face is covered; a sand-coloured strap or a beige coat is not, unless it
+    /// really matches the skin.
+    fn inclusive_skin(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<(u32, u32, Vec<f32>)> {
+        let rgb = loaded.develop_scene(MASK_INPUT_SIDE, adjustments)?;
+        let (w, h) = (rgb.width, rgb.height);
+        let n = (w * h) as usize;
+        let mut skin = skin_likelihood(&rgb);
+        let face = if self.masker.face_available() {
+            let f = match cached(loaded, &face_skin_key(adjustments)) {
+                Some(f) => f,
+                None => {
+                    self.face_planes(loaded, adjustments)?;
+                    cached(loaded, &face_skin_key(adjustments)).expect("face_planes caches face skin")
+                }
+            };
+            Some(crate::analysis::fit(&f.data, f.width, f.height, w, h))
+        } else {
+            None
+        };
+        let Some(subject) = self.mask_plane(loaded, adjustments, MaskTarget::Subject)? else {
+            if let Some(f) = face {
+                skin.iter_mut().zip(f).for_each(|(s, f)| *s = s.max(f));
+            }
+            return Ok((w, h, skin));
+        };
+        let subject = crate::analysis::fit(&subject.data, subject.width, subject.height, w, h);
+        let lab = epikos_pipeline::oklab_planes(&rgb);
+        let relaxed = skin_likelihood_relaxed(&rgb);
+        // The person's skin colour: face-parsed skin first, else confident colour skin
+        // on the subject.
+        let seeds: Vec<usize> = match &face {
+            Some(f) if f.iter().filter(|&&v| v > 0.5).count() > n / 2000 => (0..n).filter(|&i| f[i] > 0.5).collect(),
+            _ => (0..n).filter(|&i| skin[i] > 0.5 && subject[i] > 0.5).collect(),
+        };
+        let model = (seeds.len() > n / 4000).then(|| SkinColour::learn(&lab, &seeds));
+        for i in 0..n {
+            let inside = subject[i];
+            let colour = skin[i].max(relaxed[i]);
+            let on_person = match &model {
+                // On the subject, colour skin counts only where it matches this person's
+                // own skin (a khaki strap passes the colour model, not the match).
+                Some(m) => colour * m.likelihood(lab.r[i], lab.g[i], lab.b[i]),
+                // No skin to learn from (e.g. a very fair face without the face model):
+                // the relaxed model on the subject, as the only evidence there is.
+                None => colour,
+            };
+            let blended = skin[i] * (1.0 - inside) + on_person * inside;
+            skin[i] = blended.max(face.as_ref().map_or(0.0, |f| f[i]));
+        }
+        Ok((w, h, skin))
+    }
+
+    /// Eyes and hair (and face skin, cached for the Skin mask) from one face-parsing
+    /// pass over every face found in the frame.
     fn face_planes(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Vec<MaskData>> {
         let display = render(loaded, &scene_only(adjustments), MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
         let rgb = rgba_to_rgb(&display);
         let (w, h) = (rgb.width() as usize, rgb.height() as usize);
-        let (_, _, skin) = self.skin_plane(loaded, adjustments)?;
+        // Faces are found from skin of any tone, so fair and very deep faces are parsed too.
+        let (_, _, skin) = self.person_skin(loaded, adjustments)?;
         let skin = if skin.len() == w * h { skin } else { vec![0.0; w * h] };
         let mut eyes = vec![0.0f32; w * h];
         let mut hair = vec![0.0f32; w * h];
+        let mut face_skin = vec![0.0f32; w * h];
         let mut infer_ms = 0;
         for [x0, y0, x1, y1] in face_boxes(&skin, w, h) {
             let (cw, ch) = (x1 - x0, y1 - y0);
@@ -171,10 +247,18 @@ impl Engine {
                     // Low probabilities are the model's doubt, not a thin mask.
                     eyes[i] = eyes[i].max(f * confident(parts.eyes[j]));
                     hair[i] = hair[i].max(f * confident(parts.hair[j]));
+                    face_skin[i] = face_skin[i].max(f * confident(parts.skin[j]));
                 }
             }
         }
         let (width, height) = (w as u32, h as u32);
+        let face = Arc::new(MaskData { target: MaskTarget::Skin, width, height, data: face_skin, infer_ms: 0 });
+        {
+            let key = face_skin_key(adjustments);
+            let mut cache = loaded.planes.lock().unwrap_or_else(PoisonError::into_inner);
+            cache.retain(|(k, _)| *k != key);
+            cache.push((key, face));
+        }
         Ok(vec![
             MaskData { target: MaskTarget::Eyes, width, height, data: eyes, infer_ms },
             MaskData { target: MaskTarget::Hair, width, height, data: hair, infer_ms: 0 },
@@ -185,6 +269,40 @@ impl Engine {
 fn confident(p: f32) -> f32 {
     let t = ((p - 0.35) / 0.4).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// One person's skin colour in Oklab: mean and spread, with floors so a small or very
+/// even patch still accepts the same skin in other light (shadow side, highlights).
+struct SkinColour {
+    mean: [f32; 3],
+    spread: [f32; 3],
+}
+
+impl SkinColour {
+    fn learn(lab: &epikos_core::ImageRgbF32, idx: &[usize]) -> Self {
+        let n = idx.len().max(1) as f32;
+        let planes = [&lab.r, &lab.g, &lab.b];
+        let mean: [f32; 3] = std::array::from_fn(|c| idx.iter().map(|&i| planes[c][i]).sum::<f32>() / n);
+        let floors = [0.1, 0.015, 0.015];
+        let spread: [f32; 3] = std::array::from_fn(|c| {
+            let var = idx.iter().map(|&i| (planes[c][i] - mean[c]).powi(2)).sum::<f32>() / n;
+            var.sqrt().max(floors[c])
+        });
+        Self { mean, spread }
+    }
+
+    /// 1 within ~1.2 spreads of the person's typical skin colour, 0 beyond 2.2; lightness
+    /// counts less than colour (skin is lit and shaded across a face).
+    fn likelihood(&self, l: f32, a: f32, b: f32) -> f32 {
+        let d = |v: f32, c: usize, k: f32| (v - self.mean[c]) / (k * self.spread[c]);
+        let d2 = d(l, 0, 1.6).powi(2) + d(a, 1, 1.0).powi(2) + d(b, 2, 1.0).powi(2);
+        (1.0 - (d2.sqrt() - 1.2) / 1.0).clamp(0.0, 1.0)
+    }
+}
+
+/// Face-parsed skin, kept apart from the combined Skin mask.
+fn face_skin_key(a: &Adjustments) -> String {
+    format!("face-skin|{:?}", a.lens)
 }
 
 fn cached(loaded: &Loaded, key: &str) -> Option<Arc<MaskData>> {

@@ -8,7 +8,7 @@ mod json;
 mod xmp;
 
 pub use document::{
-    Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
+    Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Crop, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
     LocalAdjustment, LutRef, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
     ToneCurve, VirtualLight, WbMode, WhiteBalance,

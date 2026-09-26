@@ -133,15 +133,27 @@ pub(crate) fn percentile(v: &[f32], p: f32) -> f32 {
     *s.select_nth_unstable_by(k, f32::total_cmp).1
 }
 
-/// `depth` (1 = near, 0 = far) is at the image's size when given. With `glow_mask`
-/// (the subject), only that region glows, and from a lower brightness so a subject in
-/// ordinary light still gets a bloom.
-pub(crate) fn apply_atmosphere(
-    rgb: &mut ImageRgbF32,
-    p: &AtmosphereParams,
-    depth: Option<&[f32]>,
-    glow_mask: Option<&[f32]>,
-) {
+/// Scene masks the atmosphere uses when the engine has them (all at the image's size).
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Scene<'a> {
+    /// 1 = near, 0 = far.
+    pub depth: Option<&'a [f32]>,
+    /// Only this region glows (Step 6 "subject only").
+    pub glow_mask: Option<&'a [f32]>,
+    /// Where the light may come from.
+    pub sky: Option<&'a [f32]>,
+    /// Never a light source, and a gentler bloom.
+    pub subject: Option<&'a [f32]>,
+}
+
+/// With `scene.glow_mask` (the subject), only that region glows, and from a lower
+/// brightness so a subject in ordinary light still gets a bloom. Otherwise the bloom
+/// starts at the photo's own highlights (not a fixed level, which would bloom a whole
+/// bright frame) and is kept off the subject and the near foreground, so a reflection
+/// on a wheel or a lit face doesn't turn into a light orb. Glow and rays are added with
+/// a soft ceiling, so bright areas brighten less and never blow out into white blobs.
+pub(crate) fn apply_atmosphere(rgb: &mut ImageRgbF32, p: &AtmosphereParams, scene: Scene) {
+    let (depth, glow_mask) = (scene.depth, scene.glow_mask);
     let (w, h) = (rgb.width as usize, rgb.height as usize);
     if p.is_neutral() || w < 4 || h < 4 {
         return;
@@ -151,12 +163,23 @@ pub(crate) fn apply_atmosphere(
     let bloom = (p.glow > 0.0).then(|| {
         let bright: Vec<f32> = match glow_mask {
             Some(m) => y.par_iter().zip(m.par_iter()).map(|(&v, &m)| m * v * smoothstep(0.05, 0.6, v)).collect(),
-            None => y.par_iter().map(|&v| v * smoothstep(0.25, 1.0, v)).collect(),
+            None => {
+                let (lo, hi) = (percentile(&y, 0.9).max(0.05), percentile(&y, 0.995).max(0.1));
+                let (lo, hi) = (lo.min(0.9 * hi), hi.max(lo * 1.1));
+                (0..y.len())
+                    .into_par_iter()
+                    .map(|i| {
+                        let keep_subject = scene.subject.map_or(1.0, |s| 1.0 - 0.85 * s[i]);
+                        let keep_near = depth.map_or(1.0, |d| 1.0 - 0.7 * smoothstep(0.6, 0.9, d[i]));
+                        y[i] * smoothstep(lo, hi, y[i]) * keep_subject * keep_near
+                    })
+                    .collect()
+            }
         };
         let r = (p.glow_radius * long_side(w, h)).round().max(2.0) as usize;
         smooth(&bright, w, h, r, 3)
     });
-    let rays = (p.shafts > 0.0).then(|| light_shafts(&y, w, h, p, depth));
+    let rays = (p.shafts > 0.0).then(|| light_shafts(&y, w, h, p, scene));
     // Airlight: a little below the scene's bright level.
     let airlight = (0.85 * percentile(&y, 0.95)).max(0.02);
 
@@ -174,11 +197,17 @@ pub(crate) fn apply_atmosphere(
                 let t = (-FOG_DENSITY * p.fog * d).exp();
                 out = out * t + airlight * fog_tint[c] * (1.0 - t);
             }
+            // Light added with a soft ceiling: the brighter a pixel already is, the less it
+            // gains, so glow and rays can't pile up into clipped blobs.
+            let mut add = 0.0;
             if let Some(b) = &bloom {
-                out += 0.8 * p.glow * b[i] * glow_tint[c];
+                add += 0.8 * p.glow * b[i] * glow_tint[c];
             }
             if let Some(r) = &rays {
-                out += p.shafts * r[i] * shaft_tint[c];
+                add += p.shafts * r[i] * shaft_tint[c];
+            }
+            if add > 0.0 {
+                out += add / (1.0 + out.max(0.0).powi(2));
             }
             *v = out * keep + veil * haze_tint[c];
         });
@@ -186,11 +215,15 @@ pub(crate) fn apply_atmosphere(
 }
 
 /// Ray intensity at full resolution.
-fn light_shafts(y: &[f32], w: usize, h: usize, p: &AtmosphereParams, depth: Option<&[f32]>) -> Vec<f32> {
+fn light_shafts(y: &[f32], w: usize, h: usize, p: &AtmosphereParams, scene: Scene) -> Vec<f32> {
+    let depth = scene.depth;
     let scale = (SHAFT_SIDE / long_side(w, h)).min(1.0);
     let (sw, sh) = (((w as f32 * scale).round() as usize).max(2), ((h as f32 * scale).round() as usize).max(2));
     let small = resize_plane(y, w as u32, h as u32, sw as u32, sh as u32);
     let far = depth.map(|d| resize_plane(d, w as u32, h as u32, sw as u32, sh as u32));
+    let shrink = |m: &[f32]| resize_plane(m, w as u32, h as u32, sw as u32, sh as u32);
+    let sky = scene.sky.map(shrink);
+    let subject = scene.subject.map(shrink);
 
     // Rays come from what is bright, and — when depth is known — far away (sky, backlight).
     // Relative to the brightest part of the frame, so a large bright sky still counts.
@@ -207,7 +240,7 @@ fn light_shafts(y: &[f32], w: usize, h: usize, p: &AtmosphereParams, depth: Opti
 
     let (lx, ly) = match p.light {
         Some((x, y)) => (x * sw as f32, y * sh as f32),
-        None => find_light(&source, sw, sh),
+        None => find_light(&source, sw, sh, sky.as_deref(), subject.as_deref()),
     };
     let len = p.shaft_length.clamp(0.05, 1.0);
     let decay: f32 = 0.965;
@@ -247,14 +280,39 @@ fn light_shafts(y: &[f32], w: usize, h: usize, p: &AtmosphereParams, depth: Opti
 
 /// The light: the strongest blob of the bright source in the upper three quarters of
 /// the frame (low sun and backlight sit there), in working-image pixels.
-fn find_light(source: &[f32], w: usize, h: usize) -> (f32, f32) {
+///
+/// With a sky mask covering a real part of the frame, the light is looked for only in
+/// the sky; with the sky model but hardly any sky visible, the light is out of frame, so
+/// only along the top and side edges; without the model, in the upper three quarters.
+/// The subject is always excluded, so the source never lands on a person or a bright
+/// foreground object.
+fn find_light(source: &[f32], w: usize, h: usize, sky: Option<&[f32]>, subject: Option<&[f32]>) -> (f32, f32) {
     let r = (w.max(h) / 40).max(1);
-    let blurred = smooth(source, w, h, r, 2);
-    let limit = h * 3 / 4;
-    let (best, _) = blurred[..limit * w]
-        .iter()
-        .enumerate()
-        .fold((w / 2, f32::MIN), |acc, (i, &v)| if v > acc.1 { (i, v) } else { acc });
+    let n = w * h;
+    let sky_share = sky.map_or(0.0, |s| s.iter().filter(|&&v| v > 0.5).count() as f32 / n as f32);
+    let edge = |i: usize| {
+        let (x, y) = (i % w, i / w);
+        let band = (w.min(h) as f32 * 0.2).max(1.0);
+        let d = (x.min(w - 1 - x)).min(y) as f32; // top and sides, not the bottom
+        1.0 - smoothstep(0.0, band, d)
+    };
+    let allowed: Vec<f32> = (0..n)
+        .map(|i| {
+            let region = match sky {
+                Some(s) if sky_share >= 0.02 => s[i],
+                Some(_) => edge(i),
+                None => (i / w < h * 3 / 4) as u8 as f32,
+            };
+            region * subject.map_or(1.0, |s| 1.0 - s[i])
+        })
+        .collect();
+    let weighted: Vec<f32> = source.iter().zip(&allowed).map(|(v, a)| v * a).collect();
+    let blurred = smooth(&weighted, w, h, r, 2);
+    let (best, value) = blurred.iter().enumerate().fold((usize::MAX, f32::MIN), |acc, (i, &v)| if v > acc.1 { (i, v) } else { acc });
+    if best == usize::MAX || value <= 0.0 {
+        // Nothing bright where a light may be: just above the top centre.
+        return (w as f32 / 2.0, -0.05 * h as f32);
+    }
     ((best % w) as f32, (best / w) as f32)
 }
 
@@ -282,7 +340,7 @@ mod tests {
         }
         let near = img.index(110, 100);
         let p = AtmosphereParams { glow: 1.0, glow_warmth: 1.0, haze: 1.0, ..Default::default() };
-        apply_atmosphere(&mut img, &p, None, None);
+        apply_atmosphere(&mut img, &p, Scene::default());
         assert!(img.r[near] > 0.03, "no bloom: {}", img.r[near]);
         assert!(img.r[near] > img.b[near], "bloom not warm");
         assert!(img.g[img.index(0, 0)] > 0.02, "black not lifted");
@@ -299,7 +357,7 @@ mod tests {
         let depth: Vec<f32> = (0..img.len()).map(|i| if i % 64 < 32 { 1.0 } else { 0.0 }).collect();
         let p = AtmosphereParams { fog: 1.0, fog_start: 0.0, ..Default::default() };
         let (near, far) = (img.index(10, 20), img.index(50, 20));
-        apply_atmosphere(&mut img, &p, Some(&depth), None);
+        apply_atmosphere(&mut img, &p, Scene { depth: Some(&depth), ..Default::default() });
         assert!((img.g[near] - 0.02).abs() < 1e-4, "near fogged: {}", img.g[near]);
         assert!(img.g[far] > 0.2, "far not fogged: {}", img.g[far]);
     }
@@ -325,7 +383,7 @@ mod tests {
             ..Default::default()
         };
         let before = img.clone();
-        apply_atmosphere(&mut img, &p, None, None);
+        apply_atmosphere(&mut img, &p, Scene::default());
         let gain = |x: u32, y: u32| img.g[img.index(x, y)] - before.g[before.index(x, y)];
         // Below the sky, rays light the ground either side of the post's shadow.
         assert!(gain(70, 120) > 0.02, "no rays: {}", gain(70, 120));
@@ -341,7 +399,57 @@ mod tests {
                 src[y * w + x] = 1.0;
             }
         }
-        let (x, y) = find_light(&src, w, h);
+        let (x, y) = find_light(&src, w, h, None, None);
         assert!((58.0..66.0).contains(&x) && (8.0..14.0).contains(&y), "{x} {y}");
+    }
+
+    #[test]
+    fn the_light_stays_in_the_sky_and_off_the_subject() {
+        let (w, h) = (80, 60);
+        // A brighter reflection low in the frame (a wheel), a dimmer glow in the sky.
+        let mut src = vec![0.0; w * h];
+        for y in 40..46 {
+            for x in 10..16 {
+                src[y * w + x] = 2.0;
+            }
+        }
+        for y in 4..10 {
+            for x in 50..58 {
+                src[y * w + x] = 0.6;
+            }
+        }
+        let sky: Vec<f32> = (0..w * h).map(|i| if i / w < 20 { 1.0 } else { 0.0 }).collect();
+        let (x, y) = find_light(&src, w, h, Some(&sky), None);
+        assert!((50.0..58.0).contains(&x) && (4.0..10.0).contains(&y), "sky light at {x} {y}");
+
+        // No sky in view: never on the subject, and at an edge.
+        let no_sky = vec![0.0; w * h];
+        let subject: Vec<f32> = (0..w * h).map(|i| if (30..50).contains(&(i % w)) { 1.0 } else { 0.0 }).collect();
+        let mut bright_on_subject = vec![0.0; w * h];
+        for y in 2..8 {
+            for x in 36..44 {
+                bright_on_subject[y * w + x] = 3.0;
+            }
+            bright_on_subject[y * w + 3] = 0.5;
+        }
+        let (x, _) = find_light(&bright_on_subject, w, h, Some(&no_sky), Some(&subject));
+        assert!(!(30.0..50.0).contains(&x), "light on the subject at x = {x}");
+    }
+
+    #[test]
+    fn glow_never_blows_bright_areas_out() {
+        let mut img = flat(100, 100, 0.9);
+        for y in 40..60 {
+            for x in 40..60 {
+                let i = img.index(x, y);
+                (img.r[i], img.g[i], img.b[i]) = (3.0, 3.0, 3.0);
+            }
+        }
+        let before = img.clone();
+        let p = AtmosphereParams { glow: 1.0, glow_radius: 0.05, ..Default::default() };
+        apply_atmosphere(&mut img, &p, Scene::default());
+        let c = img.index(50, 50);
+        // The brightest area gains a fraction of what a dark one would.
+        assert!(img.g[c] - before.g[c] < 0.3, "centre gained {}", img.g[c] - before.g[c]);
     }
 }

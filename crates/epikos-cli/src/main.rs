@@ -40,7 +40,7 @@ enum Commands {
     Mentor { path: PathBuf },
     /// The built-in styles, as JSON.
     Styles,
-    /// Export a full-resolution 16-bit TIFF, layered PSD or enhanced DNG (by extension).
+    /// Export a full-resolution 16-bit TIFF, layered PSD, enhanced DNG, JPEG or 16-bit PNG (by extension).
     Export {
         path: PathBuf,
         #[arg(short, long)]
@@ -116,6 +116,8 @@ fn run() -> Result<()> {
                 format: match ext.as_str() {
                     "psd" => ExportFormat::Psd,
                     "dng" => ExportFormat::Dng,
+                    "jpg" | "jpeg" => ExportFormat::Jpeg,
+                    "png" => ExportFormat::Png,
                     _ => ExportFormat::Tiff,
                 },
                 color_space: match space {

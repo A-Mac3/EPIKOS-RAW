@@ -7,7 +7,8 @@ use crate::denoise::{self, reduce_noise};
 use crate::highlights::recover_highlights;
 use crate::basic::apply_tone;
 use crate::geometry::apply_geometry;
-use crate::look::{apply_look, LookInputs};
+use crate::crop::{crop_image, crop_plane, to_cropped};
+use crate::look::{apply_look, DepthPlane, LookInputs, MaskPlane};
 use crate::optics::{apply_lens_profile, correct_chromatic_aberration, correct_distortion};
 use crate::orient::apply_orientation;
 use crate::white_balance::gains_for_temperature;
@@ -42,7 +43,7 @@ pub fn develop_adjustments_with(
 }
 
 /// Everything after demosaic: highlights → WB → noise reduction → optics → camera RGB → Rec.2020 →
-/// exposure → Step 2 tone → orientation → straighten / perspective → Steps 3–8 and style.
+/// exposure → Step 2 tone → orientation → straighten / perspective → crop → Steps 3–8 and style.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
 /// interactive preview share one code path.
@@ -114,9 +115,43 @@ pub fn develop_rgb_with(
 
     // Steps 4–6 and the style, on the upright frame (depth and light positions are
     // upright). Radii scale with image size, so the preview matches the export.
-    apply_look(&mut rgb, adj, inputs);
+    if adj.crop.is_active() {
+        rgb = crop_image(&rgb, &adj.crop);
+        look_cropped(&mut rgb, adj, inputs);
+    } else {
+        apply_look(&mut rgb, adj, inputs);
+    }
     rgb.validate()?;
     Ok(rgb)
+}
+
+/// The look on a cropped frame: the masks and depth (made for the whole upright
+/// frame) and the light positions are cropped to match.
+fn look_cropped(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs) {
+    let crop = &adj.crop;
+    let masks: Vec<_> = inputs
+        .masks
+        .iter()
+        .map(|m| (m.target, crop_plane(m.data, m.width, m.height, crop)))
+        .collect();
+    let planes: Vec<MaskPlane> = masks
+        .iter()
+        .map(|(target, (data, width, height))| MaskPlane { target: *target, width: *width, height: *height, data })
+        .collect();
+    let depth = inputs.depth.as_ref().map(|d| crop_plane(d.data, d.width, d.height, crop));
+    let cropped = LookInputs {
+        depth: depth.as_ref().map(|(data, width, height)| DepthPlane { width: *width, height: *height, data }),
+        masks: &planes,
+        lens: inputs.lens,
+        lut: inputs.lut,
+    };
+    let mut adj = adj.clone();
+    for light in &mut adj.atmosphere.lights {
+        (light.x, light.y) = to_cropped(crop, light.x, light.y);
+    }
+    let a = &mut adj.atmosphere;
+    (a.shaft_x, a.shaft_y) = to_cropped(crop, a.shaft_x, a.shaft_y);
+    apply_look(rgb, &adj, &cropped);
 }
 
 fn map_demosaic(adj: &Adjustments, profile: &SensorProfile) -> DemosaicAlgorithm {

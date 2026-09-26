@@ -19,4 +19,4 @@ rawler.workspace = true
 rayon.workspace = true
 
 [dev-dependencies]
-image = { workspace = true, features = ["png"] }
+image = { workspace = true, features = ["png", "jpeg"] }

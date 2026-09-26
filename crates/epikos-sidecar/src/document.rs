@@ -63,6 +63,8 @@ pub struct Adjustments {
     pub style: StyleRef,
     /// An imported 3D LUT, applied after Step 7.
     pub lut: LutRef,
+    /// Step 1 crop of the upright (straightened) frame.
+    pub crop: Crop,
 }
 
 impl Default for Adjustments {
@@ -84,6 +86,7 @@ impl Default for Adjustments {
             finishing: Finishing::default(),
             style: StyleRef::default(),
             lut: LutRef::default(),
+            crop: Crop::default(),
         }
     }
 }
@@ -122,6 +125,8 @@ pub struct Tone {
     pub blacks: f32,
     pub vibrance: f32,
     pub saturation: f32,
+    /// −100…100: removes (+) or adds (−) atmospheric haze (dark-channel prior).
+    pub dehaze: f32,
 }
 
 impl Tone {
@@ -133,8 +138,9 @@ impl Tone {
         [self.contrast, self.highlights, self.shadows, self.whites, self.blacks, self.vibrance, self.saturation]
     }
 
+    /// The seven original sliders; [`Tone::dehaze`] is kept separately.
     pub fn from_array([contrast, highlights, shadows, whites, blacks, vibrance, saturation]: [f32; 7]) -> Self {
-        Self { contrast, highlights, shadows, whites, blacks, vibrance, saturation }
+        Self { contrast, highlights, shadows, whites, blacks, vibrance, saturation, dehaze: 0.0 }
     }
 }
 
@@ -211,11 +217,59 @@ pub struct LocalAdjustment {
     pub warmth: f32,
     /// Mid-scale local contrast.
     pub clarity: f32,
+    /// Greener (−) or more magenta (+): balances a skin cast the warmth axis can't.
+    pub tint: f32,
 }
 
 impl LocalAdjustment {
     pub fn is_neutral(&self) -> bool {
-        self.exposure == 0.0 && self.contrast == 0.0 && self.saturation == 0.0 && self.warmth == 0.0 && self.clarity == 0.0
+        self.exposure == 0.0
+            && self.contrast == 0.0
+            && self.saturation == 0.0
+            && self.warmth == 0.0
+            && self.clarity == 0.0
+            && self.tint == 0.0
+    }
+}
+
+/// A crop of the upright frame (after straighten and perspective), as fractions of its
+/// width and height. The default is the whole frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Crop {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// The aspect preset it was drawn with ("free", "original", "1:1", "4:5", "16:9",
+    /// "9:16"), so the crop tool reopens with it.
+    pub aspect: String,
+}
+
+impl Default for Crop {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0, width: 1.0, height: 1.0, aspect: "free".into() }
+    }
+}
+
+impl Crop {
+    /// Whether it cuts anything away.
+    pub fn is_active(&self) -> bool {
+        let c = self.clamped();
+        c.x > 1e-4 || c.y > 1e-4 || c.width < 1.0 - 1e-4 || c.height < 1.0 - 1e-4
+    }
+
+    /// Kept inside the frame and at least 2% wide and high.
+    pub fn clamped(&self) -> Crop {
+        let width = self.width.clamp(0.02, 1.0);
+        let height = self.height.clamp(0.02, 1.0);
+        Crop {
+            x: self.x.clamp(0.0, 1.0 - width),
+            y: self.y.clamp(0.0, 1.0 - height),
+            width,
+            height,
+            aspect: self.aspect.clone(),
+        }
     }
 }
 

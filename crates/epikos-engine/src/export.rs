@@ -5,7 +5,10 @@
 //!   Photoshop opens as named alpha channels (image-resource tag 34377).
 //! - **PSD**: layered, the masks as masked layer groups (see [`crate::psd`]).
 //! - **DNG**: enhanced linear DNG of the scene-referred image with semantic masks
-//!   (see [`crate::dng`]).
+//!   (see [`crate::dng`]). From a JPEG, PNG or TIFF it holds the decoded pixels made
+//!   linear: raw-style editing, but no more latitude than the source had.
+//! - **JPEG** (8-bit, quality 92) and **PNG** (16-bit): the finished look with ICC
+//!   profile and EXIF, for sharing; they have no room for mask channels.
 
 use std::borrow::Cow;
 use std::fs::{self, File};
@@ -35,6 +38,8 @@ pub enum ExportFormat {
     Tiff,
     Psd,
     Dng,
+    Jpeg,
+    Png,
 }
 
 impl ExportFormat {
@@ -43,7 +48,14 @@ impl ExportFormat {
             ExportFormat::Tiff => "16-bit TIFF",
             ExportFormat::Psd => "Layered PSD",
             ExportFormat::Dng => "Enhanced DNG",
+            ExportFormat::Jpeg => "JPEG",
+            ExportFormat::Png => "16-bit PNG",
         }
+    }
+
+    /// Whether the format can carry the AI masks and depth as extra channels.
+    pub fn carries_masks(self) -> bool {
+        !matches!(self, ExportFormat::Jpeg | ExportFormat::Png)
     }
 
     fn extensions(self) -> &'static [&'static str] {
@@ -51,6 +63,8 @@ impl ExportFormat {
             ExportFormat::Tiff => &["tif", "tiff"],
             ExportFormat::Psd => &["psd"],
             ExportFormat::Dng => &["dng"],
+            ExportFormat::Jpeg => &["jpg", "jpeg"],
+            ExportFormat::Png => &["png"],
         }
     }
 }
@@ -83,6 +97,9 @@ impl Default for ExportOptions {
         }
     }
 }
+
+/// JPEG quality: visually lossless for photographs at a fraction of the size.
+const JPEG_QUALITY: u8 = 92;
 
 /// A low-resolution model output (0–1) to be written as a named alpha channel.
 pub(crate) struct AuxPlane {
@@ -145,7 +162,9 @@ pub(crate) fn export(
     let rgb = if format == ExportFormat::Dng {
         let scene = crate::Prepared { depth: None, masks: Vec::new(), lens: prepared.lens.clone(), lut: None };
         scene.with_inputs(|inputs| {
-            develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &crate::scene_only(adjustments), inputs)
+            // Framing is kept: the crop is part of the photo, not of the look.
+            let scene = Adjustments { crop: adjustments.crop.clone(), ..crate::scene_only(adjustments) };
+            develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &scene, inputs)
         })?
     } else {
         prepared.with_inputs(|inputs| develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, adjustments, inputs))?
@@ -224,6 +243,15 @@ pub(crate) fn export(
             let r = crate::dng::write_dng(&partial, &rgb, &channels, meta, gps);
             (develop_ms, t, r)
         }
+        ExportFormat::Jpeg | ExportFormat::Png => {
+            let pixels = encode_rgb16(&rgb, space);
+            drop(rgb);
+            let develop_ms = t.elapsed().as_millis() as u64;
+            let t = Instant::now();
+            let exif = exif_block(meta, space, gps)?;
+            let r = write_shareable(&partial, format, width, height, &pixels, space.icc_profile(), exif);
+            (develop_ms, t, r)
+        }
     };
     let result = result.and_then(|()| fs::rename(&partial, dest).map_err(Error::from));
     if result.is_err() {
@@ -248,6 +276,44 @@ pub(crate) fn export(
         develop_ms,
         write_ms: t_write.elapsed().as_millis() as u64,
     })
+}
+
+/// A JPEG (8-bit) or 16-bit PNG with ICC profile and EXIF.
+fn write_shareable(
+    dest: &Path,
+    format: ExportFormat,
+    width: u32,
+    height: u32,
+    rgb16: &[u16],
+    icc: Vec<u8>,
+    exif: Vec<u8>,
+) -> Result<()> {
+    use image::{ExtendedColorType, ImageEncoder};
+    let unsupported = |e: image::error::UnsupportedError| Error::InvalidImage { reason: e.to_string() };
+    let encode_err = |e: image::ImageError| Error::InvalidImage { reason: e.to_string() };
+    let file = BufWriter::new(File::create(dest)?);
+    match format {
+        ExportFormat::Jpeg => {
+            let rgb8: Vec<u8> = rgb16.iter().map(|&v| ((v as u32 * 255 + 32_767) / 65_535) as u8).collect();
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, JPEG_QUALITY);
+            enc.set_icc_profile(icc).map_err(unsupported)?;
+            enc.set_exif_metadata(exif).map_err(unsupported)?;
+            enc.write_image(&rgb8, width, height, ExtendedColorType::Rgb8).map_err(encode_err)
+        }
+        ExportFormat::Png => {
+            // Native-endian samples; the encoder writes PNG's big-endian.
+            let bytes: Vec<u8> = rgb16.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            let mut enc = image::codecs::png::PngEncoder::new_with_quality(
+                file,
+                image::codecs::png::CompressionType::Default,
+                image::codecs::png::FilterType::Adaptive,
+            );
+            enc.set_icc_profile(icc).map_err(unsupported)?;
+            enc.set_exif_metadata(exif).map_err(unsupported)?;
+            enc.write_image(&bytes, width, height, ExtendedColorType::Rgb16).map_err(encode_err)
+        }
+        _ => unreachable!("{format:?} is not a shareable format"),
+    }
 }
 
 /// Scale planes down so the long edge is at most `edge` (never up).

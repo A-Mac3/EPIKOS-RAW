@@ -410,6 +410,7 @@ pub(crate) fn synced_adjustments(
     a.tone.blacks = hero.tone.blacks;
     a.tone.vibrance = hero.tone.vibrance;
     a.tone.saturation = hero.tone.saturation;
+    a.tone.dehaze = hero.tone.dehaze;
     // Step 3 edits name a region ("eyes", "background"), which each frame finds itself.
     a.local = hero.local.clone();
 
