@@ -61,6 +61,8 @@ pub struct Adjustments {
     pub finishing: Finishing,
     /// Parametric style layered on top of the manual Step 4–6 settings.
     pub style: StyleRef,
+    /// An imported 3D LUT, applied after Step 7.
+    pub lut: LutRef,
 }
 
 impl Default for Adjustments {
@@ -81,7 +83,29 @@ impl Default for Adjustments {
             split_toning: SplitToning::default(),
             finishing: Finishing::default(),
             style: StyleRef::default(),
+            lut: LutRef::default(),
         }
+    }
+}
+
+/// An imported `.cube` LUT by name (the file name in the app's LUT folder), blended at
+/// `amount` 0…100. An empty name is none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LutRef {
+    pub name: String,
+    pub amount: f32,
+}
+
+impl Default for LutRef {
+    fn default() -> Self {
+        Self { name: String::new(), amount: 100.0 }
+    }
+}
+
+impl LutRef {
+    pub fn is_none(&self) -> bool {
+        self.name.is_empty() || self.amount <= 0.0
     }
 }
 
@@ -498,11 +522,36 @@ pub struct Curves {
     pub red: ToneCurve,
     pub green: ToneCurve,
     pub blue: ToneCurve,
+    /// A standard contrast S-curve under the master curve.
+    pub s_curve: SCurve,
 }
 
 impl Curves {
     pub fn is_identity(&self) -> bool {
-        [&self.rgb, &self.red, &self.green, &self.blue].iter().all(|c| c.is_identity())
+        !self.s_curve.is_active() && [&self.rgb, &self.red, &self.green, &self.blue].iter().all(|c| c.is_identity())
+    }
+}
+
+/// PRD Step 7 "Standard S-Curve": darkens below the pivot and brightens above it, black
+/// and white fixed. `amount` 0…100; `pivot` 0…100 is the tone it turns around (50 =
+/// the middle of the tonal range).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SCurve {
+    pub enabled: bool,
+    pub amount: f32,
+    pub pivot: f32,
+}
+
+impl Default for SCurve {
+    fn default() -> Self {
+        Self { enabled: false, amount: 50.0, pivot: 50.0 }
+    }
+}
+
+impl SCurve {
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.amount > 0.0
     }
 }
 

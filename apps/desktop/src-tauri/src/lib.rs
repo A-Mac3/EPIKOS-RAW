@@ -30,6 +30,29 @@ async fn list_folder(engine: EngineState<'_>, dir: String) -> CmdResult<Vec<File
     blocking(move || engine.list_folder(Path::new(&dir))).await
 }
 
+/// A session of individual photos (Open Photo, or files dropped on the window):
+/// the supported ones among `paths`, folders expanded, sorted by name.
+#[tauri::command]
+async fn list_files(engine: EngineState<'_>, paths: Vec<String>) -> CmdResult<Vec<FileEntry>> {
+    let engine = engine.inner().clone();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    blocking(move || engine.list_files(&paths)).await
+}
+
+/// Story-arc groups for a session of individual photos.
+#[tauri::command]
+async fn story_arc_files(engine: EngineState<'_>, paths: Vec<String>) -> CmdResult<epikos_engine::StoryArc> {
+    let engine = engine.inner().clone();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    blocking(move || engine.story_arc_files(&paths)).await
+}
+
+/// Extensions the Open Photo dialog offers (RAW, DNG, JPEG, PNG, TIFF).
+#[tauri::command]
+fn photo_extensions() -> Vec<&'static str> {
+    CameraFormat::EXTENSIONS.to_vec()
+}
+
 #[tauri::command]
 async fn open_image(engine: EngineState<'_>, path: String) -> CmdResult<ImageInfo> {
     let path = raw_path(&path)?;
@@ -178,6 +201,55 @@ async fn undo_sync(engine: EngineState<'_>, targets: Vec<String>) -> CmdResult<V
     blocking(move || engine.undo_sync(&targets)).await
 }
 
+/// The AI Mentor: how and why to edit this photo, and a recommended starting point.
+#[tauri::command]
+async fn mentor(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+) -> CmdResult<epikos_engine::MentorReport> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.mentor(&path, &adjustments)).await
+}
+
+/// Live feedback on the current edit (praise and warnings).
+#[tauri::command]
+async fn critique(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+) -> CmdResult<Vec<epikos_engine::Feedback>> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.critique(&path, &adjustments)).await
+}
+
+/// Imported 3D LUTs.
+#[tauri::command]
+async fn list_luts(engine: EngineState<'_>) -> CmdResult<Vec<epikos_engine::LutInfo>> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.list_luts()).await
+}
+
+/// Validate a `.cube` file and copy it into the app's LUT folder.
+#[tauri::command]
+async fn import_lut(engine: EngineState<'_>, path: String) -> CmdResult<epikos_engine::LutInfo> {
+    let path = PathBuf::from(path);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cube")) {
+        return Err("choose a .cube 3D LUT file".into());
+    }
+    let engine = engine.inner().clone();
+    blocking(move || engine.import_lut(&path)).await
+}
+
+/// Delete an imported LUT (the app's copy only).
+#[tauri::command]
+async fn remove_lut(engine: EngineState<'_>, name: String) -> CmdResult<()> {
+    let engine = engine.inner().clone();
+    blocking(move || engine.remove_lut(&name)).await
+}
+
 /// Photo editors installed on this computer, for "Export & open in…".
 #[tauri::command]
 async fn handoff_apps() -> CmdResult<Vec<handoff::HandoffApp>> {
@@ -252,13 +324,13 @@ async fn auto_upright(engine: EngineState<'_>, path: String, adjustments: Adjust
     Ok(AutoUpright { rotation, vertical })
 }
 
-/// Only existing RAW, DNG, JPEG and PNG files may be opened, and sidecars are only
+/// Only existing RAW, DNG, JPEG, PNG and TIFF files may be opened, and sidecars are only
 /// written next to them.
 fn raw_path(path: &str) -> CmdResult<PathBuf> {
     let p = PathBuf::from(path);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
     if CameraFormat::from_extension(ext) == CameraFormat::Unknown {
-        return Err(format!("not a supported RAW, DNG, JPEG or PNG file: {path}"));
+        return Err(format!("not a supported RAW, DNG, JPEG, PNG or TIFF file: {path}"));
     }
     if !p.is_file() {
         return Err(format!("file not found: {path}"));
@@ -344,11 +416,22 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let masker = Masker::locate(&model_dirs(app.path()));
-            app.manage(Arc::new(Engine::default().with_masker(masker)));
+            let mut engine = Engine::default().with_masker(masker);
+            // Imported LUTs live in the app's data folder (where the CLI looks too),
+            // unless $EPIKOS_LUTS_DIR says otherwise.
+            if std::env::var_os("EPIKOS_LUTS_DIR").is_none() {
+                if let Ok(dir) = app.path().app_data_dir() {
+                    engine = engine.with_lut_dir(dir.join("luts"));
+                }
+            }
+            app.manage(Arc::new(engine));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             list_folder,
+            list_files,
+            story_arc_files,
+            photo_extensions,
             open_image,
             render_preview,
             thumbnail,
@@ -366,7 +449,12 @@ pub fn run() {
             sync_look,
             undo_sync,
             auto_tone,
-            auto_upright
+            auto_upright,
+            mentor,
+            critique,
+            list_luts,
+            import_lut,
+            remove_lut
         ])
         .run(tauri::generate_context!())
         .expect("error while running EPIKOS RAW");

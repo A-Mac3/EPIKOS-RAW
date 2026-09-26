@@ -15,6 +15,7 @@ pub enum CameraFormat {
     /// Already-rendered images: developed like a linear-RGB DNG from their sRGB values.
     Jpeg,
     Png,
+    Tiff,
     Unknown,
 }
 
@@ -29,6 +30,7 @@ impl CameraFormat {
             "dng" => Self::AdobeDng,
             "jpg" | "jpeg" => Self::Jpeg,
             "png" => Self::Png,
+            "tif" | "tiff" => Self::Tiff,
             _ => Self::Unknown,
         }
     }
@@ -49,10 +51,16 @@ impl CameraFormat {
         Self::AdobeDng
     }
 
-    /// JPEG or PNG: 8-bit display-referred pixels, not sensor data.
+    /// JPEG, PNG or TIFF: display-referred (sRGB) pixels, not sensor data.
     pub fn is_bitmap(self) -> bool {
-        matches!(self, Self::Jpeg | Self::Png)
+        matches!(self, Self::Jpeg | Self::Png | Self::Tiff)
     }
+
+    /// Every extension [`CameraFormat::from_extension`] recognises (lowercase), for
+    /// file pickers.
+    pub const EXTENSIONS: [&'static str; 15] = [
+        "arw", "srf", "sr2", "cr3", "cr2", "crw", "nef", "nrw", "raf", "dng", "jpg", "jpeg", "png", "tif", "tiff",
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -66,6 +74,7 @@ impl CameraFormat {
             Self::AdobeDng => "Adobe DNG",
             Self::Jpeg => "JPEG",
             Self::Png => "PNG",
+            Self::Tiff => "TIFF",
             Self::Unknown => "Unknown",
         }
     }

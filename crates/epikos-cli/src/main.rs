@@ -36,6 +36,10 @@ enum Commands {
     Analyze { path: PathBuf },
     /// Story-arc groups of the RAW files in a folder, with hero frames, as JSON.
     Story { dir: PathBuf },
+    /// The AI Mentor's reading of a photo (insights and a recommended start), as JSON.
+    Mentor { path: PathBuf },
+    /// The built-in styles, as JSON.
+    Styles,
     /// Export a full-resolution 16-bit TIFF, layered PSD or enhanced DNG (by extension).
     Export {
         path: PathBuf,
@@ -88,6 +92,14 @@ fn run() -> Result<()> {
             print_json(&engine.analyze(&path, &adjustments)?)
         }
         Commands::Story { dir } => print_json(&Engine::new(1).story_arc(&dir)?),
+        Commands::Styles => print_json(&epikos_engine::styles()),
+        Commands::Mentor { path } => {
+            let engine = Engine::new(1);
+            let adjustments = engine.open(&path)?.document.adjustments;
+            let report = engine.mentor(&path, &adjustments)?;
+            let feedback = engine.critique(&path, &report.recommended)?;
+            print_json(&serde_json::json!({ "report": report, "feedbackOnRecommended": feedback }))
+        }
         Commands::Export {
             path,
             out,

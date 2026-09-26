@@ -6,7 +6,7 @@ use epikos_core::{Error, Result};
 use crate::document::{
     Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
-    LocalAdjustment, MaskTarget, NoiseReduction, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
+    LocalAdjustment, LutRef, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
     ToneCurve, VirtualLight, WbMode, WhiteBalance,
 };
 
@@ -226,6 +226,10 @@ fn render_look(a: &Adjustments) -> String {
             out += &format!("\n    epikos:curvePoints{name}=\"{}\"", pts.join(";"));
         }
     }
+    let sc = &c.s_curve;
+    if *sc != SCurve::default() {
+        out += &format!("\n    epikos:sCurve=\"{},{},{}\"", sc.enabled, sc.amount, sc.pivot);
+    }
     let f = &a.finishing;
     out += &format!(
         "\n    epikos:grain=\"{},{},{}\"\n    epikos:vignette=\"{},{},{},{}\"",
@@ -249,6 +253,9 @@ fn render_look(a: &Adjustments) -> String {
         a.style.amount,
         a.style.skin_protection
     );
+    if !a.lut.name.is_empty() {
+        out += &format!("\n    epikos:lut=\"{}\"\n    epikos:lutAmount=\"{}\"", esc(&a.lut.name), a.lut.amount);
+    }
     if !a.style.blend.is_empty() {
         let blend: Vec<String> = a.style.blend.iter().map(|b| format!("{}:{}", esc(&b.id), b.weight)).collect();
         out += &format!("\n    epikos:styleBlend=\"{}\"", blend.join(";"));
@@ -501,6 +508,16 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     red: curve("Red"),
                     green: curve("Green"),
                     blue: curve("Blue"),
+                    s_curve: get("epikos:sCurve")
+                        .and_then(|v| {
+                            let mut it = v.split(',');
+                            Some(SCurve {
+                                enabled: parse_bool(it.next()?.trim())?,
+                                amount: it.next()?.trim().parse().ok()?,
+                                pivot: it.next()?.trim().parse().ok()?,
+                            })
+                        })
+                        .unwrap_or_default(),
                 }
             },
             split_toning: get("epikos:splitToning")
@@ -550,6 +567,10 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                             .collect()
                     })
                     .unwrap_or_default(),
+            },
+            lut: LutRef {
+                name: text("epikos:lut"),
+                amount: num("epikos:lutAmount").unwrap_or(defaults.lut.amount),
             },
             lens: LensCorrections {
                 profile: flag("epikos:lensProfile").unwrap_or(defaults.lens.profile),
@@ -662,6 +683,8 @@ mod tests {
         doc.adjustments.color.foliage = HslChannel { hue: 35.0, saturation: -10.0, luminance: 5.0 };
         doc.adjustments.color.background = BackgroundTint { hue: 200.0, amount: 30.0, saturation: -20.0, luminance: -10.0 };
         doc.adjustments.atmosphere.glow_subject_only = true;
+        doc.adjustments.curves.s_curve = SCurve { enabled: true, amount: 35.0, pivot: 42.0 };
+        doc.adjustments.lut = LutRef { name: "Kodak 2383 & \"print\"".into(), amount: 65.0 };
         let xml = render_xmp(&doc);
         let back = parse_xmp(&xml).unwrap();
         assert_eq!(doc, back);

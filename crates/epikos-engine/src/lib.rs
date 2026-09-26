@@ -27,6 +27,8 @@ mod analysis;
 mod dng;
 mod export;
 mod lensdb;
+mod luts;
+mod mentor;
 mod prompt;
 mod psd;
 mod regions;
@@ -36,6 +38,8 @@ pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
 pub use epikos_pipeline::{styles, OutputSpace, StyleInfo};
 pub use export::{ExportFormat, ExportOptions, ExportReport};
 pub use prompt::{interpret_look, LookPrompt, PromptMatch};
+pub use luts::{default_lut_dir, LutInfo};
+pub use mentor::{Feedback, Insight, MentorReport};
 pub use regions::{MaskData, TargetStatus};
 pub use story::{ShotGroup, StoryArc, SyncReport};
 
@@ -146,7 +150,9 @@ impl Loaded {
                 self.raw
                     .lens_profile
                     .clone()
-                    .or_else(|| lensdb::lookup(&self.raw.metadata))
+                    // A JPEG, PNG or TIFF carries its camera's lens in EXIF but is already
+                    // corrected (and cropped): only raw files get a database profile.
+                    .or_else(|| (!self.raw.profile.format.is_bitmap()).then(|| lensdb::lookup(&self.raw.metadata)).flatten())
                     .map(Arc::new)
             })
             .clone()
@@ -171,6 +177,10 @@ pub struct Engine {
     capacity: usize,
     cache: Mutex<VecDeque<(PathBuf, Arc<Loaded>)>>,
     masker: Masker,
+    /// Imported `.cube` LUTs live here.
+    lut_dir: PathBuf,
+    /// Parsed LUTs by name.
+    luts: Mutex<Vec<(String, Arc<epikos_pipeline::Lut3d>)>>,
 }
 
 impl Default for Engine {
@@ -201,6 +211,8 @@ impl Engine {
             capacity: capacity.max(1),
             cache: Mutex::new(VecDeque::new()),
             masker: Masker::locate(&default_model_dirs()),
+            lut_dir: default_lut_dir(),
+            luts: Mutex::new(Vec::new()),
         }
     }
 
@@ -299,31 +311,32 @@ impl Engine {
         self.masker.segment(kind, &image)
     }
 
-    /// Supported RAW, DNG, JPEG and PNG files directly inside `dir`, sorted by name.
+    /// Supported RAW, DNG, JPEG, PNG and TIFF files directly inside `dir`, sorted by name.
     pub fn list_folder(&self, dir: &Path) -> Result<Vec<FileEntry>> {
         let mut entries = Vec::new();
         for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if !path.is_file() {
-                continue;
+            if let Some(e) = file_entry(&entry?.path()) {
+                entries.push(e);
             }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') {
-                continue;
-            }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let format = CameraFormat::from_extension(ext);
-            if format == CameraFormat::Unknown {
-                continue;
-            }
-            entries.push(FileEntry {
-                path: path.to_string_lossy().into_owned(),
-                name: name.to_string(),
-                format: format.label().to_string(),
-                has_edits: sidecar_json_path(&path).exists(),
-            });
         }
         entries.sort_by_key(|a| a.name.to_lowercase());
+        Ok(entries)
+    }
+
+    /// A session from individual files (an Open Photo pick or a drop): the supported
+    /// files among `paths`, with any folders among them expanded to their photos.
+    /// Unsupported files are skipped; duplicates are listed once. Sorted by name.
+    pub fn list_files(&self, paths: &[PathBuf]) -> Result<Vec<FileEntry>> {
+        let mut entries = Vec::new();
+        for path in paths {
+            if path.is_dir() {
+                entries.extend(self.list_folder(path)?);
+            } else if let Some(e) = file_entry(path) {
+                entries.push(e);
+            }
+        }
+        entries.sort_by_key(|a| (a.name.to_lowercase(), a.path.clone()));
+        entries.dedup_by(|a, b| a.path == b.path);
         Ok(entries)
     }
 
@@ -397,7 +410,7 @@ impl Engine {
                 masks.push(m);
             }
         }
-        Ok(Prepared { depth, masks, lens: loaded.lens_profile() })
+        Ok(Prepared { depth, masks, lens: loaded.lens_profile(), lut: self.lut(&adjustments.lut.name) })
     }
 
     /// Suggested exposure and Step 2 tone for the photo as it is set up in Step 1.
@@ -566,6 +579,12 @@ impl Engine {
         Ok(story::story_arc(&files))
     }
 
+    /// [`Engine::story_arc`] for a session of individual files (see [`Engine::list_files`]).
+    pub fn story_arc_files(&self, paths: &[PathBuf]) -> Result<StoryArc> {
+        let files: Vec<PathBuf> = self.list_files(paths)?.into_iter().map(|f| PathBuf::from(f.path)).collect();
+        Ok(story::story_arc(&files))
+    }
+
     /// Copy the hero's look to `targets` with per-frame calibration, writing each
     /// target's sidecar (the previous one is kept for [`Engine::undo_sync`]).
     pub fn sync_look(
@@ -714,7 +733,7 @@ impl Engine {
 
 /// A develop with the lens profile but no model outputs (what the models themselves see).
 fn render(loaded: &Loaded, adjustments: &Adjustments, max_w: u32, max_h: u32) -> Result<DisplayImage> {
-    let prepared = Prepared { depth: None, masks: Vec::new(), lens: loaded.lens_profile() };
+    let prepared = Prepared { depth: None, masks: Vec::new(), lens: loaded.lens_profile(), lut: None };
     render_with(loaded, adjustments, max_w, max_h, &prepared)
 }
 
@@ -737,12 +756,13 @@ pub(crate) struct Prepared {
     pub depth: Option<Arc<DepthMap>>,
     pub masks: Vec<Arc<MaskData>>,
     pub lens: Option<Arc<LensProfile>>,
+    pub lut: Option<Arc<epikos_pipeline::Lut3d>>,
 }
 
 impl Prepared {
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
-        Self { depth: None, masks: Vec::new(), lens: None }
+        Self { depth: None, masks: Vec::new(), lens: None, lut: None }
     }
 
     pub(crate) fn with_inputs<R>(&self, f: impl FnOnce(&LookInputs) -> R) -> R {
@@ -755,6 +775,7 @@ impl Prepared {
             depth: self.depth.as_deref().map(|d| DepthPlane { width: d.width, height: d.height, data: &d.depth }),
             masks: &planes,
             lens: self.lens.as_deref(),
+            lut: self.lut.as_deref(),
         };
         f(&inputs)
     }
@@ -784,6 +805,24 @@ fn source_ref(raw: &DecodedRaw) -> SourceRef {
         make: raw.profile.clean_make.clone(),
         model: raw.profile.clean_model.clone(),
     }
+}
+
+/// A browsable photo: a supported, visible file.
+fn file_entry(path: &Path) -> Option<FileEntry> {
+    if !path.is_file() {
+        return None;
+    }
+    let name = path.file_name()?.to_str()?;
+    if name.starts_with('.') {
+        return None;
+    }
+    let format = CameraFormat::from_extension(path.extension()?.to_str()?);
+    (format != CameraFormat::Unknown).then(|| FileEntry {
+        path: path.to_string_lossy().into_owned(),
+        name: name.to_string(),
+        format: format.label().to_string(),
+        has_edits: sidecar_json_path(path).exists(),
+    })
 }
 
 fn file_name(path: &Path) -> String {
@@ -1019,6 +1058,41 @@ mod tests {
         assert!(at(5, 20, 3) > 60_000, "subject inside: {}", at(5, 20, 3));
         assert!(at(58, 20, 3) < 5_000, "subject outside: {}", at(58, 20, 3));
         assert!(at(30, 30, 4).abs_diff(16_384) < 700, "skin: {}", at(30, 30, 4));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Every channel count up to the maximum gets a TIFF whose sample count matches
+    /// its declared channels (5 or 6 once wrote more samples than it declared).
+    #[test]
+    fn tiff_sample_count_matches_its_channels_up_to_the_maximum() {
+        use tiff::decoder::Decoder;
+        use tiff::tags::Tag;
+        let dir = temp_dir("export-many");
+        let loaded = synthetic_loaded(32, 24);
+        let names = ["Subject", "Sky", "Skin", "Eyes", "Hair", "Depth"];
+        for count in 1..=names.len() {
+            let dest = dir.join(format!("m{count}.tif"));
+            let aux = names[..count]
+                .iter()
+                .map(|n| export::AuxPlane { name: n.to_string(), width: 16, height: 12, data: vec![0.5; 16 * 12] })
+                .collect();
+            let report =
+                export::export(&loaded, &Adjustments::default(), &dest, ExportOptions::default(), &Prepared::empty(), aux)
+                    .unwrap();
+            assert_eq!(report.alpha_channels.len(), count);
+            let mut dec = Decoder::new(fs::File::open(&dest).unwrap()).unwrap();
+            assert_eq!(dec.get_tag_u32(Tag::SamplesPerPixel).unwrap() as usize, 3 + count);
+            assert_eq!(dec.get_tag_u32_vec(Tag::ExtraSamples).unwrap().len(), count);
+            assert_eq!(dec.get_tag_u32_vec(Tag::BitsPerSample).unwrap().len(), 3 + count);
+        }
+        // Reopened as a photo, a masked export has the same colour as a plain one.
+        let plain = dir.join("plain.tif");
+        export::export(&loaded, &Adjustments::default(), &plain, ExportOptions::default(), &Prepared::empty(), Vec::new())
+            .unwrap();
+        let a = epikos_decode::decode_file(&plain).unwrap().mosaic.data;
+        let b = epikos_decode::decode_file(dir.join("m6.tif")).unwrap().mosaic.data;
+        assert_eq!(a.len(), b.len());
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-6), "masked TIFF decodes differently");
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1287,6 +1361,29 @@ mod tests {
                 ("a.cr3".into(), true),
                 ("b.NEF".into(), false),
                 ("c.dng".into(), false)
+            ]
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_files_takes_photos_and_folders_and_skips_the_rest() {
+        let dir = temp_dir("files");
+        let sub = dir.join("more");
+        fs::create_dir_all(&sub).unwrap();
+        for name in ["b.NEF", "a.jpg", "notes.txt", "c.TIF"] {
+            fs::write(dir.join(name), b"").unwrap();
+        }
+        fs::write(sub.join("d.raf"), b"").unwrap();
+        let paths = [dir.join("b.NEF"), dir.join("notes.txt"), dir.join("a.jpg"), sub.clone(), dir.join("b.NEF")];
+        let names: Vec<_> =
+            Engine::default().list_files(&paths).unwrap().into_iter().map(|e| (e.name, e.format)).collect();
+        assert_eq!(
+            names,
+            vec![
+                ("a.jpg".into(), "JPEG".into()),
+                ("b.NEF".into(), "Nikon NEF".into()),
+                ("d.raf".into(), "Fujifilm RAF".into())
             ]
         );
         fs::remove_dir_all(&dir).unwrap();

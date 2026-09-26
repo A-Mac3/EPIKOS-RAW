@@ -9,7 +9,7 @@
 //! keep the two in step.
 
 use epikos_core::ImageRgbF32;
-use epikos_sidecar::{Curves, SplitToning, ToneCurve};
+use epikos_sidecar::{Curves, SCurve, SplitToning, ToneCurve};
 use rayon::prelude::*;
 
 use super::oklab::{hsv_hue_to_oklab, Oklab};
@@ -167,7 +167,7 @@ pub(crate) fn apply_curves(rgb: &mut ImageRgbF32, curves: &Curves) {
     if curves.is_identity() {
         return;
     }
-    let master = table(&curves.rgb);
+    let master = with_s_curve(table(&curves.rgb), &curves.s_curve);
     for (plane, curve) in [
         (&mut rgb.r, &curves.red),
         (&mut rgb.g, &curves.green),
@@ -185,6 +185,31 @@ pub(crate) fn apply_curves(rgb: &mut ImageRgbF32, curves: &Curves) {
             }
         });
     }
+}
+
+/// The standard S-curve on [0, 1] (encoded): a power curve on each side of the pivot,
+/// so black, white and the pivot stay put and the slope there is `1 + 1.5 × amount`
+/// (steeper through the midtones, flatter at the ends). Mirrored in `curve.ts`.
+pub(crate) fn s_curve(s: &SCurve, x: f32) -> f32 {
+    if !s.is_active() {
+        return x;
+    }
+    let p = 0.25 + 0.5 * (s.pivot / 100.0).clamp(0.0, 1.0);
+    let g = 1.0 + 1.5 * (s.amount / 100.0).clamp(0.0, 1.0);
+    let x = x.clamp(0.0, 1.0);
+    if x <= p {
+        p * (x / p).powf(g)
+    } else {
+        1.0 - (1.0 - p) * ((1.0 - x) / (1.0 - p)).powf(g)
+    }
+}
+
+/// The S-curve first, then the master curve: `table[i]` becomes `master(s(x_i))`.
+fn with_s_curve(master: Vec<f32>, s: &SCurve) -> Vec<f32> {
+    if !s.is_active() {
+        return master;
+    }
+    (0..LUT_SIZE).map(|i| lookup(&master, s_curve(s, i as f32 / (LUT_SIZE - 1) as f32))).collect()
 }
 
 /// Planes hold Oklab. Tints are added to a/b, so lightness is kept.
@@ -236,6 +261,24 @@ mod tests {
         let mut img = ImageRgbF32::new(1, 1, ColorSpace::LinearRec2020);
         (img.r[0], img.g[0], img.b[0]) = (v, v, v);
         img
+    }
+
+    #[test]
+    fn s_curve_keeps_ends_and_pivot_and_adds_contrast() {
+        let s = SCurve { enabled: true, amount: 60.0, pivot: 50.0 };
+        assert_eq!(s_curve(&s, 0.0), 0.0);
+        assert!((s_curve(&s, 1.0) - 1.0).abs() < 1e-6);
+        assert!((s_curve(&s, 0.5) - 0.5).abs() < 1e-6);
+        assert!(s_curve(&s, 0.3) < 0.3 && s_curve(&s, 0.7) > 0.7);
+        // A lower pivot turns the curve around a darker tone.
+        let low = SCurve { pivot: 0.0, ..s };
+        assert!((s_curve(&low, 0.25) - 0.25).abs() < 1e-6);
+        // Off, it's the identity, and so is a zero amount.
+        assert_eq!(s_curve(&SCurve { enabled: false, ..s }, 0.3), 0.3);
+        let mut curves = Curves { s_curve: SCurve { enabled: true, amount: 0.0, pivot: 50.0 }, ..Default::default() };
+        assert!(curves.is_identity());
+        curves.s_curve.amount = 40.0;
+        assert!(!curves.is_identity());
     }
 
     #[test]

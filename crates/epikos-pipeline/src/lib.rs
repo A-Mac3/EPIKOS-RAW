@@ -36,7 +36,7 @@ pub use basic::{apply_tone, auto_tone};
 pub use geometry::{apply_geometry, estimate_upright};
 pub use look::{
     apply_look, bake_tone_curve, fit_to_image, look_is_active, look_masks, look_needs_depth, oklab_planes,
-    skin_likelihood, styles, DepthPlane, LookInputs, MaskPlane, StyleInfo,
+    skin_likelihood, styles, DepthPlane, LookInputs, Lut3d, MaskPlane, StyleInfo,
 };
 pub use optics::{apply_lens_profile, correct_chromatic_aberration, correct_distortion};
 pub use orient::apply_orientation;

@@ -143,7 +143,7 @@ pub(crate) fn export(
     // The DNG carries the scene (lens-corrected, since it has no opcodes of its own),
     // not the look: the reader applies its own rendering.
     let rgb = if format == ExportFormat::Dng {
-        let scene = crate::Prepared { depth: None, masks: Vec::new(), lens: prepared.lens.clone() };
+        let scene = crate::Prepared { depth: None, masks: Vec::new(), lens: prepared.lens.clone(), lut: None };
         scene.with_inputs(|inputs| {
             develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &crate::scene_only(adjustments), inputs)
         })?
@@ -187,7 +187,10 @@ pub(crate) fn export(
                 1 => write_tiff::<Rgb16Plus1>(&partial, &image, space, meta, gps),
                 2 => write_tiff::<Rgb16Plus2>(&partial, &image, space, meta, gps),
                 3 => write_tiff::<Rgb16Plus3>(&partial, &image, space, meta, gps),
-                _ => write_tiff::<Rgb16Plus4>(&partial, &image, space, meta, gps),
+                4 => write_tiff::<Rgb16Plus4>(&partial, &image, space, meta, gps),
+                5 => write_tiff::<Rgb16Plus5>(&partial, &image, space, meta, gps),
+                6 => write_tiff::<Rgb16Plus6>(&partial, &image, space, meta, gps),
+                n => unreachable!("{n} extra channels; at most {MAX_EXTRA} are kept"),
             };
             (develop_ms, t, r)
         }
@@ -307,6 +310,10 @@ rgb16_plus!(Rgb16Plus1, 1);
 rgb16_plus!(Rgb16Plus2, 2);
 rgb16_plus!(Rgb16Plus3, 3);
 rgb16_plus!(Rgb16Plus4, 4);
+rgb16_plus!(Rgb16Plus5, 5);
+rgb16_plus!(Rgb16Plus6, 6);
+// One colour type per possible channel count, up to MAX_EXTRA.
+const _: () = assert!(MAX_EXTRA == 6);
 
 /// TIFF horizontal differencing: each sample minus the same sample one pixel left.
 fn predict(row: &[u16], stride: usize, result: &mut Vec<u16>) {

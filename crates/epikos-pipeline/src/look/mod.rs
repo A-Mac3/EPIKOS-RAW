@@ -15,6 +15,7 @@ mod finish;
 mod grade;
 mod lights;
 mod local;
+mod lut;
 mod oklab;
 mod region;
 mod skin;
@@ -36,6 +37,7 @@ use grade::ColorParams;
 use oklab::Oklab;
 use texture::{apply_texture, TextureParams};
 
+pub use lut::Lut3d;
 pub use style::StyleInfo;
 pub use tone::bake_tone_curve;
 
@@ -53,6 +55,8 @@ pub struct LookInputs<'a> {
     pub masks: &'a [MaskPlane<'a>],
     /// Step 1 lens profile, applied when `adjustments.lens.profile` is on.
     pub lens: Option<&'a LensProfile>,
+    /// The 3D LUT named by `adjustments.lut`, when it's installed.
+    pub lut: Option<&'a Lut3d>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -131,6 +135,7 @@ struct Look {
     split: SplitToning,
     finishing: Finishing,
     lights: Vec<epikos_sidecar::VirtualLight>,
+    lut_amount: f32,
     local: Vec<LocalAdjustment>,
     retouch_subject_only: bool,
     foliage: HslChannel,
@@ -152,6 +157,7 @@ impl Look {
             split: adj.split_toning,
             finishing: adj.finishing,
             lights: adj.atmosphere.lights.clone(),
+            lut_amount: if adj.lut.is_none() { 0.0 } else { pct(adj.lut.amount) },
             local: adj.local.iter().filter(|l| !l.is_neutral()).copied().collect(),
             retouch_subject_only: adj.texture.retouch_subject_only,
             foliage: adj.color.foliage,
@@ -179,17 +185,34 @@ impl Look {
         }
         let amount = pct(adj.style.amount);
         let (mut skins, mut scenes) = (Vec::new(), Vec::new());
+        let mut film = style::Film::default();
         for (s, weight) in entries {
             let k = amount * weight;
             look.texture = look.texture.plus(s.texture.scaled(k));
             skins.push(s.skin.scaled(k));
             scenes.push(s.scene.scaled(k));
             look.atmosphere = look.atmosphere.plus(s.atmosphere.scaled(k));
+            film = film.plus(s.film.scaled(k));
         }
+        look.add_film(film);
         look.style_skin = ColorParams::sum(&skins);
         look.style_scene = ColorParams::sum(&scenes);
         look.style_protection = pct(adj.style.skin_protection);
         look
+    }
+
+    /// A film stock's fade and highlight roll-off go onto the master curve (on top of
+    /// the photographer's), its grain onto Step 8's unless that's stronger.
+    fn add_film(&mut self, film: style::Film) {
+        let c = &mut self.curves.rgb;
+        c.black = (c.black + 100.0 * film.fade).clamp(-100.0, 100.0);
+        c.highlights = (c.highlights - 70.0 * film.roll).clamp(-100.0, 100.0);
+        c.white = (c.white - 25.0 * film.roll).clamp(-100.0, 100.0);
+        let grain = 100.0 * film.grain.min(1.0);
+        if grain > self.finishing.grain {
+            self.finishing.grain = grain;
+            self.finishing.grain_size = 100.0 * film.grain_size;
+        }
     }
 
     fn needs_lab(&self) -> bool {
@@ -227,6 +250,8 @@ impl Look {
             && !self.lights.iter().any(|l| l.intensity > 0.0)
             && self.curves.is_identity()
             && self.split.is_neutral()
+            && self.finishing.is_neutral()
+            && self.lut_amount <= 0.0
     }
 }
 
@@ -293,6 +318,10 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
     apply_atmosphere(rgb, &look.atmosphere, depth.as_deref(), glow_mask);
     lights::apply_lights(rgb, &look.lights, depth.as_deref());
     tone::apply_tone(rgb, &look.curves, &look.split);
+    // A missing LUT file does nothing rather than failing the render.
+    if let Some(lut) = inputs.lut.filter(|_| look.lut_amount > 0.0) {
+        lut::apply_lut(rgb, lut, look.lut_amount);
+    }
     finish::apply_finishing(rgb, &look.finishing);
 }
 
@@ -567,6 +596,30 @@ mod tests {
         adj.atmosphere.glow = 50.0;
         adj.atmosphere.glow_subject_only = true;
         assert_eq!(look_masks(&adj), vec![MaskTarget::Subject]);
+    }
+
+    #[test]
+    fn finishing_alone_is_applied() {
+        let mut adj = Adjustments::default();
+        adj.finishing.vignette = -60.0;
+        assert!(look_is_active(&adj));
+        let mut img = portrait();
+        let before = img.clone();
+        apply_look(&mut img, &adj, &LookInputs::default());
+        assert!(img.g[0] < before.g[0], "corner not darkened");
+    }
+
+    #[test]
+    fn film_styles_fade_the_blacks_and_add_grain() {
+        let mut adj = Adjustments::default();
+        adj.style.id = "portra-400".into();
+        let look = Look::from_adjustments(&adj);
+        assert!(look.curves.rgb.black > 10.0 && look.curves.rgb.highlights < 0.0);
+        assert!(look.finishing.grain > 10.0);
+        // Half the amount, half the film.
+        adj.style.amount = 50.0;
+        let half = Look::from_adjustments(&adj);
+        assert!((half.curves.rgb.black - look.curves.rgb.black / 2.0).abs() < 1e-3);
     }
 
     #[test]

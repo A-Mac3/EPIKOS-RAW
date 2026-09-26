@@ -979,10 +979,13 @@ name = "epikos-decode"
 version = "0.1.0"
 dependencies = [
  "epikos-core",
+ "flate2",
  "hex",
  "image",
  "rawler",
  "sha2",
+ "tiff",
+ "weezl",
 ]
 
 [[package]]
@@ -1845,6 +1848,7 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png 0.18.1",
+ "tiff",
  "zune-core",
  "zune-jpeg",
 ]
