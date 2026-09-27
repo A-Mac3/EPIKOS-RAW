@@ -227,7 +227,8 @@ impl Engine {
             let f = match cached(loaded, &face_skin_key(adjustments)) {
                 Some(f) => f,
                 None => {
-                    self.face_planes(loaded, adjustments)?;
+                    // Through the cache, so hair and the other features are kept too.
+                    self.mask_plane_flat(loaded, adjustments, MaskTarget::FaceSkin)?;
                     cached(loaded, &face_skin_key(adjustments)).expect("face_planes caches face skin")
                 }
             };
@@ -248,9 +249,48 @@ impl Engine {
         // on the subject.
         let seeds: Vec<usize> = match &face {
             Some(f) if f.iter().filter(|&&v| v > 0.5).count() > n / 2000 => (0..n).filter(|&i| f[i] > 0.5).collect(),
-            _ => (0..n).filter(|&i| skin[i] > 0.5 && subject[i] > 0.5).collect(),
+            // No face parsed: learn only from the heads (top of the silhouette), never
+            // from the whole body, where a warm jumper would outvote the skin.
+            _ => {
+                let heads = head_boxes(&subject, w as usize, h as usize);
+                (0..n)
+                    .filter(|&i| {
+                        let (x, y) = (i % w as usize, i / w as usize);
+                        skin[i] > 0.5 && subject[i] > 0.5 && heads.iter().any(|b| x >= b[0] && x < b[2] && y >= b[1] && y < b[3])
+                    })
+                    .collect()
+            }
         };
         let model = (seeds.len() > n / 4000).then(|| SkinColour::learn(&lab, &seeds));
+        // The skin's median lightness (for telling a beard from shaded skin).
+        let skin_l = {
+            let mut l: Vec<f32> = seeds.iter().map(|&i| lab.r[i]).collect();
+            if l.is_empty() {
+                0.5
+            } else {
+                let mid = l.len() / 2;
+                *l.select_nth_unstable_by(mid, f32::total_cmp).1
+            }
+        };
+        let cloth = cached(loaded, &face_cloth_key(adjustments)).map(|c| crate::analysis::fit(&c.data, c.width, c.height, w, h));
+        let hair = cached(loaded, &cache_key(adjustments, MaskTarget::Hair)).map(|c| crate::analysis::fit(&c.data, c.width, c.height, w, h));
+        // Hair is textured, strongly lit skin smooth: the face model sometimes calls a
+        // bright cheek by the hairline "hair", so hair counts only where it's textured.
+        let texture: Vec<f32> = {
+            let (wu, hu) = (w as usize, h as usize);
+            let mean = crate::analysis::box_mean(&lab.r, wu, hu, 2);
+            let sq: Vec<f32> = lab.r.iter().map(|v| v * v).collect();
+            let mean_sq = crate::analysis::box_mean(&sq, wu, hu, 2);
+            (0..n).map(|i| smoothstep(0.012, 0.03, (mean_sq[i] - mean[i] * mean[i]).max(0.0).sqrt())).collect()
+        };
+        // Around the parsed face: a reach of about a quarter of the face's size.
+        let face_near = face.as_ref().and_then(|f| {
+            let area = f.iter().filter(|&&v| v > 0.5).count();
+            (area > n / 2000).then(|| {
+                let r = ((area as f32).sqrt() * 0.25).round().max(2.0) as usize;
+                crate::analysis::box_mean(f, w as usize, h as usize, r).into_iter().map(|v| smoothstep(0.01, 0.08, v)).collect::<Vec<f32>>()
+            })
+        });
         for i in 0..n {
             let inside = subject[i];
             let colour = skin[i].max(relaxed[i]);
@@ -263,8 +303,16 @@ impl Engine {
                 None => colour,
             };
             // Skin only on the person: a warm wall, wood or clothing outside the subject
-            // never counts, whatever its colour.
-            skin[i] = (on_person * inside).max(face.as_ref().map_or(0.0, |f| f[i]));
+            // never counts, whatever its colour. Right next to the parsed face (a
+            // strongly lit or shaded cheek, the ears, the neck), skin colour on the
+            // subject counts even where the light makes it unlike the rest.
+            // Clothing and hair the face model saw keep collars and braids out.
+            let not_cloth = 1.0 - cloth.as_ref().map_or(0.0, |c| c[i]);
+            let not_hair = 1.0 - hair.as_ref().map_or(0.0, |c| c[i]) * texture[i];
+            // A beard: textured and clearly darker than this person's skin.
+            let not_beard = 1.0 - texture[i] * smoothstep(0.04, 0.1, skin_l - lab.r[i]);
+            let by_face = face_near.as_ref().map_or(0.0, |f| f[i]) * colour * not_cloth * not_hair * not_beard * inside;
+            skin[i] = (on_person * inside).max(by_face).max(face.as_ref().map_or(0.0, |f| f[i]));
         }
         Ok((w, h, skin))
     }
@@ -276,7 +324,35 @@ impl Engine {
     fn face_planes(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Vec<MaskData>> {
         // Faces are found from skin of any tone, so fair and very deep faces are parsed too.
         let (sw, sh, skin) = self.person_skin(loaded, adjustments)?;
-        let boxes = face_boxes(&skin, sw as usize, sh as usize);
+        // Heads from the subject's silhouette first, then faces found from skin blobs
+        // that aren't one of those heads.
+        let subject_small = self
+            .mask_plane(loaded, adjustments, MaskTarget::Subject)?
+            .map(|sub| crate::analysis::fit(&sub.data, sub.width, sub.height, sw, sh));
+        let mut boxes: Vec<[usize; 4]> = match &subject_small {
+            Some(sub) => head_boxes(sub, sw as usize, sh as usize)
+                .into_iter()
+                // A head shows some skin; the top of a lamp or a bag doesn't.
+                .filter(|&[x0, y0, x1, y1]| {
+                    let area = ((x1 - x0) * (y1 - y0)).max(1);
+                    let on = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| skin[y * sw as usize + x] > 0.5).count();
+                    on * 25 >= area
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        for b in face_boxes(&skin, sw as usize, sh as usize) {
+            // A face is on the subject: a skin-coloured wall or wood beside it isn't.
+            let on_subject = subject_small.as_ref().is_none_or(|sub| {
+                let [x0, y0, x1, y1] = b;
+                let area = ((x1 - x0) * (y1 - y0)).max(1);
+                let on = (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| sub[y * sw as usize + x] > 0.5).count();
+                on * 10 >= area * 3
+            });
+            if on_subject && !boxes.iter().any(|a| overlap(a, &b) > 0.3) {
+                boxes.push(b);
+            }
+        }
         let display = render(loaded, &scene_only(adjustments), MASK_INPUT_SIDE * FACE_DETAIL, MASK_INPUT_SIDE * FACE_DETAIL)?;
         let rgb = rgba_to_rgb(&display);
         let lab = crate::learn::display_lab(&display);
@@ -418,9 +494,12 @@ impl Engine {
         let face = Arc::new(MaskData { target: MaskTarget::FaceSkin, width, height, data: face_skin.clone(), infer_ms: 0 });
         {
             let key = face_skin_key(adjustments);
+            let cloth_key = face_cloth_key(adjustments);
+            let clothing = Arc::new(MaskData { target: MaskTarget::Subject, width, height, data: cloth, infer_ms: 0 });
             let mut cache = loaded.planes.lock().unwrap_or_else(PoisonError::into_inner);
-            cache.retain(|(k, _)| *k != key);
+            cache.retain(|(k, _)| *k != key && *k != cloth_key);
             cache.push((key, face));
+            cache.push((cloth_key, clothing));
         }
         let md = |target, data| MaskData { target, width, height, data, infer_ms: 0 };
         Ok(vec![
@@ -432,6 +511,14 @@ impl Engine {
             md(MaskTarget::FaceSkin, face_skin),
         ])
     }
+}
+
+/// Intersection over the smaller box's area.
+fn overlap(a: &[usize; 4], b: &[usize; 4]) -> f32 {
+    let iw = a[2].min(b[2]).saturating_sub(a[0].max(b[0])) as f32;
+    let ih = a[3].min(b[3]).saturating_sub(a[1].max(b[1])) as f32;
+    let area = |r: &[usize; 4]| ((r[2] - r[0]) * (r[3] - r[1])) as f32;
+    iw * ih / area(a).min(area(b)).max(1.0)
 }
 
 /// Face features are parsed at this multiple of the mask resolution.
@@ -479,6 +566,11 @@ impl SkinColour {
 /// Face-parsed skin, kept apart from the combined Skin mask.
 fn face_skin_key(a: &Adjustments) -> String {
     format!("face-skin|{:?}", a.lens)
+}
+
+/// Face-parsed clothing (around the heads), kept to keep collars out of the Skin mask.
+fn face_cloth_key(a: &Adjustments) -> String {
+    format!("face-cloth|{:?}", a.lens)
 }
 
 fn cached(loaded: &Loaded, key: &str) -> Option<Arc<MaskData>> {
@@ -534,6 +626,41 @@ pub(crate) fn foreground(depth: &[f32]) -> Vec<f32> {
 
 /// Square crops around face-like skin blobs (largest first, up to four), in pixels of
 /// the `w × h` frame: `[x0, y0, x1, y1]`.
+/// Square crops around the head of each person-sized subject region: the top of the
+/// silhouette. Finds faces that skin colour can't separate, e.g. a face above a
+/// skin-coloured jumper, where face and clothes form one skin blob.
+pub(crate) fn head_boxes(subject: &[f32], w: usize, h: usize) -> Vec<[usize; 4]> {
+    if w < 8 || h < 8 || subject.len() != w * h {
+        return Vec::new();
+    }
+    let ranked = crate::composition::rank_subjects(subject, None, None, w, h);
+    let mut out = Vec::new();
+    for s in ranked.iter().filter(|s| s.area >= 0.01) {
+        let [l, t, r, _] = s.bbox;
+        let (x0, x1) = ((l * w as f32) as usize, ((r * w as f32).ceil() as usize).min(w));
+        let top = (t * h as f32) as usize;
+        // The top of the silhouette: the head (and hair).
+        // Tall enough to reach past narrow hair (braids, a bun) to the face.
+        let band = ((h as f32 * 0.2) as usize).max(4);
+        let (mut widest, mut sum_x, mut count) = (0usize, 0.0f32, 0usize);
+        for y in top..(top + band).min(h) {
+            let row: Vec<usize> = (x0..x1).filter(|&x| subject[y * w + x] > 0.5).collect();
+            widest = widest.max(row.len());
+            sum_x += row.iter().sum::<usize>() as f32;
+            count += row.len();
+        }
+        if count == 0 || widest < 6 {
+            continue;
+        }
+        let cx = sum_x / count as f32;
+        let side = ((widest as f32 * 2.0).min(w.min(h) as f32)) as usize;
+        let bx0 = (cx - side as f32 / 2.0).clamp(0.0, (w - side) as f32) as usize;
+        let by0 = (top as f32 - 0.05 * side as f32).clamp(0.0, (h - side) as f32) as usize;
+        out.push([bx0, by0, (bx0 + side).min(w), (by0 + side).min(h)]);
+    }
+    out
+}
+
 pub(crate) fn face_boxes(skin: &[f32], w: usize, h: usize) -> Vec<[usize; 4]> {
     if w < 8 || h < 8 || skin.len() != w * h {
         return Vec::new();
@@ -630,6 +757,30 @@ mod tests {
         let depth: Vec<f32> = (0..100).map(|i| if i < 30 { 0.9 } else { 0.2 }).collect();
         let f = foreground(&depth);
         assert!(f[0] > 0.99 && f[99] < 0.01);
+    }
+
+    #[test]
+    fn head_boxes_find_the_head_on_top_of_a_person() {
+        // A person: narrow braids on top, a wider face, then wide shoulders below.
+        let (w, h) = (200, 150);
+        let mut subject = vec![0.0f32; w * h];
+        for y in 0..h {
+            let half = match y {
+                20..=27 => 8,  // braids
+                28..=60 => 18, // face
+                61..=149 => 50, // body
+                _ => 0,
+            };
+            for x in 100 - half..100 + half {
+                subject[y * w + x] = 1.0;
+            }
+        }
+        let boxes = head_boxes(&subject, w, h);
+        assert_eq!(boxes.len(), 1);
+        let [x0, y0, x1, y1] = boxes[0];
+        // Wide enough for the face under the braids, and starting at the top.
+        assert!(x0 <= 82 && x1 >= 118, "{:?}", boxes[0]);
+        assert!(y0 <= 20 && y1 > 60, "{:?}", boxes[0]);
     }
 
     #[test]
