@@ -28,6 +28,7 @@ import type {
   StoryArc,
   StyleInfo,
   SyncReport,
+  Spot,
 } from "./types";
 
 export const inTauri = isTauri();
@@ -154,6 +155,15 @@ export const maskModels = () => invoke<MaskModels>("mask_models");
 export async function detectMask(path: string, adjustments: Adjustments, kind: MaskTarget): Promise<Mask> {
   return parseMask(await invoke<ArrayBuffer>("detect_mask", { path, adjustments, kind }), kind);
 }
+
+/** Local adjustment `index`'s mask as refined: what its edit covers. */
+export async function localMask(path: string, adjustments: Adjustments, index: number): Promise<Mask> {
+  return parseMask(await invoke<ArrayBuffer>("local_mask", { path, adjustments, index }), adjustments.local[index].mask);
+}
+
+/** Likely dust spots, for review. */
+export const findDustSpots = (path: string, adjustments: Adjustments) =>
+  invoke<Spot[]>("find_dust_spots", { path, adjustments });
 
 /** Step 6 depth map in the mask layout (255 = nearest). */
 export async function detectDepth(path: string, adjustments: Adjustments): Promise<Mask> {

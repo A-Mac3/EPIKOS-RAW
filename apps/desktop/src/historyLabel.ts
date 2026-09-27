@@ -43,7 +43,36 @@ export function describeChange(before: Adjustments, after: Adjustments, styles: 
   if (before.highlightRecovery !== after.highlightRecovery) parts.push("Highlight recovery");
   if (!same(before.noiseReduction, after.noiseReduction)) parts.push("Noise reduction");
   if (!same(before.local, after.local)) {
-    parts.push(after.local.length > before.local.length ? "Local adjustment added" : after.local.length < before.local.length ? "Local adjustment removed" : "Local adjustment");
+    const refined = before.local.length === after.local.length &&
+      after.local.every((l, i) => {
+        const { grow, feather, refine, ...rest } = l;
+        const { grow: g, feather: f, refine: r, ...was } = before.local[i];
+        return same(rest, was) && !same([grow, feather, refine], [g, f, r]) ? true : same(l, before.local[i]);
+      });
+    parts.push(
+      after.local.length > before.local.length
+        ? "Local adjustment added"
+        : after.local.length < before.local.length
+          ? "Local adjustment removed"
+          : refined
+            ? "Mask refined"
+            : "Local adjustment",
+    );
+  }
+  if (!same(before.retouch, after.retouch)) {
+    const r0 = before.retouch;
+    const r1 = after.retouch;
+    parts.push(
+      r1.erase.length > r0.erase.length
+        ? "Generative erase"
+        : r1.erase.length < r0.erase.length
+          ? "Erase restored"
+          : r1.spots.length !== r0.spots.length
+            ? "Spot healing"
+            : r1.redEye
+              ? "Red-eye removal"
+              : "Red-eye removal off",
+    );
   }
   if (!same(before.manual, after.manual)) {
     const n = (a: Adjustments) => a.manual.length;

@@ -136,6 +136,147 @@ pub fn editorial() -> Signature {
     }
 }
 
+/// A professional editing profile for a kind of photograph: where working photographers
+/// in that genre typically put the black and white points, midtone contrast, skin and
+/// greenery. Distilled from widely taught practice, not measured from any one image.
+pub struct ProProfile {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Scene-analysis genres it's chosen for automatically.
+    pub genres: &'static [&'static str],
+    /// What the profile does, and why professionals edit that genre this way.
+    pub summary: &'static str,
+    pub why: &'static str,
+    pub signature: Signature,
+}
+
+fn tone(black: f32, white: f32, contrast: f32) -> ToneSignature {
+    ToneSignature { black, white, median: 0.55, contrast }
+}
+
+/// Every pro profile, by id.
+pub fn pro_profiles() -> Vec<ProProfile> {
+    let base = editorial();
+    let skin = base.skin.clone().expect("editorial has skin");
+    let with = |tone: ToneSignature, skin: Option<SkinSignature>, foliage: Option<BandStat>| Signature {
+        tone,
+        skin,
+        foliage,
+        ..base.clone()
+    };
+    let foliage = |hue: f32, chroma: f32| Some(BandStat { hue, chroma, share: 0.1 });
+    vec![
+        ProProfile {
+            id: "pro-portrait",
+            name: "Pro Portrait",
+            genres: &["close-up-portrait", "environmental-portrait"],
+            summary: "anchored blacks, a clean but not clipped white, moderate midtone contrast, the face a little brighter than its surroundings and skin warm within its own range",
+            why: "Portrait retouchers keep contrast moderate so skin stays smooth, lift the face slightly above the frame so the eye lands there, and keep skin's own hue rather than pushing it orange.",
+            signature: with(
+                tone(0.12, 0.95, 0.24),
+                Some(SkinSignature { richness: 0.6, relative_l: 0.07, specular: 0.04, ..skin.clone() }),
+                foliage(120.0, 0.065),
+            ),
+        },
+        ProProfile {
+            id: "pro-deep-skin",
+            name: "Pro Deep-Skin Portrait",
+            genres: &["dark-melanin-fashion"],
+            summary: "deep, rich blacks with dark skin kept dark and luminous: full chroma, its specular sheen kept, never lifted grey",
+            why: "Photographers who specialise in darker skin protect its depth and undertone: they add richness and highlight sheen instead of brightening, which turns deep skin ashy.",
+            signature: with(
+                tone(0.09, 0.95, 0.26),
+                Some(SkinSignature { l: 0.42, hue: 55.0, chroma: 0.07, richness: 0.7, relative_l: 0.03, specular: 0.05 }),
+                foliage(120.0, 0.065),
+            ),
+        },
+        ProProfile {
+            id: "pro-wedding",
+            name: "Pro Light & Airy Wedding",
+            genres: &["fine-art-wedding"],
+            summary: "lifted blacks, bright creamy whites, soft contrast, fresh skin and pale, gentle greens",
+            why: "Fine-art wedding photographers expose bright and grade soft: open shadows and low contrast give the airy, film-like feel clients book them for, with skin kept fresh rather than tanned.",
+            signature: with(
+                tone(0.2, 0.97, 0.19),
+                Some(SkinSignature { richness: 0.52, relative_l: 0.08, ..skin.clone() }),
+                foliage(118.0, 0.05),
+            ),
+        },
+        ProProfile {
+            id: "pro-landscape",
+            name: "Pro Landscape",
+            genres: &["golden-hour-landscape"],
+            summary: "full range from deep black to bright white, strong midtone contrast and rich but believable greenery",
+            why: "Landscape photographers use the whole tonal range for depth, add midtone contrast for texture in land and sky, and keep greens natural: neon grass is the most common tell of an over-edit.",
+            signature: with(tone(0.09, 0.97, 0.28), Some(skin.clone()), foliage(115.0, 0.085)),
+        },
+        ProProfile {
+            id: "pro-street",
+            name: "Pro Street",
+            genres: &["street"],
+            summary: "dense blacks, firm contrast and restrained colour",
+            why: "Street photographers favour punchy, graphic tonality and muted colour so light, shape and gesture carry the picture.",
+            signature: with(tone(0.07, 0.94, 0.3), Some(skin.clone()), foliage(118.0, 0.055)),
+        },
+        ProProfile {
+            id: "pro-architecture",
+            name: "Pro Architecture",
+            genres: &["architectural"],
+            summary: "clean whites, crisp neutral contrast and calm greenery",
+            why: "Architectural photographers keep whites clean and verticals true, with enough contrast for form and restrained colour so materials read accurately.",
+            signature: with(tone(0.1, 0.97, 0.25), Some(skin.clone()), foliage(118.0, 0.065)),
+        },
+        ProProfile {
+            id: "pro-wildlife",
+            name: "Pro Wildlife",
+            genres: &["wildlife"],
+            summary: "natural colour, good midtone contrast for fur and feather, calm backgrounds",
+            why: "Wildlife photographers keep colour honest and bring out texture in the animal while calming busy green backgrounds so the subject separates.",
+            signature: with(tone(0.1, 0.95, 0.26), Some(skin.clone()), foliage(112.0, 0.065)),
+        },
+        ProProfile {
+            id: "pro-underwater",
+            name: "Pro Underwater",
+            genres: &["underwater"],
+            summary: "restored black point and contrast that water scatters away",
+            why: "Underwater photographers set a true black and rebuild contrast lost to scattering; colour is corrected with white balance first.",
+            signature: with(tone(0.1, 0.95, 0.27), Some(skin.clone()), None),
+        },
+        ProProfile {
+            id: "pro-night",
+            name: "Pro Night & Astro",
+            genres: &["astrophotography"],
+            summary: "a dark sky with a true black, controlled highlights and gentle contrast",
+            why: "Night photographers keep the sky dark rather than grey, protect bright lights and stars from clipping, and add contrast gently so noise stays hidden.",
+            signature: with(tone(0.05, 0.92, 0.22), Some(skin.clone()), foliage(118.0, 0.05)),
+        },
+        ProProfile {
+            id: "pro-aerial",
+            name: "Pro Aerial",
+            genres: &[],
+            summary: "haze cut back with a firm black point, strong midtone contrast and clear colour",
+            why: "Drone photographers counter the haze of altitude with a firm black point and midtone contrast so patterns and textures read from above.",
+            signature: with(tone(0.1, 0.96, 0.28), Some(skin.clone()), foliage(115.0, 0.075)),
+        },
+        ProProfile {
+            id: "pro-macro",
+            name: "Pro Macro",
+            genres: &[],
+            summary: "moderate contrast with fine detail, smooth backgrounds and true colour",
+            why: "Macro photographers keep contrast moderate so soft backgrounds stay smooth, and bring out detail with texture rather than global contrast.",
+            signature: with(tone(0.1, 0.96, 0.24), Some(skin.clone()), foliage(118.0, 0.075)),
+        },
+        ProProfile {
+            id: "pro-product",
+            name: "Pro Product & Food",
+            genres: &[],
+            summary: "clean bright whites, accurate colour and crisp, even contrast",
+            why: "Commercial photographers keep whites clean and colour accurate to the product, with even contrast that shows form without heavy shadows.",
+            signature: with(tone(0.12, 0.98, 0.22), Some(skin), foliage(118.0, 0.07)),
+        },
+    ]
+}
+
 fn percentile(v: &mut [f32], p: f32) -> f32 {
     if v.is_empty() {
         return 0.0;
@@ -481,7 +622,7 @@ impl Engine {
         if mask.len() != rgb.len() {
             return;
         }
-        let current = rec.local.iter().find(|l| l.mask == MaskTarget::Skin).copied();
+        let current = rec.local.iter().find(|l| l.mask == MaskTarget::Skin).cloned();
         // A step at a time: grey skin is warmed back, not repainted.
         let richness = ts.richness.min(ns.richness + 0.35);
         let colour = guidance::skin_towards(rgb, mask, current.as_ref(), ts.hue, richness)
@@ -676,6 +817,31 @@ mod tests {
         let mut guarded = Adjustments::default();
         step_towards(&mut guarded, &now, &t, true);
         assert!(guarded.tone.blacks >= 0.0, "{}", guarded.tone.blacks);
+    }
+
+    #[test]
+    fn pro_profiles_cover_every_detected_genre() {
+        let profiles = pro_profiles();
+        for genre in [
+            "close-up-portrait",
+            "environmental-portrait",
+            "dark-melanin-fashion",
+            "golden-hour-landscape",
+            "wildlife",
+            "architectural",
+            "street",
+            "fine-art-wedding",
+            "underwater",
+            "astrophotography",
+        ] {
+            assert_eq!(profiles.iter().filter(|p| p.genres.contains(&genre)).count(), 1, "{genre}");
+        }
+        for p in &profiles {
+            assert!(p.id.starts_with("pro-"));
+            assert_eq!(profiles.iter().filter(|o| o.id == p.id).count(), 1);
+            let t = &p.signature.tone;
+            assert!(t.black < t.white && t.contrast > 0.1);
+        }
     }
 
     #[test]

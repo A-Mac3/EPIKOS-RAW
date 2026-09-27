@@ -18,6 +18,15 @@ export const MASK_LABEL: Record<MaskTarget, string> = {
   teeth: "Teeth",
   hair: "Hair",
   foreground: "Foreground",
+  people: "People",
+  vehicles: "Vehicles",
+  animals: "Animals",
+  foliage: "Foliage",
+  vegetation: "Vegetation",
+  clothing: "Clothing",
+  facialHair: "Facial hair",
+  glasses: "Glasses",
+  lips: "Lips",
 };
 
 /** Lens settings change the geometry a mask was traced on. */

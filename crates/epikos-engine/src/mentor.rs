@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::analysis::{self, SceneAnalysis};
 use crate::composition::{person_crop, rank_subjects, RankedSubject};
 use crate::guidance::{self, CropAdvice, SkinFix, SkinProblem};
-use crate::learn::{editorial, Target};
+use crate::learn::{editorial, pro_profiles, Target};
 use crate::{scene_only, Engine};
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,22 +272,37 @@ impl Engine {
         });
 
         // Aim the starting point at the target look, measured on the real render.
+        // A learned style when chosen; otherwise a pro profile (the one chosen, or the
+        // one for the detected genre); otherwise the Editorial profile.
         let learned = match target {
-            Some(id) if id != "editorial" => self.learned_styles()?.into_iter().find(|s| s.id == id),
+            Some(id) if id != "editorial" && !id.starts_with("pro-") => {
+                self.learned_styles()?.into_iter().find(|s| s.id == id)
+            }
+            _ => None,
+        };
+        let profiles = pro_profiles();
+        let genre = scene.genres.first().map(|g| g.id);
+        let pro = match target {
+            Some(id) if id.starts_with("pro-") => profiles.iter().find(|p| p.id == id),
+            None => genre.and_then(|g| profiles.iter().find(|p| p.genres.contains(&g))),
             _ => None,
         };
         let built_in = editorial();
-        let target = match &learned {
-            Some(l) => Target { name: l.name.clone(), signature: &l.signature, match_exposure: true, match_colours: true },
-            None => Target { name: "Editorial".into(), signature: &built_in, match_exposure: false, match_colours: false },
+        let target = match (&learned, pro) {
+            (Some(l), _) => Target { name: l.name.clone(), signature: &l.signature, match_exposure: true, match_colours: true },
+            (None, Some(p)) => Target { name: p.name.into(), signature: &p.signature, match_exposure: false, match_colours: false },
+            (None, None) => {
+                Target { name: "Editorial".into(), signature: &built_in, match_exposure: false, match_colours: false }
+            }
         };
+        let pro = if learned.is_none() { pro } else { None };
         current()?;
         let before = report.recommended.clone();
         let fitted = self.fit_to_target(&loaded, &before, &target)?;
         current()?;
         let moves = describe_fit(&before, &fitted);
         if !moves.is_empty() {
-            insights_for_target(&mut report, &target, learned.is_some(), &moves);
+            insights_for_target(&mut report, &target, learned.is_some(), pro.map(|p| (p.summary, p.why)), &moves);
             report.changes.extend(moves);
         }
         report.recommended = fitted;
@@ -697,7 +712,7 @@ fn describe_fit(before: &Adjustments, after: &Adjustments) -> Vec<String> {
     if changed(f1.hue, f0.hue) || changed(f1.saturation, f0.saturation) {
         out.push(format!("Foliage hue {:+.0} (towards olive), saturation {:+.0}", f1.hue, f1.saturation));
     }
-    let skin = |a: &Adjustments| a.local.iter().find(|l| l.mask == MaskTarget::Skin).copied().unwrap_or_default();
+    let skin = |a: &Adjustments| a.local.iter().find(|l| l.mask == MaskTarget::Skin).cloned().unwrap_or_default();
     let (k0, k1) = (skin(before), skin(after));
     if changed(k1.warmth, k0.warmth) || changed(k1.tint, k0.tint) || changed(k1.saturation, k0.saturation) || (k1.exposure - k0.exposure).abs() >= 0.05 {
         out.push(format!(
@@ -722,8 +737,16 @@ fn describe_fit(before: &Adjustments, after: &Adjustments) -> Vec<String> {
 }
 
 /// One insight saying what the target look is and what it set.
-fn insights_for_target(report: &mut MentorReport, target: &Target, learned: bool, moves: &[String]) {
-    let (observation, why) = if learned {
+fn insights_for_target(
+    report: &mut MentorReport,
+    target: &Target,
+    learned: bool,
+    pro: Option<(&str, &str)>,
+    moves: &[String],
+) {
+    let (observation, why) = if let (false, Some((summary, why))) = (learned, pro) {
+        (format!("Starting point aimed at the {} profile: {summary}.", target.name), why.to_string())
+    } else if learned {
         (
             format!("Starting point aimed at your learned style \"{}\": its black and white points, midtone curve, skin richness and colour.", target.name),
             "The look is measured from the reference and matched on this photo's own render, so each slider lands where the reference's look is, for this light.".to_string(),
@@ -822,7 +845,7 @@ fn judge(before: &Stats, now: &Stats, adj: &Adjustments) -> Vec<Feedback> {
             a.style.skin_protection = v;
         }
     };
-    let skin_now = adj.local.iter().find(|l| l.mask == MaskTarget::Skin).copied().unwrap_or_default();
+    let skin_now = adj.local.iter().find(|l| l.mask == MaskTarget::Skin).cloned().unwrap_or_default();
     match (before.skin, now.skin) {
         (Some((l0, h0)), Some((l1, h1))) => {
             let dh = (h1 - h0 + 540.0).rem_euclid(360.0) - 180.0;

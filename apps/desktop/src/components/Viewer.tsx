@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Crop, ManualShape, Mask, Preview } from "../types";
+import type { Crop, ManualShape, Mask, Preview, Spot } from "../types";
 import { CropBar, CropOverlay } from "./CropTool";
 import { ManualMaskTool, type BrushSettings } from "./ManualMaskTool";
 import { useSliderDragging } from "../sliderDrag";
@@ -45,6 +45,15 @@ interface Props {
   marker?: { x: number; y: number } | null;
   /** When set, a click on the image reports its 0–1 position instead. */
   onPick?: ((x: number, y: number) => void) | null;
+  /** What a click does while picking (shown on the image). */
+  pickHint?: string;
+  /** Healing spots on the image: healed ones (click to undo) and found dust (click to heal). */
+  spots?: {
+    healed: Spot[];
+    found: Spot[];
+    onHealFound: (i: number) => void;
+    onRemoveHealed: (i: number) => void;
+  } | null;
   /** 3D virtual lights: draggable markers, smaller the farther away. */
   lights?: { x: number; y: number; depth: number; reach: number }[];
   selectedLight?: number | null;
@@ -91,6 +100,8 @@ export function Viewer({
   onResize,
   marker,
   onPick,
+  pickHint = "Click the image to place the light",
+  spots = null,
   lights = [],
   selectedLight = null,
   onSelectLight,
@@ -497,6 +508,33 @@ export function Viewer({
               </div>
             );
           })}
+        {spots &&
+          !showingBefore &&
+          !cropTool &&
+          (
+            [
+              ["healed", spots.healed, spots.onRemoveHealed, "Healed: click to undo"],
+              ["found", spots.found, spots.onHealFound, "Dust? Click to heal"],
+            ] as const
+          ).flatMap(([kind, list, act, title]) =>
+            list.map((s, i) => {
+              const at = toView(s.x, s.y);
+              const d = ((2 * s.radius) / (view?.width ?? 1)) * 100;
+              return (
+                <button
+                  key={`${kind}${i}`}
+                  type="button"
+                  className={`viewer-spot is-${kind}`}
+                  style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%`, width: `${d}%` }}
+                  title={title}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    act(i);
+                  }}
+                />
+              );
+            }),
+          )}
         {marker && !showingBefore && !cropTool && (
           <span
             className="viewer-marker"
@@ -506,7 +544,7 @@ export function Viewer({
           />
         )}
       </div>
-      {onPick && <div className="viewer-tag">Click the image to place the light</div>}
+      {onPick && <div className="viewer-tag">{pickHint}</div>}
       {preview && onDropLight && !showingBefore && !cropTool && (
         <LightPalette
           onPrepare={onLightPrepare}

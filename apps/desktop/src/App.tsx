@@ -35,6 +35,8 @@ import { Viewer } from "./components/Viewer";
 import { useHistory } from "./hooks/useHistory";
 import { depthAt, useDepth } from "./hooks/useDepth";
 import { useMasks } from "./hooks/useMasks";
+import { useLocalMask } from "./hooks/useLocalMask";
+import type { RetouchTool } from "./components/RetouchPanel";
 import { useGeometrySettled, usePreview } from "./hooks/usePreview";
 import { useStyles } from "./hooks/useStyles";
 import {
@@ -43,6 +45,7 @@ import {
   defaultCrop,
   defaultLight,
   type Adjustments,
+  type BrushStroke,
   type FileEntry,
   type ExportFormat,
   type ImageInfo,
@@ -50,6 +53,7 @@ import {
   type LutInfo,
   type Preset,
   type PickTarget,
+  type Spot,
   type StyleInfo,
   type StoryArc,
 } from "./types";
@@ -206,7 +210,34 @@ export default function App() {
   useEffect(() => setHoverAdjustments(null), [info?.path]);
 
   const masks = useMasks(info?.path ?? null, adjustments);
-  const { styles, thumbs } = useStyles(info?.path ?? null, adjustments, history.dragging);
+  // AI-mask adjustment under review: highlighted until an edit starts, brushable.
+  const [localSelRaw, setLocalSel] = useState<number | null>(null);
+  const localSel = localSelRaw !== null && localSelRaw < adjustments.local.length ? localSelRaw : null;
+  const [localReview, setLocalReview] = useState(false);
+  const [refineMode, setRefineMode] = useState<"add" | "remove" | null>(null);
+  const localOverlay = useLocalMask(info?.path ?? null, adjustments, localSel, localReview && localSel !== null);
+  // Retouching tools on the image.
+  const [retouchTool, setRetouchTool] = useState<RetouchTool>(null);
+  const [pendingErase, setPendingErase] = useState<BrushStroke[]>([]);
+  const [foundSpots, setFoundSpots] = useState<Spot[]>([]);
+  const [spotSize, setSpotSize] = useState(0.008);
+  useEffect(() => {
+    setLocalSel(null);
+    setLocalReview(false);
+    setRefineMode(null);
+    setPendingErase([]);
+    setFoundSpots([]);
+  }, [info?.path]);
+  const addSpot = useCallback(
+    (x: number, y: number) =>
+      history.commit((a) => ({
+        ...a,
+        retouch: { ...a.retouch, spots: [...a.retouch.spots, { x, y, radius: spotSize }] },
+      })),
+    [history.commit, spotSize],
+  );
+  const [styleCats, setStyleCats] = useState<string[]>([]);
+  const { styles, thumbs } = useStyles(info?.path ?? null, adjustments, history.dragging, styleCats);
   stylesRef.current = styles;
   const [picking, setPicking] = useState<PickTarget>(null);
   const promptRef = useRef<HTMLInputElement>(null);
@@ -701,10 +732,37 @@ export default function App() {
                   before={beforePreview}
                   split={split}
                   onSplit={setSplit}
-                  overlay={depth.depth ?? masks.overlayMask}
+                  overlay={depth.depth ?? localOverlay ?? masks.overlayMask}
                   onResize={onResize}
                   marker={lightMarker}
-                  onPick={picking === "shafts" ? placeShaftLight : picking === "light" ? addLight : null}
+                  onPick={
+                    picking === "shafts"
+                      ? placeShaftLight
+                      : picking === "light"
+                        ? addLight
+                        : retouchTool === "heal"
+                          ? addSpot
+                          : null
+                  }
+                  pickHint={picking ? undefined : "Click a spot or blemish to heal it"}
+                  spots={
+                    retouchTool === "heal"
+                      ? {
+                          healed: adjustments.retouch.spots,
+                          found: foundSpots,
+                          onHealFound: (i) => {
+                            const s = foundSpots[i];
+                            history.commit((a) => ({ ...a, retouch: { ...a.retouch, spots: [...a.retouch.spots, s] } }));
+                            setFoundSpots(foundSpots.filter((_, k) => k !== i));
+                          },
+                          onRemoveHealed: (i) =>
+                            history.commit((a) => ({
+                              ...a,
+                              retouch: { ...a.retouch, spots: a.retouch.spots.filter((_, k) => k !== i) },
+                            })),
+                        }
+                      : null
+                  }
                   lights={at.lights}
                   selectedLight={selectedLight}
                   onSelectLight={setSelectedLight}
@@ -717,18 +775,40 @@ export default function App() {
                   pixelSize={pixelSize}
                   liveGeometry={{ rotation: live.lens.rotation, vertical: live.lens.vertical }}
                   manualTool={
-                    manualActive !== null && !cropping
-                      ? {
-                          shape: adjustments.manual[manualActive].shape,
-                          brush,
-                          onChange: (shape) =>
-                            history.edit((a) => ({
-                              ...a,
-                              manual: a.manual.map((m, k) => (k === manualActive ? { ...m, shape } : m)),
-                            })),
-                          onEnd: history.endEdit,
-                        }
-                      : null
+                    cropping
+                      ? null
+                      : manualActive !== null
+                        ? {
+                            shape: adjustments.manual[manualActive].shape,
+                            brush,
+                            onChange: (shape) =>
+                              history.edit((a) => ({
+                                ...a,
+                                manual: a.manual.map((m, k) => (k === manualActive ? { ...m, shape } : m)),
+                              })),
+                            onEnd: history.endEdit,
+                          }
+                        : localSel !== null && refineMode
+                          ? {
+                              // Brushing an AI mask: strokes add to it or (erase) remove from it.
+                              shape: { kind: "brush", strokes: adjustments.local[localSel].refine },
+                              brush: { ...brush, erase: refineMode === "remove" },
+                              onChange: (shape) =>
+                                shape.kind === "brush" &&
+                                history.edit((a) => ({
+                                  ...a,
+                                  local: a.local.map((l, k) => (k === localSel ? { ...l, refine: shape.strokes } : l)),
+                                })),
+                              onEnd: history.endEdit,
+                            }
+                          : retouchTool === "erase"
+                            ? {
+                                shape: { kind: "brush", strokes: pendingErase },
+                                brush: { ...brush, erase: false, feather: 20 },
+                                onChange: (shape) => shape.kind === "brush" && setPendingErase(shape.strokes),
+                                onEnd: () => {},
+                              }
+                            : null
                   }
                   cropTool={
                     cropping
@@ -767,6 +847,7 @@ export default function App() {
                       onPreview={setHoverAdjustments}
                       luts={luts}
                       onLutsChanged={refreshLuts}
+                      onOpenCategories={setStyleCats}
                       library={
                         <LearnedLibrary
                           info={info}
@@ -831,9 +912,46 @@ export default function App() {
                     cropping={cropping}
                     setCropping={setCropping}
                     manualActive={manualActive}
-                    setManualActive={setManualActive}
+                    setManualActive={(i) => {
+                      setManualActive(i);
+                      if (i !== null) {
+                        setRetouchTool(null);
+                        setRefineMode(null);
+                      }
+                    }}
                     brush={brush}
                     setBrush={setBrush}
+                    localUi={{
+                      selected: localSel,
+                      select: (i) => {
+                        setLocalSel(i);
+                        if (i !== localSel) setRefineMode(null);
+                      },
+                      review: localReview,
+                      setReview: setLocalReview,
+                      refine: refineMode,
+                      // One brush on the image at a time.
+                      setRefine: (m) => {
+                        setRefineMode(m);
+                        if (m) setRetouchTool(null);
+                      },
+                    }}
+                    retouchUi={{
+                      tool: retouchTool,
+                      setTool: (t) => {
+                        setRetouchTool(t);
+                        if (t) {
+                          setRefineMode(null);
+                          setManualActive(null);
+                        }
+                      },
+                      pending: pendingErase,
+                      setPending: setPendingErase,
+                      found: foundSpots,
+                      setFound: setFoundSpots,
+                      spotSize,
+                      setSpotSize,
+                    }}
                   />
                 ) : (
                   <p className="note pad">Select a photo to start editing.</p>

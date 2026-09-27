@@ -1849,6 +1849,58 @@ input[type="range"]::-moz-range-thumb {
   flex: 1;
 }
 
+.local-card .field-row .btn {
+  white-space: nowrap;
+}
+
+.local-card.is-selected {
+  border-color: var(--accent-dim);
+  box-shadow: var(--accent-glow);
+}
+
+.local-refine {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.btn.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.retouch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* Healing spots on the image: healed (white) and found dust awaiting review (orange). */
+.viewer-spot {
+  position: absolute;
+  aspect-ratio: 1;
+  min-width: 10px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 55%);
+  cursor: pointer;
+}
+
+.viewer-spot.is-found {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.viewer-spot:hover {
+  background: rgb(255 255 255 / 18%);
+}
+
 /* ---- Opening photos: drop overlay, notice ---------------------------------------- */
 
 .welcome-actions {

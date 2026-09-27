@@ -160,10 +160,22 @@ pub(crate) fn export(
     // The DNG carries the scene (lens-corrected, since it has no opcodes of its own),
     // not the look: the reader applies its own rendering.
     let rgb = if format == ExportFormat::Dng {
-        let scene = crate::Prepared { depth: None, masks: Vec::new(), lens: prepared.lens.clone(), lut: None };
+        // Red-eye needs the eye mask; erase and healing are kept as they are.
+        let masks = prepared.masks.iter().filter(|m| m.target == epikos_sidecar::MaskTarget::Eyes).cloned().collect();
+        let scene = crate::Prepared {
+            depth: None,
+            masks,
+            lens: prepared.lens.clone(),
+            lut: None,
+            fills: prepared.fills.clone(),
+        };
         scene.with_inputs(|inputs| {
-            // Framing is kept: the crop is part of the photo, not of the look.
-            let scene = Adjustments { crop: adjustments.crop.clone(), ..crate::scene_only(adjustments) };
+            // Framing and retouching are kept: they are part of the photo, not of the look.
+            let scene = Adjustments {
+                crop: adjustments.crop.clone(),
+                retouch: adjustments.retouch.clone(),
+                ..crate::scene_only(adjustments)
+            };
             develop_adjustments_with(&loaded.raw.mosaic, &loaded.raw.profile, &scene, inputs)
         })?
     } else {

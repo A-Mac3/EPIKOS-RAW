@@ -13,7 +13,7 @@ if [[ ! -f "$WORK/universal/libonnxruntime.a" ]]; then
   echo "No universal ONNX Runtime in $WORK/universal: run scripts/build-onnxruntime-universal.sh" >&2
   exit 1
 fi
-for model in isnet-general-use skyseg depth-anything-v2-small face-parsing-resnet18; do
+for model in isnet-general-use skyseg depth-anything-v2-small face-parsing-resnet18 fcn-resnet50-12 lama-fp32; do
   if [[ ! -f "$REPO/models/$model.onnx" ]]; then
     echo "Missing models/$model.onnx: run scripts/fetch-models.sh" >&2
     exit 1

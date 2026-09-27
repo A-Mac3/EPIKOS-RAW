@@ -141,6 +141,41 @@ pub(crate) fn apply_manual(rgb: &mut ImageRgbF32, m: &ManualAdjustment) {
     apply_local(rgb, &local, &mask);
 }
 
+/// Refine a local adjustment's AI mask in place: extend or shrink it (`grow`,
+/// −100…100, up to 2 % of the frame), add or remove hand-brushed strokes, then soften
+/// its edge (`feather`, 0…100, up to 3 % of the frame) so the edit fades in instead of
+/// ending on a visible line.
+pub(crate) fn refine_mask(mask: &mut Vec<f32>, adj: &LocalAdjustment, w: usize, h: usize) {
+    if !adj.is_refined() || mask.len() != w * h {
+        return;
+    }
+    let long = w.max(h) as f32;
+    let g = (adj.grow / 100.0).clamp(-1.0, 1.0);
+    if g != 0.0 {
+        let r = ((g.abs() * 0.06 * long).round() as usize).max(1);
+        let blurred = super::blur::smooth(mask, w, h, r, 2);
+        // A lower threshold on the blurred mask reaches further out; a higher one pulls
+        // the edge in. The ramp keeps the edge soft.
+        let t = 0.5 - 0.42 * g;
+        *mask = blurred.into_iter().map(|v| smoothstep(t - 0.12, t + 0.12, v)).collect();
+    }
+    let (add, erase): (Vec<_>, Vec<_>) = adj.refine.iter().cloned().partition(|s| !s.erase);
+    if !add.is_empty() {
+        let a = mask_for(&ManualShape::Brush { strokes: add }, w, h);
+        mask.iter_mut().zip(a).for_each(|(m, a)| *m = m.max(a));
+    }
+    if !erase.is_empty() {
+        let strokes = erase.into_iter().map(|s| BrushStroke { erase: false, ..s }).collect();
+        let e = mask_for(&ManualShape::Brush { strokes }, w, h);
+        mask.iter_mut().zip(e).for_each(|(m, e)| *m *= 1.0 - e);
+    }
+    let f = (adj.feather / 100.0).clamp(0.0, 1.0);
+    if f > 0.0 {
+        let r = ((f * 0.03 * long).round() as usize).max(1);
+        *mask = super::blur::smooth(mask, w, h, r, 3);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +200,36 @@ mod tests {
         assert!(b[40 * w + 20] > 0.99, "painted {}", b[40 * w + 20]);
         assert!(b[40 * w + 80] < 0.01, "erased {}", b[40 * w + 80]);
         assert!(b[10 * w + 20] < 0.01, "off the path");
+    }
+
+    #[test]
+    fn refinement_grows_shrinks_brushes_and_feathers() {
+        let (w, h) = (100, 100);
+        // A hard square in the middle.
+        let square: Vec<f32> = (0..w * h).map(|i| ((30..70).contains(&(i % w)) && (30..70).contains(&(i / w))) as u8 as f32).collect();
+        let area = |m: &[f32]| m.iter().sum::<f32>();
+        let refined = |adj: LocalAdjustment| {
+            let mut m = square.clone();
+            refine_mask(&mut m, &adj, w, h);
+            m
+        };
+        let grown = refined(LocalAdjustment { grow: 80.0, ..Default::default() });
+        let shrunk = refined(LocalAdjustment { grow: -80.0, ..Default::default() });
+        assert!(area(&grown) > area(&square) * 1.05, "grown {} vs {}", area(&grown), area(&square));
+        assert!(area(&shrunk) < area(&square) * 0.95, "shrunk {}", area(&shrunk));
+        // Brushing: add a patch outside, erase one inside.
+        let brushed = refined(LocalAdjustment {
+            refine: vec![
+                BrushStroke { points: vec![[0.1, 0.1]], size: 0.08, feather: 0.0, flow: 100.0, erase: false },
+                BrushStroke { points: vec![[0.5, 0.5]], size: 0.08, feather: 0.0, flow: 100.0, erase: true },
+            ],
+            ..Default::default()
+        });
+        assert!(brushed[10 * w + 10] > 0.9 && brushed[50 * w + 50] < 0.1);
+        // Feathering: the edge becomes a ramp, not a step.
+        let soft = refined(LocalAdjustment { feather: 60.0, ..Default::default() });
+        let edge = soft[50 * w + 30];
+        assert!(edge > 0.2 && edge < 0.8, "edge {edge}");
     }
 
     #[test]

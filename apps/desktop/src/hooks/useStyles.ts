@@ -10,7 +10,7 @@ const THUMB_DELAY_MS = 450;
  * The built-in styles plus a small render of the current photo in each. Thumbnails
  * follow the photo's other settings, re-rendered once edits pause.
  */
-export function useStyles(path: string | null, adjustments: Adjustments, paused = false) {
+export function useStyles(path: string | null, adjustments: Adjustments, paused = false, categories: string[] = []) {
   const [styles, setStyles] = useState<StyleInfo[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, Preview>>({});
 
@@ -22,9 +22,13 @@ export function useStyles(path: string | null, adjustments: Adjustments, paused 
   const { style: _style, ...rest } = adjustments;
   const baseKey = JSON.stringify(rest);
   const latest = useRef(0);
+  // The settings each thumbnail was rendered with, so opening a tab only renders what's new.
+  const renderedFor = useRef(new Map<string, string>());
+  const catKey = [...categories].sort().join("|");
 
   useEffect(() => {
     setThumbs({});
+    renderedFor.current.clear();
   }, [path]);
 
   useEffect(() => {
@@ -34,20 +38,25 @@ export function useStyles(path: string | null, adjustments: Adjustments, paused 
     if (!path || styles.length === 0 || paused) return;
     const base = JSON.parse(baseKey) as Omit<Adjustments, "style">;
     const timer = window.setTimeout(async () => {
-      // Listed styles only, in the order the library shows them.
-      for (const s of styles.filter((x) => x.listed)) {
+      // Listed styles in the open tabs, in the order the library shows them.
+      const open = new Set(catKey.split("|"));
+      for (const s of styles.filter((x) => x.listed && open.has(x.category))) {
         if (token !== latest.current) return;
+        if (renderedFor.current.get(s.id) === baseKey) continue;
         const adj: Adjustments = { ...base, style: { id: s.id, amount: 100, skinProtection: s.skinProtection, blend: [] } };
         try {
           const p = await renderPreview(path, adj, THUMB_W, THUMB_H);
-          if (token === latest.current) setThumbs((t) => ({ ...t, [s.id]: p }));
+          if (token === latest.current) {
+            renderedFor.current.set(s.id, baseKey);
+            setThumbs((t) => ({ ...t, [s.id]: p }));
+          }
         } catch {
           // A missing thumbnail just shows the swatch.
         }
       }
     }, THUMB_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [path, baseKey, styles, paused]);
+  }, [path, baseKey, styles, paused, catKey]);
 
   return { styles, thumbs };
 }

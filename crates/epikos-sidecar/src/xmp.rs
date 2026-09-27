@@ -6,7 +6,7 @@ use epikos_core::{Error, Result};
 use crate::document::{
     Adjustments, Atmosphere, BackgroundTint, ChromaticAberration, ColorGrade, ColorWheel, ColorWheels, Crop, Curves,
     DemosaicMode, DevelopDocument, DistortionCoeffs, Finishing, HslBands, HslChannel, LensCorrections,
-    LocalAdjustment, LutRef, ManualAdjustment, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
+    LocalAdjustment, LutRef, ManualAdjustment, BrushStroke, MaskTarget, NoiseReduction, SCurve, SourceRef, SplitToning, StyleRef, StyleWeight, Texture, Tone,
     ToneCurve, VirtualLight, WbMode, WhiteBalance,
 };
 
@@ -167,6 +167,12 @@ fn render_look(a: &Adjustments) -> String {
         "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"\n    epikos:characterLines=\"{}\"\n    epikos:retouchSubjectOnly=\"{}\"\n    epikos:teethWhitening=\"{}\"",
         t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance, t.character_lines, t.retouch_subject_only, t.teeth_whitening
     );
+    // Retouching (erase strokes, spots, red-eye), as JSON.
+    if !a.retouch.is_empty() {
+        if let Ok(json) = serde_json::to_string(&a.retouch) {
+            out += &format!("\n    epikos:retouch=\"{}\"", esc(&json));
+        }
+    }
     // Hand-drawn masks: their shapes don't fit a flat list, so they're kept as JSON.
     if !a.manual.is_empty() {
         if let Ok(json) = serde_json::to_string(&a.manual) {
@@ -180,18 +186,27 @@ fn render_look(a: &Adjustments) -> String {
             .iter()
             .map(|l| {
                 format!(
-                    "{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{}",
                     l.mask.id(),
                     l.exposure,
                     l.contrast,
                     l.saturation,
                     l.warmth,
                     l.clarity,
-                    l.tint
+                    l.tint,
+                    l.grow,
+                    l.feather
                 )
             })
             .collect();
         out += &format!("\n    epikos:local=\"{}\"", local.join(";"));
+        // Brushed refinements, one list per local adjustment, as JSON.
+        if a.local.iter().any(|l| !l.refine.is_empty()) {
+            let strokes: Vec<&Vec<BrushStroke>> = a.local.iter().map(|l| &l.refine).collect();
+            if let Ok(json) = serde_json::to_string(&strokes) {
+                out += &format!("\n    epikos:localRefine=\"{}\"", esc(&json));
+            }
+        }
     }
     let (f, bg) = (&a.color.foliage, &a.color.background);
     out += &format!(
@@ -397,9 +412,11 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     v.split(';')
                         .filter_map(|l| {
                             let (mask, rest) = l.split_once(',')?;
-                            // Tint came later: five values in older sidecars.
-                            let [exposure, contrast, saturation, warmth, clarity, tint] = numbers::<6>(rest)
-                                .or_else(|| numbers::<5>(rest).map(|[e, c, s, w, k]| [e, c, s, w, k, 0.0]))?;
+                            // Tint, then grow / feather came later: older sidecars have
+                            // five or six values.
+                            let [exposure, contrast, saturation, warmth, clarity, tint, grow, feather] = numbers::<8>(rest)
+                                .or_else(|| numbers::<6>(rest).map(|[e, c, s, w, k, t]| [e, c, s, w, k, t, 0.0, 0.0]))
+                                .or_else(|| numbers::<5>(rest).map(|[e, c, s, w, k]| [e, c, s, w, k, 0.0, 0.0, 0.0]))?;
                             Some(LocalAdjustment {
                                 mask: MaskTarget::from_id(mask.trim())?,
                                 exposure,
@@ -408,9 +425,21 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                                 warmth,
                                 clarity,
                                 tint,
+                                grow,
+                                feather,
+                                refine: Vec::new(),
                             })
                         })
-                        .collect()
+                        .collect::<Vec<_>>()
+                })
+                .map(|mut local| {
+                    let refine: Vec<Vec<BrushStroke>> = get("epikos:localRefine")
+                        .and_then(|v| serde_json::from_str(&unescape(v)).ok())
+                        .unwrap_or_default();
+                    for (l, r) in local.iter_mut().zip(refine) {
+                        l.refine = r;
+                    }
+                    local
                 })
                 .unwrap_or_default(),
             // Camera Raw's LuminanceSmoothing / ColorNoiseReduction use a different
@@ -611,6 +640,9 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     })
                     .unwrap_or_default(),
             },
+            retouch: get("epikos:retouch")
+                .and_then(|v| serde_json::from_str(&unescape(v)).ok())
+                .unwrap_or_default(),
             manual: get("epikos:manual")
                 .and_then(|v| serde_json::from_str::<Vec<ManualAdjustment>>(&unescape(v)).ok())
                 .unwrap_or_default(),
@@ -652,7 +684,10 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{BrushStroke, ManualShape};
+    fn epikos_sidecar_spot() -> crate::document::Spot {
+        crate::document::Spot { x: 0.2, y: 0.3, radius: 0.01 }
+    }
+    use crate::document::ManualShape;
     use crate::document::{DevelopDocument, SourceRef, WbMode};
     use epikos_core::Error;
 
@@ -670,7 +705,7 @@ mod tests {
     fn older_local_adjustments_without_tint_still_load() {
         let mut doc = sample_doc();
         doc.adjustments.local = vec![LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, ..Default::default() }];
-        let xml = render_xmp(&doc).replace("eyes,0.4,0,0,0,0,0", "eyes,0.4,0,0,0,0");
+        let xml = render_xmp(&doc).replace("eyes,0.4,0,0,0,0,0,0,0", "eyes,0.4,0,0,0,0");
         assert!(xml.contains(r#"epikos:local="eyes,0.4,0,0,0,0""#), "{xml}");
         assert_eq!(parse_xmp(&xml).unwrap().adjustments.local, doc.adjustments.local);
     }
@@ -731,6 +766,11 @@ mod tests {
         doc.adjustments.lens.vertical = 30.0;
         doc.adjustments.tone = Tone::from_array([10.0, -40.0, 35.5, 5.0, -8.0, 20.0, -3.0]);
         doc.adjustments.tone.dehaze = 35.0;
+        doc.adjustments.retouch.red_eye = true;
+        doc.adjustments.retouch.spots.push(epikos_sidecar_spot());
+        doc.adjustments.retouch.erase.push(crate::document::EraseArea {
+            strokes: vec![crate::document::BrushStroke { points: vec![[0.4, 0.4], [0.45, 0.42]], size: 0.03, ..Default::default() }],
+        });
         doc.adjustments.manual = vec![
             ManualAdjustment {
                 shape: ManualShape::Linear { x0: 0.5, y0: 0.0, x1: 0.5, y1: 0.45 },
@@ -751,6 +791,14 @@ mod tests {
             LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, clarity: 25.0, ..Default::default() },
             LocalAdjustment { mask: MaskTarget::Background, saturation: -30.0, warmth: 12.0, ..Default::default() },
             LocalAdjustment { mask: MaskTarget::Skin, warmth: -6.0, tint: 4.5, ..Default::default() },
+            LocalAdjustment {
+                mask: MaskTarget::Vehicles,
+                exposure: -0.3,
+                grow: 15.0,
+                feather: 40.0,
+                refine: vec![BrushStroke { points: vec![[0.2, 0.3], [0.25, 0.32]], erase: true, ..Default::default() }],
+                ..Default::default()
+            },
         ];
         doc.adjustments.texture.character_lines = 40.0;
         doc.adjustments.texture.retouch_subject_only = true;

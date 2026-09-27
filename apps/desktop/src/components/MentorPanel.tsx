@@ -26,6 +26,22 @@ type State =
  * composition), explaining how and why to edit it, with a recommended starting point
  * (global and local) and a suggested crop. It re-reads the edit whenever it pauses.
  */
+/** The engine's pro genre profiles (crates/epikos-engine/src/learn.rs). */
+const PRO_PROFILES: [string, string][] = [
+  ["pro-portrait", "Portrait"],
+  ["pro-deep-skin", "Deep-skin portrait"],
+  ["pro-wedding", "Light & airy wedding"],
+  ["pro-landscape", "Landscape"],
+  ["pro-street", "Street"],
+  ["pro-architecture", "Architecture"],
+  ["pro-wildlife", "Wildlife"],
+  ["pro-underwater", "Underwater"],
+  ["pro-night", "Night & astro"],
+  ["pro-aerial", "Aerial"],
+  ["pro-macro", "Macro"],
+  ["pro-product", "Product & food"],
+];
+
 export function MentorPanel({
   info,
   adjustments,
@@ -143,7 +159,15 @@ export function MentorPanel({
       <label className="mentor-target">
         <span>Starting target</span>
         <select value={target ?? ""} onChange={(e) => setTarget(e.currentTarget.value || null)}>
-          <option value="">Editorial (built-in)</option>
+          <option value="">Auto: pro profile for the genre</option>
+          <option value="editorial">Editorial (built-in)</option>
+          <optgroup label="Pro profiles">
+            {PRO_PROFILES.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </optgroup>
           {targets.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name} (learned)

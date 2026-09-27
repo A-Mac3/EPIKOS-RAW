@@ -15,7 +15,7 @@ mod finish;
 mod grade;
 mod lights;
 mod local;
-mod manual;
+pub(crate) mod manual;
 mod lut;
 mod oklab;
 mod region;
@@ -58,6 +58,8 @@ pub struct LookInputs<'a> {
     pub lens: Option<&'a LensProfile>,
     /// The 3D LUT named by `adjustments.lut`, when it's installed.
     pub lut: Option<&'a Lut3d>,
+    /// Generative-erase fills, made by the engine's inpainting model.
+    pub fills: &'a [crate::retouch::FillPlane<'a>],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +82,9 @@ pub fn look_masks(adj: &Adjustments) -> Vec<MaskTarget> {
     }
     if look.teeth_whitening > 0.0 {
         out.push(MaskTarget::Teeth);
+    }
+    if adj.retouch.red_eye {
+        out.push(MaskTarget::Eyes);
     }
     // Glow and light shafts keep the light source in the sky and off the subject.
     if look.atmosphere.glow > 0.0 || look.atmosphere.shafts > 0.0 {
@@ -193,7 +198,7 @@ impl Look {
             finishing: adj.finishing,
             lights: adj.atmosphere.lights.clone(),
             lut_amount: if adj.lut.is_none() { 0.0 } else { pct(adj.lut.amount) },
-            local: adj.local.iter().filter(|l| !l.is_neutral()).copied().collect(),
+            local: adj.local.iter().filter(|l| !l.is_neutral()).cloned().collect(),
             drawn: adj.manual.iter().filter(|m| !m.is_neutral()).cloned().collect(),
             teeth_whitening: adj.texture.teeth_whitening.clamp(0.0, 100.0),
             retouch_subject_only: adj.texture.retouch_subject_only,
@@ -332,7 +337,8 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
 
     for l in &look.local {
         // A mask whose model isn't installed does nothing, rather than everything.
-        if let Some(m) = mask(rgb, l.mask) {
+        if let Some(mut m) = mask(rgb, l.mask) {
+            manual::refine_mask(&mut m, l, rgb.width as usize, rgb.height as usize);
             local::apply_local(rgb, l, &m);
         }
     }

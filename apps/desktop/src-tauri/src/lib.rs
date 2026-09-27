@@ -406,6 +406,36 @@ async fn detect_mask(
     let path = raw_path(&path)?;
     let engine = engine.inner().clone();
     let mask = blocking(move || engine.detect_mask(&path, &adjustments, kind)).await?;
+    Ok(mask_response(&mask))
+}
+
+/// Local adjustment `index`'s mask as refined, in the [`detect_mask`] layout.
+#[tauri::command]
+async fn local_mask(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+    index: usize,
+) -> CmdResult<Response> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    let mask = blocking(move || engine.local_mask(&path, &adjustments, index)).await?;
+    Ok(mask_response(&mask))
+}
+
+/// Likely dust spots on the photo, for review.
+#[tauri::command]
+async fn find_dust_spots(
+    engine: EngineState<'_>,
+    path: String,
+    adjustments: Adjustments,
+) -> CmdResult<Vec<epikos_sidecar::Spot>> {
+    let path = raw_path(&path)?;
+    let engine = engine.inner().clone();
+    blocking(move || engine.find_dust_spots(&path, &adjustments)).await
+}
+
+fn mask_response(mask: &epikos_engine::MaskData) -> Response {
     let alpha = mask.alpha();
 
     let mut out = Vec::with_capacity(12 + alpha.len());
@@ -413,7 +443,7 @@ async fn detect_mask(
     out.extend_from_slice(&mask.height.to_le_bytes());
     out.extend_from_slice(&(mask.infer_ms.min(u32::MAX as u64) as u32).to_le_bytes());
     out.extend_from_slice(&alpha);
-    Ok(Response::new(out))
+    Response::new(out)
 }
 
 #[derive(serde::Serialize)]
@@ -563,6 +593,8 @@ pub fn run() {
             export_image,
             mask_models,
             detect_mask,
+            local_mask,
+            find_dust_spots,
             detect_depth,
             list_styles,
             handoff_apps,

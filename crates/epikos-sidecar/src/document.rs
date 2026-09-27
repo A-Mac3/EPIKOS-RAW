@@ -67,6 +67,42 @@ pub struct Adjustments {
     pub crop: Crop,
     /// Step 3 hand-drawn masks (brush, linear and radial gradients) with their edits.
     pub manual: Vec<ManualAdjustment>,
+    /// Retouching: generative erase, dust spots and red-eye removal.
+    pub retouch: Retouch,
+}
+
+/// Retouching on the upright (uncropped) frame; positions are fractions of it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Retouch {
+    /// Areas filled by generative erase (LaMa inpainting), one per erased object.
+    pub erase: Vec<EraseArea>,
+    /// Healed spots (dust, blemishes).
+    pub spots: Vec<Spot>,
+    /// Neutralise red pupils inside the detected eyes.
+    pub red_eye: bool,
+}
+
+impl Retouch {
+    pub fn is_empty(&self) -> bool {
+        self.erase.is_empty() && self.spots.is_empty() && !self.red_eye
+    }
+}
+
+/// One erased object: the strokes painted over it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EraseArea {
+    pub strokes: Vec<BrushStroke>,
+}
+
+/// A healed spot: centre (fractions of the frame) and radius (fraction of its width).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Spot {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
 }
 
 impl Default for Adjustments {
@@ -90,6 +126,7 @@ impl Default for Adjustments {
             lut: LutRef::default(),
             crop: Crop::default(),
             manual: Vec::new(),
+            retouch: Retouch::default(),
         }
     }
 }
@@ -176,10 +213,28 @@ pub enum MaskTarget {
     FaceSkin,
     /// Skin other than the face: neck, arms, hands.
     BodySkin,
+    /// People (scene segmentation).
+    People,
+    /// Cars, buses, bikes, motorbikes, trains, boats, aircraft (scene segmentation).
+    Vehicles,
+    /// Dogs, cats, horses, cows, sheep, birds (scene segmentation).
+    Animals,
+    /// Leafy greenery: trees, bushes, hedges (colour and texture).
+    Foliage,
+    /// All plant life: foliage, grass, fields, potted plants.
+    Vegetation,
+    /// Clothing on people: the person minus skin, hair and face.
+    Clothing,
+    /// Beard and moustache.
+    FacialHair,
+    /// Eyeglasses and sunglasses (face parsing).
+    Glasses,
+    /// Lips (face parsing).
+    Lips,
 }
 
 impl MaskTarget {
-    pub const ALL: [MaskTarget; 12] = [
+    pub const ALL: [MaskTarget; 21] = [
         MaskTarget::Subject,
         MaskTarget::Background,
         MaskTarget::Sky,
@@ -192,6 +247,15 @@ impl MaskTarget {
         MaskTarget::Teeth,
         MaskTarget::FaceSkin,
         MaskTarget::BodySkin,
+        MaskTarget::People,
+        MaskTarget::Vehicles,
+        MaskTarget::Animals,
+        MaskTarget::Foliage,
+        MaskTarget::Vegetation,
+        MaskTarget::Clothing,
+        MaskTarget::FacialHair,
+        MaskTarget::Glasses,
+        MaskTarget::Lips,
     ];
 
     pub fn id(self) -> &'static str {
@@ -208,6 +272,15 @@ impl MaskTarget {
             MaskTarget::Teeth => "teeth",
             MaskTarget::FaceSkin => "faceSkin",
             MaskTarget::BodySkin => "bodySkin",
+            MaskTarget::People => "people",
+            MaskTarget::Vehicles => "vehicles",
+            MaskTarget::Animals => "animals",
+            MaskTarget::Foliage => "foliage",
+            MaskTarget::Vegetation => "vegetation",
+            MaskTarget::Clothing => "clothing",
+            MaskTarget::FacialHair => "facialHair",
+            MaskTarget::Glasses => "glasses",
+            MaskTarget::Lips => "lips",
         }
     }
 
@@ -215,7 +288,15 @@ impl MaskTarget {
     pub fn is_face_feature(self) -> bool {
         matches!(
             self,
-            MaskTarget::Eyes | MaskTarget::Hair | MaskTarget::Eyebrows | MaskTarget::Eyelashes | MaskTarget::Teeth | MaskTarget::FaceSkin
+            MaskTarget::Eyes
+                | MaskTarget::Hair
+                | MaskTarget::Eyebrows
+                | MaskTarget::Eyelashes
+                | MaskTarget::Teeth
+                | MaskTarget::FaceSkin
+                | MaskTarget::FacialHair
+                | MaskTarget::Glasses
+                | MaskTarget::Lips
         )
     }
 
@@ -237,13 +318,22 @@ impl MaskTarget {
             MaskTarget::Teeth => "Teeth",
             MaskTarget::FaceSkin => "Facial skin",
             MaskTarget::BodySkin => "Body skin",
+            MaskTarget::People => "People",
+            MaskTarget::Vehicles => "Vehicles",
+            MaskTarget::Animals => "Animals",
+            MaskTarget::Foliage => "Foliage",
+            MaskTarget::Vegetation => "Vegetation",
+            MaskTarget::Clothing => "Clothing",
+            MaskTarget::FacialHair => "Facial hair",
+            MaskTarget::Glasses => "Glasses",
+            MaskTarget::Lips => "Lips",
         }
     }
 }
 
 /// PRD Step 3: an adjustment applied only inside a mask. Exposure in EV (−3…3), the
 /// rest −100…100.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LocalAdjustment {
     pub mask: MaskTarget,
@@ -256,6 +346,12 @@ pub struct LocalAdjustment {
     pub clarity: f32,
     /// Greener (−) or more magenta (+): balances a skin cast the warmth axis can't.
     pub tint: f32,
+    /// Mask refinement, −100…100: shrink (−) or extend (+) the masked area.
+    pub grow: f32,
+    /// Mask refinement, 0…100: soften the mask's edge so the edit fades in.
+    pub feather: f32,
+    /// Hand refinement: strokes that add to the mask, or remove from it (`erase`).
+    pub refine: Vec<BrushStroke>,
 }
 
 impl LocalAdjustment {
@@ -266,6 +362,11 @@ impl LocalAdjustment {
             && self.warmth == 0.0
             && self.clarity == 0.0
             && self.tint == 0.0
+    }
+
+    /// Whether the mask is refined (grown, shrunk, feathered or brushed).
+    pub fn is_refined(&self) -> bool {
+        self.grow != 0.0 || self.feather != 0.0 || !self.refine.is_empty()
     }
 }
 

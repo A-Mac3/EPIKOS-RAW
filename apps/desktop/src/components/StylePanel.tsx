@@ -20,6 +20,8 @@ interface Props {
   onLutsChanged: () => void;
   /** Learned styles and custom presets, shown first. */
   library?: React.ReactNode;
+  /** The library tabs open now (their thumbnails are rendered). */
+  onOpenCategories?: (cats: string[]) => void;
 }
 
 const SLOTS_KEY = "epikos.fusion.slots";
@@ -50,12 +52,14 @@ export function StylePanel({
   luts,
   onLutsChanged,
   library,
+  onOpenCategories,
 }: Props) {
   const style = adjustments.style;
   const fused = style.blend.length > 0;
   const listed = styles.filter((s) => s.listed);
   const active = fused ? null : (styles.find((s) => s.id === style.id) ?? null);
   const [openCats, setOpenCats] = useState<Set<string>>(() => new Set([active?.category ?? "Portraits & Skin"]));
+  useEffect(() => onOpenCategories?.([...openCats]), [openCats, onOpenCategories]);
   const [fusionOpen, setFusionOpen] = useState(fused);
   const [lutError, setLutError] = useState<string | null>(null);
   const [slots, setSlots] = useState<string[]>(() => {

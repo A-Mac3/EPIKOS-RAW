@@ -17,6 +17,8 @@ use super::atmosphere::AtmosphereParams;
 use super::grade::ColorParams;
 use super::texture::TextureParams;
 
+mod library;
+
 /// What the UI shows for a style.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,8 +27,7 @@ pub struct StyleInfo {
     pub name: &'static str,
     /// Style world from the PRD taxonomy.
     pub world: &'static str,
-    /// Library tab: "Film Simulations", "Portraits & Skin", "Landscape & Nature",
-    /// "Cinematic".
+    /// Library tab: one of [`CATEGORIES`].
     pub category: &'static str,
     /// Shown in the library. Earlier styles stay available to the sidecars that use
     /// them, but aren't offered for new edits.
@@ -124,7 +125,7 @@ fn texture(clarity: f32, micro: f32, blemish: f32, specular: f32) -> TexturePara
 /// Every style: the library in display order (by category), then the earlier ones
 /// kept for sidecars that use them.
 pub(crate) fn all() -> Vec<Style> {
-    vec![
+    let mut styles = vec![
         // Film Simulations
         portra_400(),
         fuji_pro_400h(),
@@ -151,7 +152,17 @@ pub(crate) fn all() -> Vec<Style> {
         volumetric_golden_hour(),
         moody_and_earthy(),
         high_key_editorial(),
-    ]
+    ];
+    styles.extend(library::RECIPES.iter().map(library::build));
+    // Listed styles by tab (a stable sort keeps each tab's order), earlier ones last.
+    styles.sort_by_key(|s| {
+        if s.info.listed {
+            CATEGORIES.iter().position(|c| *c == s.info.category).unwrap_or(CATEGORIES.len())
+        } else {
+            CATEGORIES.len() + 1
+        }
+    });
+    styles
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -171,6 +182,13 @@ const FILM: &str = "Film Simulations";
 const PORTRAIT: &str = "Portraits & Skin";
 const LANDSCAPE: &str = "Landscape & Nature";
 const CINEMATIC: &str = "Cinematic";
+const AERIAL: &str = "Aerial";
+const LIFESTYLE: &str = "Lifestyle";
+const ESSENTIALS: &str = "Essentials";
+const MACRO: &str = "Macro";
+
+/// The library's tabs, in display order.
+pub const CATEGORIES: [&str; 8] = [FILM, PORTRAIT, LANDSCAPE, AERIAL, LIFESTYLE, ESSENTIALS, MACRO, CINEMATIC];
 
 // ---- Film Simulations ------------------------------------------------------------------
 // Emulations of the stocks' character (palette, contrast, fade, grain), not measured
@@ -937,12 +955,24 @@ mod tests {
     }
 
     #[test]
-    fn the_library_has_four_categories_of_listed_styles() {
+    fn every_tab_has_at_least_twelve_listed_styles_in_order() {
         let listed: Vec<_> = all().into_iter().filter(|s| s.info.listed).collect();
-        assert_eq!(listed.len(), 17);
-        for (cat, n) in [(FILM, 5), (PORTRAIT, 4), (LANDSCAPE, 4), (CINEMATIC, 4)] {
-            assert_eq!(listed.iter().filter(|s| s.info.category == cat).count(), n, "{cat}");
+        for cat in CATEGORIES {
+            let n = listed.iter().filter(|s| s.info.category == cat).count();
+            assert!(n >= 12, "{cat}: {n}");
         }
+        // Every Fujifilm simulation and Leica look is in Film Simulations.
+        let film = |id: &str| listed.iter().any(|s| s.info.id == id && s.info.category == FILM);
+        for id in ["fuji-classic-chrome", "fuji-classic-neg", "fuji-nostalgic-neg", "fuji-acros-r", "fuji-eterna-bleach"] {
+            assert!(film(id), "{id}");
+        }
+        for id in ["leica-chrome", "leica-eternal", "leica-selenium", "leica-bw-hc"] {
+            assert!(film(id), "{id}");
+        }
+        // Tabs come in display order.
+        let order: Vec<usize> =
+            listed.iter().map(|s| CATEGORIES.iter().position(|c| *c == s.info.category).unwrap()).collect();
+        assert!(order.windows(2).all(|w| w[0] <= w[1]));
         // Earlier styles still resolve for the sidecars that name them.
         for id in ["silver-charcoal", "volumetric-golden-hour", "moody-earthy", "high-key-editorial"] {
             assert!(find(id).is_some_and(|s| !s.info.listed));

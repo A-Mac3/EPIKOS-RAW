@@ -5,8 +5,10 @@ Cross-platform RAW/DNG editor (JPEG, PNG and TIFF too). Product spec: [PRD.md](P
 Open a folder (⌘O), a single photo (⇧⌘O), or drop photos or folders anywhere on the
 window; photos opened one by one get the same filmstrip, masks and exports as a folder.
 
-The left panel (◧) holds **Presets & Styles** (17 styles in four categories, the Style
-Fusion Matrix with any four styles in its corners, and imported `.cube` 3D LUTs; rest the
+The left panel (◧) holds **Presets & Styles** (over 120 styles in eight tabs: Film
+Simulations, with looks inspired by every Fujifilm film simulation and the Leica looks,
+Portraits & Skin, Landscape & Nature, Aerial, Lifestyle, Essentials, Macro and
+Cinematic; the Style Fusion Matrix with any four styles in its corners, and imported `.cube` 3D LUTs; rest the
 pointer on a card to preview it), the **AI Mentor** (a rule-based reading of the photo
 that re-reads the edit whenever it pauses: a recommended starting point with global and
 local moves, skin balance judged for each skin's own depth, subject lift and background
@@ -19,17 +21,30 @@ the current edit, its luminance histogram and the light's measured colour temper
 **Learn Style from Photo** (Presets & Styles) measures a reference photo's look: black
 and white points and midtone curve, skin richness within the skin's own depth and its
 specular highlights, per-band colour, foliage and background saturation. The AI Mentor's
-starting point aims at the built-in Editorial profile (rich anchored blacks, dimensional
-skin, calm olive foliage, a midtone S-curve) or at any learned style, fitted on the
+starting point aims at a pro profile for the photo's genre (portrait, deep-skin portrait,
+light & airy wedding, landscape, street, architecture, wildlife, underwater, night &
+astro, or by choice aerial, macro and product & food: where photographers in that genre
+typically set the black and white points, midtone contrast, skin and greenery), the
+built-in Editorial profile, or any learned style (your own references), fitted on the
 photo's own render. Learned styles and custom presets are kept in
 `~/.epikos/learned_styles.json` and `~/.epikos/presets.json` (or `$EPIKOS_DATA_DIR`), so
 they persist across sessions and updates.
-Step 3's AI masks include facial skin, body skin, eyes, eyebrows, eyelashes (the lash
-line at the eyes' edge), teeth and hair. Face features are parsed at twice the mask
+Step 3's AI masks include people, vehicles and animals (FCN-ResNet50 scene
+segmentation), vegetation and foliage, clothing, facial skin, body skin, eyes, eyebrows,
+eyelashes (the lash line at the eyes' edge), teeth, lips, facial hair, glasses and hair.
+Selecting a local adjustment highlights its mask for review; the highlight clears as
+soon as an edit starts, and Show mask brings it back. Each mask can be extended or
+reduced, feathered (25 by default, so edits fade in without a visible edge) and brushed
+where it should (Add) or shouldn't (Remove) reach. Face features are parsed at twice the mask
 resolution; skin is kept to the person (on the subject and matching their own skin, so
 walls and clothing never count); where the hair model finds almost none (very dark or
 close-cropped hair, a beard) hair comes from the head's darker, textured areas. Step 4
-has Teeth whitening. Mask overlays hide while any slider is dragged and return on
+has Teeth whitening and **Retouch**: Generative erase (paint over something, then
+Erase; the LaMa inpainting model fills it from its surroundings, once, and exposure,
+tone and the look apply to the fill like the rest of the photo), Heal spots (click a
+spot, or Find dust spots to have faint, round, isolated specks on smooth areas circled
+for review) and Red-eye removal. Step 2 has a quick Vignette slider (the full vignette
+controls are in Step 8). Mask overlays hide while any slider is dragged and return on
 release.
 Step 3 also has **Manual masking**: a brush (size, feather, flow, erase), linear
 (graduated) and radial gradients drawn on the image, each with exposure, contrast,
@@ -156,8 +171,10 @@ macOS 13.3 or later.
   System Settings → Privacy & Security → Open Anyway).
 
 The face-parsing model (eyes and hair) is MIT-licensed, but it was trained on
-CelebAMask-HQ, whose images are licensed for non-commercial research only. Check that
-before distributing the app commercially.
+CelebAMask-HQ, whose images are licensed for non-commercial research only. The LaMa
+inpainting model is Apache-2.0 but trained on Places2, and FCN-ResNet50 on COCO / Pascal
+VOC. Check those before distributing the app commercially. The film looks are inspired
+by the Fujifilm and Leica renderings; they are not the manufacturers' own profiles.
 
 App icons are placeholders; regenerate the full set with
 `npm run tauri icon src-tauri/icons/app-icon-source.png`.

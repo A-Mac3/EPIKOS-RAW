@@ -6,6 +6,8 @@
 //! | Sky     | U²-Net sky segmentation, `skyseg.onnx`  | 320×320    |
 //! | Depth   | Depth Anything V2 Small, `depth-anything-v2-small.onnx` | 518 long side, ×14 |
 //! | Face parts (eyes, hair, …) | BiSeNet face parsing, `face-parsing-resnet18.onnx` | 512×512 face crop |
+//! | People, vehicles, animals | FCN-ResNet50 (Pascal VOC), `fcn-resnet50-12.onnx` | 520 long side |
+//! | Generative erase | LaMa inpainting, `lama-fp32.onnx` | 512×512 |
 //!
 //! Models are downloaded by `scripts/fetch-models.sh` (they are not committed) and loaded
 //! lazily on first use, then kept for the life of the [`Masker`]. Inputs are
@@ -123,6 +125,8 @@ pub struct FaceParts {
     pub neck: Vec<f32>,
     /// Clothing.
     pub cloth: Vec<f32>,
+    /// Eyeglasses and sunglasses.
+    pub glasses: Vec<f32>,
     pub infer_ms: u64,
 }
 
@@ -189,15 +193,132 @@ pub struct ModelStatus {
 /// Owns the ONNX sessions. Thread-safe; each model runs one inference at a time.
 pub struct Masker {
     dir: PathBuf,
-    sessions: [Mutex<Option<Session>>; 4],
+    sessions: [Mutex<Option<Session>>; 6],
+}
+
+/// FCN-ResNet50 on Pascal VOC; ImageNet normalisation, any size (long side used here).
+const SCENE: ModelSpec = ModelSpec {
+    file: "fcn-resnet50-12.onnx",
+    side: 520,
+    mean: [0.485, 0.456, 0.406],
+    std: [0.229, 0.224, 0.225],
+};
+const SCENE_SLOT: usize = 4;
+/// Pascal VOC classes grouped: people; vehicles (aeroplane, bicycle, boat, bus, car,
+/// motorbike, train); animals (bird, cat, cow, dog, horse, sheep); potted plants.
+const SCENE_GROUPS: [&[usize]; 4] = [&[15], &[1, 2, 4, 6, 7, 14, 19], &[3, 8, 10, 12, 13, 17], &[16]];
+const SCENE_CLASSES: usize = 21;
+
+/// LaMa inpainting: 512×512 RGB in 0–1 and a 0/1 hole mask.
+const LAMA_FILE: &str = "lama-fp32.onnx";
+const LAMA_SIDE: u32 = 512;
+const INPAINT_SLOT: usize = 5;
+
+/// People, vehicles, animals and plants in a scene, as probabilities (0–1) at the
+/// input's size.
+#[derive(Debug, Clone)]
+pub struct SceneParts {
+    pub width: u32,
+    pub height: u32,
+    pub person: Vec<f32>,
+    pub vehicle: Vec<f32>,
+    pub animal: Vec<f32>,
+    pub plant: Vec<f32>,
+    pub infer_ms: u64,
 }
 
 impl Masker {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
-            sessions: [Mutex::new(None), Mutex::new(None), Mutex::new(None), Mutex::new(None)],
+            sessions: std::array::from_fn(|_| Mutex::new(None)),
         }
+    }
+
+    pub fn scene_available(&self) -> bool {
+        self.dir.join(SCENE.file).is_file()
+    }
+
+    pub fn inpaint_available(&self) -> bool {
+        self.dir.join(LAMA_FILE).is_file()
+    }
+
+    /// People, vehicles, animals and potted plants in `image` (semantic segmentation).
+    pub fn scene_parts(&self, image: &RgbImage) -> Result<SceneParts> {
+        if image.width == 0 || image.height == 0 {
+            return Err(Error::InvalidImage { reason: "cannot segment an empty image".into() });
+        }
+        // Long side to the model's working size, both sides multiples of 8.
+        let scale = SCENE.side as f32 / image.width.max(image.height) as f32;
+        let round8 = |v: f32| (((v / 8.0).round() as u32).max(1)) * 8;
+        let (w, h) = (round8(image.width as f32 * scale), round8(image.height as f32 * scale));
+        let input = to_nchw_sized(image, &SCENE, w, h);
+        let mut slot = self.sessions[SCENE_SLOT].lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(self.load_file(&self.dir.join(SCENE.file), "Scene segmentation")?);
+        }
+        let session = slot.as_mut().expect("session loaded above");
+        let t = Instant::now();
+        let tensor = Tensor::from_array(([1usize, 3, h as usize, w as usize], input)).map_err(ml)?;
+        let outputs = session.run(ort::inputs![tensor]).map_err(ml)?;
+        let (shape, logits) = outputs[0].try_extract_tensor::<f32>().map_err(ml)?;
+        let n = (w * h) as usize;
+        if logits.len() < SCENE_CLASSES * n || shape.iter().rev().take(2).product::<i64>() as usize != n {
+            return Err(Error::Decode(format!("{}: unexpected output shape {shape:?}", SCENE.file)));
+        }
+        let groups = softmax_groups(&logits[..SCENE_CLASSES * n], n, SCENE_CLASSES, &SCENE_GROUPS);
+        drop(outputs);
+        let infer_ms = t.elapsed().as_millis() as u64;
+        drop(slot);
+        let fit = |p: &[f32]| resize_plane(p, w, h, image.width, image.height);
+        Ok(SceneParts {
+            width: image.width,
+            height: image.height,
+            person: fit(&groups[0]),
+            vehicle: fit(&groups[1]),
+            animal: fit(&groups[2]),
+            plant: fit(&groups[3]),
+            infer_ms,
+        })
+    }
+
+    /// Fill the `hole` (0–1, 512×512) of a 512×512 `image` with LaMa; returns the
+    /// model's 512×512 result.
+    pub fn inpaint(&self, image: &RgbImage, hole: &[f32]) -> Result<RgbImage> {
+        let side = LAMA_SIDE as usize;
+        let n = side * side;
+        if image.width != LAMA_SIDE || image.height != LAMA_SIDE || hole.len() != n {
+            return Err(Error::InvalidImage { reason: "inpainting works on 512×512 crops".into() });
+        }
+        let mut input = vec![0.0f32; 3 * n];
+        for c in 0..3 {
+            for i in 0..n {
+                input[c * n + i] = image.data[i * 3 + c] as f32 / 255.0;
+            }
+        }
+        let mask: Vec<f32> = hole.iter().map(|&m| if m > 0.5 { 1.0 } else { 0.0 }).collect();
+        let mut slot = self.sessions[INPAINT_SLOT].lock().unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(self.load_file(&self.dir.join(LAMA_FILE), "Inpainting")?);
+        }
+        let session = slot.as_mut().expect("session loaded above");
+        let img_t = Tensor::from_array(([1usize, 3, side, side], input)).map_err(ml)?;
+        let mask_t = Tensor::from_array(([1usize, 1, side, side], mask)).map_err(ml)?;
+        let outputs = session.run(ort::inputs!["image" => img_t, "mask" => mask_t]).map_err(ml)?;
+        let (_, out) = outputs[0].try_extract_tensor::<f32>().map_err(ml)?;
+        if out.len() < 3 * n {
+            return Err(Error::Decode(format!("{LAMA_FILE}: unexpected output size {}", out.len())));
+        }
+        // The export returns 0–255; be tolerant of a 0–1 variant.
+        let peak = out[..3 * n].iter().cloned().fold(0.0f32, f32::max);
+        let k = if peak <= 1.5 { 255.0 } else { 1.0 };
+        let mut data = vec![0u8; 3 * n];
+        for c in 0..3 {
+            for i in 0..n {
+                data[i * 3 + c] = (out[c * n + i] * k).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        Ok(RgbImage { width: LAMA_SIDE, height: LAMA_SIDE, data })
     }
 
     /// The first candidate directory holding any model, else the first candidate (where
@@ -234,6 +355,10 @@ impl Masker {
 
     pub fn depth_available(&self) -> bool {
         self.depth_file().is_file()
+    }
+
+    pub fn inpaint_file(&self) -> PathBuf {
+        self.dir.join(LAMA_FILE)
     }
 
     pub fn face_file(&self) -> PathBuf {
@@ -281,6 +406,7 @@ impl Masker {
             hair: fit(&parts[5]),
             neck: fit(&parts[6]),
             cloth: fit(&parts[7]),
+            glasses: fit(&parts[8]),
             infer_ms,
         })
     }
@@ -433,12 +559,30 @@ fn normalise_depth(disparity: &[f32]) -> Vec<f32> {
 
 /// Softmax over the class axis, summed into [skin, eyes, brows, lips, hair].
 /// CelebAMask-HQ classes grouped: face skin (skin, nose, ears), eyes, brows, lips,
-/// inner mouth, hair, neck, clothing.
-const FACE_GROUPS: [&[usize]; 8] = [&[1, 10, 7, 8], &[4, 5], &[2, 3], &[12, 13], &[11], &[17], &[14], &[16]];
+/// inner mouth, hair, neck, clothing, glasses.
+const FACE_GROUPS: [&[usize]; 9] = [&[1, 10, 7, 8], &[4, 5], &[2, 3], &[12, 13], &[11], &[17], &[14], &[16], &[6]];
 
-fn face_parts(logits: &[f32], n: usize) -> [Vec<f32>; 8] {
+/// Per-pixel softmax over `classes` logits (planar, `n` pixels each), summed per group.
+fn softmax_groups(logits: &[f32], n: usize, classes: usize, groups: &[&[usize]]) -> Vec<Vec<f32>> {
+    let mut out = vec![vec![0.0f32; n]; groups.len()];
+    let mut exp = vec![0.0f32; classes];
+    for i in 0..n {
+        let max = (0..classes).map(|c| logits[c * n + i]).fold(f32::MIN, f32::max);
+        let mut sum = 0.0;
+        for (c, e) in exp.iter_mut().enumerate() {
+            *e = (logits[c * n + i] - max).exp();
+            sum += *e;
+        }
+        for (g, classes) in groups.iter().enumerate() {
+            out[g][i] = classes.iter().map(|&c| exp[c]).sum::<f32>() / sum;
+        }
+    }
+    out
+}
+
+fn face_parts(logits: &[f32], n: usize) -> [Vec<f32>; 9] {
     let groups = FACE_GROUPS;
-    let mut out: [Vec<f32>; 8] = std::array::from_fn(|_| vec![0.0; n]);
+    let mut out: [Vec<f32>; 9] = std::array::from_fn(|_| vec![0.0; n]);
     for i in 0..n {
         let max = (0..FACE_CLASSES).map(|c| logits[c * n + i]).fold(f32::MIN, f32::max);
         let exp: [f32; FACE_CLASSES] = std::array::from_fn(|c| (logits[c * n + i] - max).exp());
@@ -528,7 +672,7 @@ mod tests {
         logits[17 * n] = 20.0;
         logits[4 * n + 1] = 10.0;
         logits[5 * n + 1] = 10.0;
-        let [skin, eyes, _, _, _, hair, _, _] = face_parts(&logits, n);
+        let [skin, eyes, _, _, _, hair, _, _, _] = face_parts(&logits, n);
         assert!(hair[0] > 0.99 && eyes[0] < 0.01);
         assert!(eyes[1] > 0.99 && skin[1] < 0.01);
     }

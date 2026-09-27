@@ -28,6 +28,7 @@ import {
 } from "../types";
 import { ColorWheel } from "./ColorWheel";
 import { ManualMaskPanel } from "./ManualMaskPanel";
+import { RetouchPanel, type RetouchUi } from "./RetouchPanel";
 import type { BrushSettings } from "./ManualMaskTool";
 import { CurveGraph } from "./CurveGraph";
 import { bakeCurve, isIdentity } from "../curve";
@@ -61,6 +62,21 @@ interface Props {
   setManualActive: (i: number | null) => void;
   brush: BrushSettings;
   setBrush: (b: BrushSettings) => void;
+  /** The AI-mask adjustment selected for review and refinement. */
+  localUi: LocalUi;
+  retouchUi: RetouchUi;
+}
+
+/** Review and refinement of the AI-mask adjustments, shared with the viewer. */
+export interface LocalUi {
+  selected: number | null;
+  select: (i: number | null) => void;
+  /** The selected mask is highlighted on the image. */
+  review: boolean;
+  setReview: (on: boolean) => void;
+  /** Brushing the selected mask: adding to it or removing from it. */
+  refine: "add" | "remove" | null;
+  setRefine: (mode: "add" | "remove" | null) => void;
 }
 
 /** PRD Section 5: the mandatory, displayed order of operations. */
@@ -149,6 +165,8 @@ export function StepsPanel({
   setManualActive,
   brush,
   setBrush,
+  localUi,
+  retouchUi,
 }: Props) {
   const [maskTab, setMaskTab] = useState<"ai" | "manual">(() => (manualActive !== null ? "manual" : "ai"));
   const [open, setOpen] = useState<Set<number>>(() => new Set([0, 1]));
@@ -546,6 +564,8 @@ export function StepsPanel({
             onCommit={endEdit}
           />
         ))}
+        {/* The same vignette as Step 8 (midpoint, feather and roundness are there). */}
+        {finSlider("Vignette", "vignette", 0, { signed: true })}
         <button type="button" className="btn" disabled={auto.busy !== null} onClick={() => void runAuto("tone")}>
           {auto.busy === "tone" ? "Measuring…" : "Auto exposure & tone"}
         </button>
@@ -629,7 +649,16 @@ export function StepsPanel({
         {maskTab === "ai" ? (
           <>
             <MaskControls masks={masks} />
-            <LocalAdjustments local={a.local} masks={masks} edit={edit} endEdit={endEdit} commit={commit} />
+            <LocalAdjustments
+              local={a.local}
+              masks={masks}
+              edit={edit}
+              endEdit={endEdit}
+              commit={commit}
+              ui={localUi}
+              brush={brush}
+              setBrush={setBrush}
+            />
           </>
         ) : (
           <ManualMaskPanel
@@ -669,6 +698,16 @@ export function StepsPanel({
           Retouching acts only where skin is detected. Micro-texture is cored against noise and eased off on skin, so
           hair, fabric and bark sharpen without making skin look dirty.
         </p>
+        <RetouchPanel
+          path={info.path}
+          adjustments={a}
+          commit={commit}
+          ui={retouchUi}
+          brush={brush}
+          setBrush={setBrush}
+          inpaintAvailable={masks.models?.inpaint?.available ?? false}
+          eyesAvailable={masks.available("eyes")}
+        />
       </>
     ),
     4: (
@@ -1168,7 +1207,7 @@ function MaskControls({ masks: m }: { masks: MaskState }) {
   );
 }
 
-const LOCAL_SLIDERS: [Exclude<keyof LocalAdjustment, "mask">, string][] = [
+const LOCAL_SLIDERS: [Exclude<keyof LocalAdjustment, "mask" | "grow" | "feather" | "refine">, string][] = [
   ["exposure", "Exposure"],
   ["contrast", "Contrast"],
   ["saturation", "Saturation"],
@@ -1180,19 +1219,30 @@ const LOCAL_SLIDERS: [Exclude<keyof LocalAdjustment, "mask">, string][] = [
 /** Green to magenta, for local Tint. */
 const TINT_TRACK = "linear-gradient(90deg, #4caf50, #d8d8d8 50%, #d04fb0)";
 
-/** Step 3 edits confined to a mask. */
+/**
+ * Step 3 edits confined to a mask. Selecting one highlights its mask on the image for
+ * review; the highlight goes as soon as an edit starts (so its effect is visible) and
+ * Show mask brings it back. The mask can be extended or reduced, feathered, and
+ * brushed where it should or shouldn't reach.
+ */
 function LocalAdjustments({
   local,
   masks,
   edit,
   endEdit,
   commit,
+  ui,
+  brush,
+  setBrush,
 }: {
   local: LocalAdjustment[];
   masks: MaskState;
   edit: Update;
   endEdit: () => void;
   commit: Update;
+  ui: LocalUi;
+  brush: BrushSettings;
+  setBrush: (b: BrushSettings) => void;
 }) {
   const [target, setTarget] = useState<MaskTarget>("subject");
   const usable = MASK_KINDS.filter((k) => masks.available(k));
@@ -1200,50 +1250,153 @@ function LocalAdjustments({
     ...x,
     local: x.local.map((l, k) => (k === i ? { ...l, ...patch } : l)),
   });
+  const review = (i: number) => {
+    ui.select(i);
+    ui.setReview(true);
+  };
 
   return (
     <>
       <span className="field-label">Local adjustments</span>
-      {local.map((l, i) => (
-        <div key={i} className="local-card">
-          <div className="field-row">
-            <select
-              aria-label={`Mask of adjustment ${i + 1}`}
-              value={l.mask}
-              onChange={(e) => commit(setLocal(i, { mask: e.currentTarget.value as MaskTarget }))}
-            >
-              {MASK_KINDS.map((k) => (
-                <option key={k} value={k} disabled={!masks.available(k)}>
-                  {MASK_LABEL[k]}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="btn link"
-              onClick={() => commit((x) => ({ ...x, local: x.local.filter((_, k) => k !== i) }))}
-            >
-              Remove
-            </button>
+      {local.map((l, i) => {
+        const selected = ui.selected === i;
+        return (
+          <div
+            key={i}
+            className={`local-card${selected ? " is-selected" : ""}`}
+            onPointerDown={() => {
+              if (!selected) review(i);
+            }}
+          >
+            <div className="field-row">
+              <select
+                aria-label={`Mask of adjustment ${i + 1}`}
+                value={l.mask}
+                onChange={(e) => {
+                  commit(setLocal(i, { mask: e.currentTarget.value as MaskTarget, refine: [] }));
+                  review(i);
+                }}
+              >
+                {MASK_KINDS.map((k) => (
+                  <option key={k} value={k} disabled={!masks.available(k)}>
+                    {MASK_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={`btn small${selected && ui.review ? " is-on" : ""}`}
+                aria-pressed={selected && ui.review}
+                title="Highlight the area this edit covers"
+                onClick={() => {
+                  if (selected && ui.review) ui.setReview(false);
+                  else review(i);
+                }}
+              >
+                {selected && ui.review ? "Hide mask" : "Show mask"}
+              </button>
+              <button
+                type="button"
+                className="btn link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  ui.select(null);
+                  commit((x) => ({ ...x, local: x.local.filter((_, k) => k !== i) }));
+                }}
+              >
+                Remove
+              </button>
+            </div>
+            {!masks.available(l.mask) && <p className="hint error">This mask&apos;s model isn&apos;t installed; the edit has no effect.</p>}
+            {LOCAL_SLIDERS.map(([key, label]) => (
+              <Slider
+                key={key}
+                label={label}
+                value={l[key]}
+                min={key === "exposure" ? -3 : -100}
+                max={key === "exposure" ? 3 : 100}
+                step={key === "exposure" ? 0.01 : 1}
+                defaultValue={0}
+                format={key === "exposure" ? fmtSigned(2, " EV") : fmtSigned(0)}
+                track={key === "warmth" ? WARMTH_TRACK : key === "tint" ? TINT_TRACK : undefined}
+                onChange={(v) => {
+                  // The first change hides the highlight so its effect shows.
+                  if (ui.selected !== i) ui.select(i);
+                  if (ui.review) ui.setReview(false);
+                  edit(setLocal(i, { [key]: v }));
+                }}
+                onCommit={endEdit}
+              />
+            ))}
+            {selected && (
+              <div className="local-refine">
+                <span className="field-label">Refine mask</span>
+                <Slider
+                  label="Reduce / extend"
+                  value={l.grow}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  defaultValue={0}
+                  format={fmtSigned(0)}
+                  onChange={(v) => {
+                    ui.setReview(true);
+                    edit(setLocal(i, { grow: v }));
+                  }}
+                  onCommit={endEdit}
+                />
+                <Slider
+                  label="Feather"
+                  value={l.feather}
+                  min={0}
+                  max={100}
+                  step={1}
+                  defaultValue={25}
+                  format={(v) => `${v.toFixed(0)}`}
+                  onChange={(v) => {
+                    ui.setReview(true);
+                    edit(setLocal(i, { feather: v }));
+                  }}
+                  onCommit={endEdit}
+                />
+                <div className="field-row">
+                  <Segmented<"off" | "add" | "remove">
+                    label="Brush the mask"
+                    value={ui.refine ?? "off"}
+                    options={[
+                      { value: "off", label: "No brush" },
+                      { value: "add", label: "Add" },
+                      { value: "remove", label: "Remove" },
+                    ]}
+                    onChange={(m) => {
+                      ui.setRefine(m === "off" ? null : m);
+                      if (m !== "off") ui.setReview(true);
+                    }}
+                  />
+                </div>
+                {ui.refine && (
+                  <Slider
+                    label="Brush size"
+                    value={brush.size * 100}
+                    min={0.5}
+                    max={30}
+                    step={0.1}
+                    defaultValue={5}
+                    format={(v) => `${v.toFixed(1)}%`}
+                    onChange={(v) => setBrush({ ...brush, size: v / 100 })}
+                    onCommit={() => {}}
+                  />
+                )}
+                {l.refine.length > 0 && (
+                  <button type="button" className="btn small" onClick={() => commit(setLocal(i, { refine: [] }))}>
+                    Clear brushing
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-          {!masks.available(l.mask) && <p className="hint error">This mask&apos;s model isn&apos;t installed; the edit has no effect.</p>}
-          {LOCAL_SLIDERS.map(([key, label]) => (
-            <Slider
-              key={key}
-              label={label}
-              value={l[key]}
-              min={key === "exposure" ? -3 : -100}
-              max={key === "exposure" ? 3 : 100}
-              step={key === "exposure" ? 0.01 : 1}
-              defaultValue={0}
-              format={key === "exposure" ? fmtSigned(2, " EV") : fmtSigned(0)}
-              track={key === "warmth" ? WARMTH_TRACK : key === "tint" ? TINT_TRACK : undefined}
-              onChange={(v) => edit(setLocal(i, { [key]: v }))}
-              onCommit={endEdit}
-            />
-          ))}
-        </div>
-      ))}
+        );
+      })}
       <div className="field-row">
         <select aria-label="Mask for a new adjustment" value={target} onChange={(e) => setTarget(e.currentTarget.value as MaskTarget)}>
           {MASK_KINDS.map((k) => (
@@ -1256,14 +1409,17 @@ function LocalAdjustments({
           type="button"
           className="btn"
           disabled={!usable.includes(target) || local.length >= 8}
-          onClick={() => commit((x) => ({ ...x, local: [...x.local, defaultLocal(target)] }))}
+          onClick={() => {
+            commit((x) => ({ ...x, local: [...x.local, defaultLocal(target)] }));
+            review(local.length);
+          }}
         >
           + Add
         </button>
       </div>
       <p className="hint">
-        Each edit follows its mask, made on demand the first time it&apos;s used (a second or two on the CPU) and snapped to
-        the photo&apos;s edges. Brighten the eyes, cool the background, add clarity to hair.
+        Selecting an edit highlights its mask so you can check it first; the highlight clears when you start adjusting.
+        Extend or reduce the mask, feather its edge, or brush it where it should or shouldn&apos;t reach.
       </p>
     </>
   );

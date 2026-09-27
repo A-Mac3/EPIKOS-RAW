@@ -15,7 +15,7 @@ use epikos_decode::{decode_file, embedded_thumbnail, DecodedRaw};
 use epikos_masks::{DepthMap, RgbImage};
 use epikos_pipeline::{
     bin_mosaic, block_for_size, develop_rgb_with, estimate_upright, look_masks, look_needs_depth, oklab_planes,
-    skin_likelihood, temperature_for_gains, to_display_srgb, DepthPlane, DisplayImage, LookInputs, MaskPlane,
+    skin_likelihood, temperature_for_gains, to_display_srgb, DepthPlane, DisplayImage, FillPlane, LookInputs, MaskPlane,
 };
 use epikos_sidecar::{
     load_json, load_xmp, save_json, save_xmp, sidecar_json_path, sidecar_xmp_path, Adjustments,
@@ -35,6 +35,7 @@ mod mentor;
 mod prompt;
 mod psd;
 mod regions;
+mod retouch;
 mod story;
 pub use analysis::SceneAnalysis;
 pub use epikos_masks::{DepthMap as Depth, Mask, MaskKind, Masker, ModelStatus};
@@ -113,6 +114,8 @@ pub struct MaskModels {
     pub depth: DepthModel,
     /// The face-parsing model (eye and hair masks).
     pub face: DepthModel,
+    /// The inpainting model (generative erase).
+    pub inpaint: DepthModel,
     /// Every Step 3 mask and whether it can be made with the installed models.
     pub targets: Vec<TargetStatus>,
     /// Lenses in the built-in Lensfun database.
@@ -141,6 +144,8 @@ struct Loaded {
     /// Scene analyses of the photo as shot, keyed by the geometry they were made for:
     /// the mentor re-reads the edit often, the scene never changes.
     analyses: Mutex<Vec<(String, SceneAnalysis)>>,
+    /// Generative-erase fills, keyed by the strokes and the develop they were made on.
+    fills: Mutex<Vec<(String, Arc<retouch::FillData>)>>,
 }
 
 impl Loaded {
@@ -261,6 +266,10 @@ impl Engine {
                 file: self.masker.face_file().to_string_lossy().into_owned(),
                 available: self.masker.face_available(),
             },
+            inpaint: DepthModel {
+                file: self.masker.inpaint_file().to_string_lossy().into_owned(),
+                available: self.masker.inpaint_available(),
+            },
             targets: self.mask_targets(),
             lens_database: lensdb::lens_count(),
         }
@@ -349,6 +358,21 @@ impl Engine {
         } else {
             mask
         })
+    }
+
+    /// The mask of local adjustment `index` as refined (grow, brush, feather): the area
+    /// its edit covers, for review before adjusting.
+    pub fn local_mask(&self, path: &Path, adjustments: &Adjustments, index: usize) -> Result<Arc<MaskData>> {
+        let local = adjustments.local.get(index).ok_or_else(|| {
+            Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no such local adjustment"))
+        })?;
+        let mask = self.detect_mask(path, adjustments, local.mask)?;
+        if !local.is_refined() {
+            return Ok(mask);
+        }
+        let mut data = mask.data.clone();
+        epikos_pipeline::refine_local_mask(&mut data, local, mask.width as usize, mask.height as usize);
+        Ok(Arc::new(MaskData { data, ..(*mask).clone() }))
     }
 
     fn segment(&self, loaded: &Loaded, adjustments: &Adjustments, kind: MaskKind) -> Result<Mask> {
@@ -461,7 +485,8 @@ impl Engine {
                 masks.push(m);
             }
         }
-        Ok(Prepared { depth, masks, lens: loaded.lens_profile(), lut: self.lut(&adjustments.lut.name) })
+        let fills = self.erase_fills(loaded, adjustments)?;
+        Ok(Prepared { depth, masks, lens: loaded.lens_profile(), lut: self.lut(&adjustments.lut.name), fills })
     }
 
     /// Suggested exposure and Step 2 tone for the photo as it is set up in Step 1.
@@ -789,6 +814,7 @@ impl Engine {
             depth_warped: Mutex::new(None),
             lens: OnceLock::new(),
             analyses: Mutex::new(Vec::new()),
+            fills: Mutex::new(Vec::new()),
         });
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         cache.retain(|(p, _)| p != path);
@@ -800,7 +826,8 @@ impl Engine {
 
 /// A develop with the lens profile but no model outputs (what the models themselves see).
 fn render(loaded: &Loaded, adjustments: &Adjustments, max_w: u32, max_h: u32) -> Result<DisplayImage> {
-    let prepared = Prepared { depth: None, masks: Vec::new(), lens: loaded.lens_profile(), lut: None };
+    let prepared =
+        Prepared { depth: None, masks: Vec::new(), lens: loaded.lens_profile(), lut: None, fills: Vec::new() };
     render_with(loaded, adjustments, max_w, max_h, &prepared)
 }
 
@@ -832,12 +859,13 @@ pub(crate) struct Prepared {
     pub masks: Vec<Arc<MaskData>>,
     pub lens: Option<Arc<LensProfile>>,
     pub lut: Option<Arc<epikos_pipeline::Lut3d>>,
+    pub fills: Vec<Arc<retouch::FillData>>,
 }
 
 impl Prepared {
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
-        Self { depth: None, masks: Vec::new(), lens: None, lut: None }
+        Self { depth: None, masks: Vec::new(), lens: None, lut: None, fills: Vec::new() }
     }
 
     pub(crate) fn with_inputs<R>(&self, f: impl FnOnce(&LookInputs) -> R) -> R {
@@ -846,11 +874,26 @@ impl Prepared {
             .iter()
             .map(|m| MaskPlane { target: m.target, width: m.width, height: m.height, data: &m.data })
             .collect();
+        let fills: Vec<FillPlane> = self
+            .fills
+            .iter()
+            .map(|f| FillPlane {
+                x0: f.x0,
+                y0: f.y0,
+                x1: f.x1,
+                y1: f.y1,
+                width: f.side,
+                height: f.side,
+                rgb: [&f.rgb[0], &f.rgb[1], &f.rgb[2]],
+                mask: &f.mask,
+            })
+            .collect();
         let inputs = LookInputs {
             depth: self.depth.as_deref().map(|d| DepthPlane { width: d.width, height: d.height, data: &d.depth }),
             masks: &planes,
             lens: self.lens.as_deref(),
             lut: self.lut.as_deref(),
+            fills: &fills,
         };
         f(&inputs)
     }
@@ -998,6 +1041,7 @@ mod tests {
             depth_warped: Mutex::new(None),
             lens: OnceLock::new(),
             analyses: Mutex::new(Vec::new()),
+            fills: Mutex::new(Vec::new()),
         }
     }
 

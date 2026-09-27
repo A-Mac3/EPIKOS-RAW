@@ -128,6 +128,435 @@ const STYLES: StyleInfo[] = [
     ]
   },
   {
+    "id": "fuji-provia",
+    "name": "Provia / Standard",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Fujifilm's all-rounder: faithful colour, moderate contrast and saturation.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#5b7fb0",
+      "#e0c9a0"
+    ]
+  },
+  {
+    "id": "fuji-velvia",
+    "name": "Velvia / Vivid",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Slide-film punch: deep blues, rich greens and reds, high contrast. Best for landscapes.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#1f4fa8",
+      "#2e8b3a"
+    ]
+  },
+  {
+    "id": "fuji-astia",
+    "name": "Astia / Soft",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Soft contrast for portraits with bright, clean blues and greens kept lively.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#e8c4a8",
+      "#8cc0d8"
+    ]
+  },
+  {
+    "id": "fuji-classic-chrome",
+    "name": "Classic Chrome",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Documentary colour: muted, cyan-leaning blues, subdued reds, firm shadows, a quiet brownish warmth.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#5e7a80",
+      "#b59a7a"
+    ]
+  },
+  {
+    "id": "fuji-reala-ace",
+    "name": "Reala Ace",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "True-to-life colour with crisp, slightly hard tonality: an everyday negative look.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#6f8fb3",
+      "#d9b48f"
+    ]
+  },
+  {
+    "id": "fuji-pro-neg-hi",
+    "name": "Pro Neg. Hi",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Portrait negative with a little extra contrast: natural skin, gently saturated backgrounds.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#d8b294",
+      "#6f8a9c"
+    ]
+  },
+  {
+    "id": "fuji-pro-neg-std",
+    "name": "Pro Neg. Std",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Flat, soft studio negative: smooth skin gradation and muted colour for later grading.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#d9bca6",
+      "#9aa7ab"
+    ]
+  },
+  {
+    "id": "fuji-classic-neg",
+    "name": "Classic Neg.",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Everyday consumer-negative feel: hard contrast, low saturation, cyan-green shadows and warm highlights.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#4f7a72",
+      "#d8a878"
+    ]
+  },
+  {
+    "id": "fuji-nostalgic-neg",
+    "name": "Nostalgic Neg.",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "American New Colour warmth: amber highlights, softened brights, rich but gentle shadows.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#c08850",
+      "#6a5a4a"
+    ]
+  },
+  {
+    "id": "fuji-eterna",
+    "name": "Eterna / Cinema",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Motion-picture stock: very soft contrast, restrained saturation and teal-leaning shadows; made for grading.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#3e5a5c",
+      "#b8a88a"
+    ]
+  },
+  {
+    "id": "fuji-eterna-bleach",
+    "name": "Eterna Bleach Bypass",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "The skipped-bleach film process: very low saturation, hard contrast, silvery highlights.",
+    "skinProtection": 30.0,
+    "swatch": [
+      "#50575a",
+      "#c9c6bd"
+    ]
+  },
+  {
+    "id": "fuji-acros",
+    "name": "Acros",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Fine-grained black and white with deep blacks, smooth midtones and crisp detail.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#111111",
+      "#dddddd"
+    ]
+  },
+  {
+    "id": "fuji-acros-ye",
+    "name": "Acros + Ye filter",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Acros through a yellow filter: skies a touch darker, clouds and skin slightly brighter.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#151515",
+      "#e0dccb"
+    ]
+  },
+  {
+    "id": "fuji-acros-r",
+    "name": "Acros + R filter",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Acros through a red filter: dramatic dark skies, luminous skin and brick, bold contrast.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#0c0c0c",
+      "#eee4dc"
+    ]
+  },
+  {
+    "id": "fuji-acros-g",
+    "name": "Acros + G filter",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Acros through a green filter: bright foliage, deeper lips and skin tones for character portraits.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#141414",
+      "#dfe6dc"
+    ]
+  },
+  {
+    "id": "fuji-monochrome",
+    "name": "Monochrome",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Straight black and white: neutral mix, standard contrast, no grain.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#262626",
+      "#d4d4d4"
+    ]
+  },
+  {
+    "id": "fuji-monochrome-ye",
+    "name": "Monochrome + Ye filter",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Standard black and white through a yellow filter.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#282828",
+      "#dcd8c8"
+    ]
+  },
+  {
+    "id": "fuji-monochrome-r",
+    "name": "Monochrome + R filter",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Standard black and white through a red filter: darker skies, lighter skin.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#202020",
+      "#e6ddd4"
+    ]
+  },
+  {
+    "id": "fuji-monochrome-g",
+    "name": "Monochrome + G filter",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Standard black and white through a green filter: lighter foliage, richer skin.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#222222",
+      "#dbe2d8"
+    ]
+  },
+  {
+    "id": "fuji-sepia",
+    "name": "Sepia",
+    "world": "Fujifilm-inspired Film Simulation",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Warm brown-toned monochrome, like an old print.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#4a3624",
+      "#e2cfb0"
+    ]
+  },
+  {
+    "id": "leica-standard",
+    "name": "Leica Standard",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Leica's natural rendering: accurate colour, gentle contrast, clean highlights.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#6c7f95",
+      "#d8c1a6"
+    ]
+  },
+  {
+    "id": "leica-vivid",
+    "name": "Leica Vivid",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "More saturated and contrasty, with bright, clear colour.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#2d62b8",
+      "#e3a33b"
+    ]
+  },
+  {
+    "id": "leica-natural",
+    "name": "Leica Natural",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Lower contrast and saturation: soft, true-to-life files for later grading.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#8395a3",
+      "#d9c8b4"
+    ]
+  },
+  {
+    "id": "leica-classic",
+    "name": "Leica Classic",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Analogue-era colour: warm, slightly muted, gentle contrast and soft highlights.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#9c7a55",
+      "#d6c4a2"
+    ]
+  },
+  {
+    "id": "leica-contemporary",
+    "name": "Leica Contemporary",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Modern and cool: clean whites, cyan-leaning shadows, restrained saturation.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#50707e",
+      "#e6e8e8"
+    ]
+  },
+  {
+    "id": "leica-eternal",
+    "name": "Leica Eternal",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Cinematic: soft, muted, teal shadows and warm skin, like a motion-picture stock.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#35565a",
+      "#c9a27c"
+    ]
+  },
+  {
+    "id": "leica-chrome",
+    "name": "Leica Chrome",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Slide-film colour: saturated, deep blues and greens, fairly firm contrast.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#234f86",
+      "#c7843c"
+    ]
+  },
+  {
+    "id": "leica-chrome-hc",
+    "name": "Leica Chrome High Contrast",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Leica Chrome with hard contrast and deep shadows: bold street and travel colour.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#162f5a",
+      "#d68a38"
+    ]
+  },
+  {
+    "id": "leica-sepia",
+    "name": "Leica Sepia",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Warm-toned monochrome with soft, rounded highlights.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#503a26",
+      "#e5d2b3"
+    ]
+  },
+  {
+    "id": "leica-selenium",
+    "name": "Leica Selenium",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Selenium-toned print: cool purple-brown shadows, neutral highlights, deep blacks.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#2f2733",
+      "#dedad6"
+    ]
+  },
+  {
+    "id": "leica-blue",
+    "name": "Leica Blue",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Cyanotype-like blue-toned monochrome.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#1e3550",
+      "#d4e0ea"
+    ]
+  },
+  {
+    "id": "leica-bw-natural",
+    "name": "Leica B&W Natural",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Black and white with natural contrast and a long, smooth grey scale.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#2a2a2a",
+      "#d8d8d8"
+    ]
+  },
+  {
+    "id": "leica-bw-hc",
+    "name": "Leica B&W High Contrast",
+    "world": "Leica-inspired Look",
+    "category": "Film Simulations",
+    "listed": true,
+    "description": "Punchy black and white: dense blacks, bright whites, a darker sky.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#060606",
+      "#f2f2f2"
+    ]
+  },
+  {
     "id": "dark-melanin-glow",
     "name": "Dark Melanin Glow",
     "world": "High-Fashion & Melanin Precision",
@@ -177,6 +606,136 @@ const STYLES: StyleInfo[] = [
     "swatch": [
       "#e3d6dc",
       "#fbf5f1"
+    ]
+  },
+  {
+    "id": "porcelain-glow",
+    "name": "Porcelain Glow",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Luminous, even skin with a soft bloom and clean, slightly cool whites.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#f2dfd4",
+      "#c9d6e0"
+    ]
+  },
+  {
+    "id": "golden-skin",
+    "name": "Golden Skin",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Sun-kissed warmth on skin, honeyed highlights and softly warm shadows.",
+    "skinProtection": 30.0,
+    "swatch": [
+      "#d49a5e",
+      "#f3d9a8"
+    ]
+  },
+  {
+    "id": "clean-commercial",
+    "name": "Clean Commercial",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Bright, crisp and neutral: true skin, clean whites, a touch of clarity for headshots.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#e9e4de",
+      "#b3a08a"
+    ]
+  },
+  {
+    "id": "matte-portrait",
+    "name": "Matte Portrait",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Lifted, milky blacks and gentle colour: the soft matte look of modern editorial.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#6e6862",
+      "#d8cfc4"
+    ]
+  },
+  {
+    "id": "bronze-editorial",
+    "name": "Bronze Editorial",
+    "world": "Character & High-Contrast Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Rich bronze skin, deep warm shadows and sculpted contrast; flattering on darker skin.",
+    "skinProtection": 30.0,
+    "swatch": [
+      "#6a3f22",
+      "#c98f5c"
+    ]
+  },
+  {
+    "id": "rosy-fresh",
+    "name": "Rosy Fresh",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Healthy pink-peach complexion, fresh greens and soft, bright light.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#f0b4a8",
+      "#bfe0c0"
+    ]
+  },
+  {
+    "id": "low-key-drama",
+    "name": "Low-Key Drama",
+    "world": "Character & High-Contrast Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Dark, moody portrait: deep shadows, sculpted light on the face, muted surroundings.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#141210",
+      "#a0826a"
+    ]
+  },
+  {
+    "id": "window-light",
+    "name": "Window Light",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Natural daylight portraits: soft, slightly cool fill, honest skin and gentle contrast.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c7ced4",
+      "#e0c4ac"
+    ]
+  },
+  {
+    "id": "wedding-airy",
+    "name": "Wedding Airy",
+    "world": "Beauty & Editorial Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Light and airy: bright pastels, creamy whites, soft greens; the fine-art wedding look.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#f4ede4",
+      "#c8d8c0"
+    ]
+  },
+  {
+    "id": "classic-bw-portrait",
+    "name": "Classic B&W Portrait",
+    "world": "Character & High-Contrast Portraiture",
+    "category": "Portraits & Skin",
+    "listed": true,
+    "description": "Timeless black-and-white portrait: glowing skin, rich blacks and fine texture.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#161616",
+      "#ede6e0"
     ]
   },
   {
@@ -232,6 +791,760 @@ const STYLES: StyleInfo[] = [
     ]
   },
   {
+    "id": "nordic-blue-hour",
+    "name": "Nordic Blue Hour",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Cold, calm twilight blues with a whisper of warm light at the horizon.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#1f3350",
+      "#e6b88a"
+    ]
+  },
+  {
+    "id": "autumn-gold",
+    "name": "Autumn Gold",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Fiery oranges, golden yellows and warm light for autumn foliage.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c0601c",
+      "#e8b43a"
+    ]
+  },
+  {
+    "id": "desert-heat",
+    "name": "Desert Heat",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Sun-baked warmth: terracotta sands, deep blue skies, a dry, hazy glow.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c77c47",
+      "#2a5c9e"
+    ]
+  },
+  {
+    "id": "misty-forest",
+    "name": "Misty Forest",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Muted mossy greens, soft fog and quiet contrast for woodland scenes.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#46594a",
+      "#c3cbc0"
+    ]
+  },
+  {
+    "id": "crisp-winter",
+    "name": "Crisp Winter",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Clean white snow, cold blue shadows and crisp detail.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#dfe9f2",
+      "#4f78a8"
+    ]
+  },
+  {
+    "id": "tropical-lagoon",
+    "name": "Tropical Lagoon",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Turquoise water, lush greens and bright sunny whites.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#19b0b8",
+      "#5aa845"
+    ]
+  },
+  {
+    "id": "mountain-drama",
+    "name": "Mountain Drama",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Deep skies, strong local contrast and textured rock for epic mountain scenes.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#253444",
+      "#b9b2a4"
+    ]
+  },
+  {
+    "id": "coastal-pastel",
+    "name": "Coastal Pastel",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Soft seaside pastels: pale aquas, sandy creams and lifted shadows.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#a8d4d4",
+      "#efe0c8"
+    ]
+  },
+  {
+    "id": "wildflower-meadow",
+    "name": "Wildflower Meadow",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Vivid blooms in soft, warm light: rich magentas and yellows over gentle greens.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c14f9a",
+      "#e8c83a"
+    ]
+  },
+  {
+    "id": "night-sky",
+    "name": "Night Sky",
+    "world": "Nature & Landscape",
+    "category": "Landscape & Nature",
+    "listed": true,
+    "description": "Astro and night landscapes: neutral-blue sky, crisp stars, controlled noise and warm ground light.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#0b1630",
+      "#6c7fb0"
+    ]
+  },
+  {
+    "id": "aerial-clean",
+    "name": "Drone Clean",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Cuts the haze of altitude: clear, neutral colour and crisp detail from above.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#4d7aa6",
+      "#9ab06a"
+    ]
+  },
+  {
+    "id": "aerial-turquoise-coast",
+    "name": "Turquoise Coast",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Glowing shallows, white surf and golden sand seen from above.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#12b5c4",
+      "#e8d6a8"
+    ]
+  },
+  {
+    "id": "aerial-urban-grid",
+    "name": "Urban Grid",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "City blocks and roads: cool, graphic, contrasty and slightly desaturated.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#3d4a58",
+      "#c4c8cc"
+    ]
+  },
+  {
+    "id": "aerial-golden",
+    "name": "Golden Aerial",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Low sun from above: long shadows, golden light raking across the land.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#d08a36",
+      "#4a3a2a"
+    ]
+  },
+  {
+    "id": "aerial-patchwork",
+    "name": "Patchwork Fields",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Farmland mosaics: separated greens and yellows, rich earth and firm texture.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#6c9a3a",
+      "#d8b44a"
+    ]
+  },
+  {
+    "id": "aerial-minimal",
+    "name": "Aerial Minimal",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Clean, soft and restrained for minimal compositions: pale tones, gentle colour.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#d6dde0",
+      "#8fa8b0"
+    ]
+  },
+  {
+    "id": "aerial-blue-hour-city",
+    "name": "Blue Hour City",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Deep blue dusk with warm city lights glowing below.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#142a52",
+      "#f0a040"
+    ]
+  },
+  {
+    "id": "aerial-glacier",
+    "name": "Glacier Ice",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Icy cyans and whites with crisp crevasse detail.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#bfe4ee",
+      "#3a6f8f"
+    ]
+  },
+  {
+    "id": "aerial-desert-patterns",
+    "name": "Desert Patterns",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Dunes and dry riverbeds: warm ochres, deep shadow lines and strong texture.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c8834a",
+      "#5a3a22"
+    ]
+  },
+  {
+    "id": "aerial-forest-canopy",
+    "name": "Forest Canopy",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Dense treetops: separated greens, deep shadows between crowns.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#1f4a2a",
+      "#7fae52"
+    ]
+  },
+  {
+    "id": "aerial-moody-coast",
+    "name": "Moody Coast",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Stormy seas from above: dark teal water, muted land, heavy contrast.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#1e3c42",
+      "#8a8f86"
+    ]
+  },
+  {
+    "id": "aerial-bw",
+    "name": "Aerial B&W",
+    "world": "Aerial & Drone",
+    "category": "Aerial",
+    "listed": true,
+    "description": "Graphic black and white from above: shape, line and shadow.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#121212",
+      "#e8e8e8"
+    ]
+  },
+  {
+    "id": "bright-airy",
+    "name": "Bright & Airy",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Clean, light-filled and soft: bright whites and gentle pastel colour.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#f5f1ea",
+      "#cfdad8"
+    ]
+  },
+  {
+    "id": "warm-home",
+    "name": "Warm Home",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Cosy interiors: warm wood, soft lamps and inviting, gentle contrast.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#b07a4a",
+      "#f0dcc0"
+    ]
+  },
+  {
+    "id": "cafe-film",
+    "name": "Café Film",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Film-like everyday moments: warm, slightly faded, with fine grain.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#8a6a4e",
+      "#d8c4a4"
+    ]
+  },
+  {
+    "id": "sunday-morning",
+    "name": "Sunday Morning",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Soft morning light, creamy highlights and relaxed, low contrast.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#f2e4cc",
+      "#b8b0a0"
+    ]
+  },
+  {
+    "id": "coastal-living",
+    "name": "Coastal Living",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Breezy blues, sandy neutrals and clean daylight.",
+    "skinProtection": 55.0,
+    "swatch": [
+      "#7fb2c8",
+      "#e8dcc4"
+    ]
+  },
+  {
+    "id": "street-candid",
+    "name": "Street Candid",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Gritty city colour: muted palette, punchy contrast and texture.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#4a4e52",
+      "#b89a70"
+    ]
+  },
+  {
+    "id": "summer-fade",
+    "name": "Summer Fade",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Sun-bleached holiday colour: warm, faded, slightly overexposed.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#e8c09a",
+      "#8ec4d0"
+    ]
+  },
+  {
+    "id": "cozy-tungsten",
+    "name": "Cozy Tungsten",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Evening indoors: amber lamplight, deep warm shadows and a soft glow.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#6a3a18",
+      "#f0a850"
+    ]
+  },
+  {
+    "id": "food-fresh",
+    "name": "Food Fresh",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Appetising food: fresh greens, rich reds, clean whites and crisp texture.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#c8402a",
+      "#6aa83a"
+    ]
+  },
+  {
+    "id": "travel-journal",
+    "name": "Travel Journal",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Vivid but natural travel colour with warm light and a hint of film.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#d08a4a",
+      "#3a7ab0"
+    ]
+  },
+  {
+    "id": "urban-pastel",
+    "name": "Urban Pastel",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Candy-coloured city: soft pinks, mint and sky blue with lifted shadows.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#f0b8c8",
+      "#a8e0d0"
+    ]
+  },
+  {
+    "id": "soft-matte-life",
+    "name": "Soft Matte",
+    "world": "Lifestyle & Everyday",
+    "category": "Lifestyle",
+    "listed": true,
+    "description": "Muted, matte everyday look: lifted blacks and quiet colour for a cohesive feed.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#7a746c",
+      "#d4ccc0"
+    ]
+  },
+  {
+    "id": "essential-natural",
+    "name": "Natural",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "A gentle starting point: a little contrast and vibrance, nothing more.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#8a9aa8",
+      "#d4c0a8"
+    ]
+  },
+  {
+    "id": "essential-clean-pop",
+    "name": "Clean Pop",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Clear, lively colour with crisp midtones.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#3a7ac8",
+      "#f0c040"
+    ]
+  },
+  {
+    "id": "essential-punchy",
+    "name": "Punchy",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Bold contrast and saturation for colour that jumps off the screen.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c8202a",
+      "#1a4ab0"
+    ]
+  },
+  {
+    "id": "essential-warm",
+    "name": "Warm Up",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "A gentle golden warmth across the image.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#e0a060",
+      "#f4dcb8"
+    ]
+  },
+  {
+    "id": "essential-cool",
+    "name": "Cool Down",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "A calm, cooler balance with clean blue shadows.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#5a80b0",
+      "#d8e4ee"
+    ]
+  },
+  {
+    "id": "essential-crisp",
+    "name": "Crisp Detail",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Sharper-looking texture and midtone clarity without harsh contrast.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#505a64",
+      "#c8ccd0"
+    ]
+  },
+  {
+    "id": "essential-high-contrast",
+    "name": "High Contrast",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Deeper blacks and brighter whites.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#101010",
+      "#f0f0f0"
+    ]
+  },
+  {
+    "id": "essential-low-contrast",
+    "name": "Low Contrast",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Softer, flatter tones that hold detail in shadows and highlights.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#6a6a6a",
+      "#b8b8b8"
+    ]
+  },
+  {
+    "id": "essential-vivid",
+    "name": "Vivid Colour",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Stronger colour everywhere, with skin kept natural.",
+    "skinProtection": 80.0,
+    "swatch": [
+      "#e03a8a",
+      "#2ab0a0"
+    ]
+  },
+  {
+    "id": "essential-muted",
+    "name": "Muted Colour",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Quieter, understated colour.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#8a8a80",
+      "#b0a898"
+    ]
+  },
+  {
+    "id": "essential-bw",
+    "name": "B&W Classic",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "A classic black-and-white conversion with a yellow-filter sky.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#1a1a1a",
+      "#e4e4e4"
+    ]
+  },
+  {
+    "id": "essential-bw-soft",
+    "name": "B&W Soft",
+    "world": "Essentials",
+    "category": "Essentials",
+    "listed": true,
+    "description": "Gentle, low-contrast black and white with open shadows.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#4a4a4a",
+      "#dcdcdc"
+    ]
+  },
+  {
+    "id": "macro-clean",
+    "name": "Macro Clean",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "True colour with fine detail brought forward and smooth backgrounds kept smooth.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#6a9a4a",
+      "#e0d0a0"
+    ]
+  },
+  {
+    "id": "macro-petal-soft",
+    "name": "Petal Soft",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Dreamy flowers: soft glow, pastel colour and gentle contrast.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#f0c0d8",
+      "#e8f0d8"
+    ]
+  },
+  {
+    "id": "macro-dewdrop",
+    "name": "Dewdrop Fresh",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Morning freshness: cool, sparkling highlights and vivid greens.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#48a060",
+      "#d8f0f4"
+    ]
+  },
+  {
+    "id": "macro-insect-detail",
+    "name": "Insect Detail",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Maximum fine texture and micro-contrast for insects and small creatures.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#3a4a2a",
+      "#c8a040"
+    ]
+  },
+  {
+    "id": "macro-botanical-dark",
+    "name": "Botanical Dark",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Dutch-still-life mood: deep, dark backgrounds and rich, glowing subjects.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#101410",
+      "#c05070"
+    ]
+  },
+  {
+    "id": "macro-pastel-bloom",
+    "name": "Pastel Bloom",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Light, airy pastels with lifted shadows for spring flowers.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#f4d0e0",
+      "#d0e8f0"
+    ]
+  },
+  {
+    "id": "macro-leaf-glow",
+    "name": "Leaf Glow",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Backlit leaves: luminous yellow-greens and a warm glow.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#a8c830",
+      "#f0d060"
+    ]
+  },
+  {
+    "id": "macro-texture-pop",
+    "name": "Texture Pop",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Surfaces and patterns: strong clarity, micro-contrast and slightly muted colour.",
+    "skinProtection": 70.0,
+    "swatch": [
+      "#5a4a3a",
+      "#b8a890"
+    ]
+  },
+  {
+    "id": "macro-autumn-leaf",
+    "name": "Autumn Leaf",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Close-up autumn colour: glowing reds and oranges, warm and rich.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#c04418",
+      "#e89a30"
+    ]
+  },
+  {
+    "id": "macro-water-blue",
+    "name": "Water Drop Blue",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Cool blues and crystal-clear droplets.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#2a6ab0",
+      "#c8e4f4"
+    ]
+  },
+  {
+    "id": "macro-product",
+    "name": "Studio Product",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Clean catalogue close-ups: neutral whites, accurate colour, crisp edges.",
+    "skinProtection": 60.0,
+    "swatch": [
+      "#f4f4f4",
+      "#9aa0a8"
+    ]
+  },
+  {
+    "id": "macro-mono",
+    "name": "Mono Macro",
+    "world": "Macro & Close-up",
+    "category": "Macro",
+    "listed": true,
+    "description": "Black-and-white close-ups that celebrate form and texture.",
+    "skinProtection": 20.0,
+    "swatch": [
+      "#141414",
+      "#e0e0e0"
+    ]
+  },
+  {
     "id": "teal-orange",
     "name": "Teal & Orange",
     "world": "Cinematic & Film Emulation",
@@ -281,6 +1594,123 @@ const STYLES: StyleInfo[] = [
     "swatch": [
       "#a8c9c2",
       "#f5d6d9"
+    ]
+  },
+  {
+    "id": "blockbuster",
+    "name": "Blockbuster",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Big-screen action grade: strong teal shadows, warm skin, heavy contrast.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#0f4a52",
+      "#e08a4a"
+    ]
+  },
+  {
+    "id": "neo-noir",
+    "name": "Neo-Noir",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Dark, desaturated crime-drama look with cold greens and hard shadows.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#0e1612",
+      "#6e8078"
+    ]
+  },
+  {
+    "id": "western-dust",
+    "name": "Western Dust",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Sun-scorched frontier: dusty ambers, faded blacks, grain.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#a0703a",
+      "#e0c89a"
+    ]
+  },
+  {
+    "id": "nordic-noir",
+    "name": "Nordic Noir",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Scandinavian drama: cold, grey-blue, muted and bleak.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#34404a",
+      "#a8b0b4"
+    ]
+  },
+  {
+    "id": "retro-70s",
+    "name": "Retro 70s",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Seventies film: warm browns, mustard yellows, faded blacks and grain.",
+    "skinProtection": 40.0,
+    "swatch": [
+      "#8a5a28",
+      "#d8b050"
+    ]
+  },
+  {
+    "id": "neon-rain",
+    "name": "Neon Rain",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Rain-soaked city nights: magenta and cyan neon, deep blacks, glowing lights.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#d02a8a",
+      "#18b8d8"
+    ]
+  },
+  {
+    "id": "war-epic",
+    "name": "War Epic",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Drained colour, gritty contrast and cold highlights, like a war film.",
+    "skinProtection": 35.0,
+    "swatch": [
+      "#4a4c42",
+      "#b0b0a4"
+    ]
+  },
+  {
+    "id": "romance-glow",
+    "name": "Romance Glow",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Warm, soft and dreamy: diffused highlights and gentle rose-gold tones.",
+    "skinProtection": 50.0,
+    "swatch": [
+      "#e0a090",
+      "#f4e0c8"
+    ]
+  },
+  {
+    "id": "arthouse-muted",
+    "name": "Arthouse Muted",
+    "world": "Cinematic & Film Emulation",
+    "category": "Cinematic",
+    "listed": true,
+    "description": "Quiet, painterly independent-film palette: soft contrast, olive and dusty tones.",
+    "skinProtection": 45.0,
+    "swatch": [
+      "#6a6a4a",
+      "#c4b89a"
     ]
   },
   {
@@ -667,7 +2097,10 @@ export function installMockBackend() {
           ],
           depth: { file: "/mock/models/depth-anything-v2-small.onnx", available: true },
           face: { file: "/mock/models/face-parsing-resnet18.onnx", available: true },
-          targets: (["subject", "background", "sky", "skin", "eyes", "hair", "foreground"] as MaskTarget[]).map(
+          inpaint: { file: "/mock/models/lama-fp32.onnx", available: true },
+          targets: (
+            ["subject", "background", "sky", "skin", "eyes", "hair", "foreground", "people", "vegetation", "clothing", "lips", "glasses"] as MaskTarget[]
+          ).map(
             (target) => ({ target, available: true, source: "mock" }),
           ),
           lensDatabase: 1569,
@@ -675,6 +2108,16 @@ export function installMockBackend() {
       case "detect_mask":
         await new Promise((r) => setTimeout(r, 300));
         return mask(a.kind as MaskTarget);
+      case "local_mask":
+        await new Promise((r) => setTimeout(r, 200));
+        return mask((a.adjustments as Adjustments).local[a.index as number].mask);
+      case "find_dust_spots":
+        await new Promise((r) => setTimeout(r, 300));
+        return [
+          { x: 0.83, y: 0.12, radius: 0.006 },
+          { x: 0.91, y: 0.3, radius: 0.004 },
+          { x: 0.12, y: 0.07, radius: 0.005 },
+        ];
       case "auto_tone":
         await new Promise((r) => setTimeout(r, 200));
         return {

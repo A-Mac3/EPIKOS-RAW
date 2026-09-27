@@ -11,6 +11,7 @@
 mod basic;
 mod color_transform;
 mod crop;
+mod retouch;
 mod dehaze;
 mod demosaic;
 mod denoise;
@@ -30,7 +31,7 @@ mod xtrans;
 pub use demosaic::{demosaic, DemosaicAlgorithm};
 pub use denoise::reduce_noise;
 pub use develop::{
-    develop, develop_adjustments, develop_adjustments_with, develop_rgb, develop_rgb_with,
+    develop, develop_adjustments, develop_adjustments_with, develop_rgb, develop_rgb_with, develop_upright,
 };
 pub use display::{to_display_srgb, DisplayImage};
 pub use highlights::recover_highlights;
@@ -42,6 +43,7 @@ pub use look::{
 };
 pub use optics::{apply_lens_profile, correct_chromatic_aberration, correct_distortion};
 pub use orient::apply_orientation;
+pub use retouch::{apply_retouch, refine_local_mask, stroke_mask, FillPlane};
 pub use output::{encode_rgb16, OutputSpace};
 pub use preview::{base_block, bin_mosaic, block_for_size};
 pub use white_balance::{gains_for_temperature, temperature_for_gains};

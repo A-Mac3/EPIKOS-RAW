@@ -75,14 +75,29 @@ export type MaskTarget =
   | "eyelashes"
   | "teeth"
   | "hair"
-  | "foreground";
+  | "foreground"
+  | "people"
+  | "vehicles"
+  | "animals"
+  | "foliage"
+  | "vegetation"
+  | "clothing"
+  | "facialHair"
+  | "glasses"
+  | "lips";
 
-/** In the order the mask pickers list them: regions, then skin, then face features. */
+/** In the order the mask pickers list them: regions, scene objects, then people and faces. */
 export const MASK_TARGETS: MaskTarget[] = [
   "subject",
   "background",
   "sky",
   "foreground",
+  "people",
+  "vehicles",
+  "animals",
+  "vegetation",
+  "foliage",
+  "clothing",
   "skin",
   "faceSkin",
   "bodySkin",
@@ -90,6 +105,9 @@ export const MASK_TARGETS: MaskTarget[] = [
   "eyebrows",
   "eyelashes",
   "teeth",
+  "lips",
+  "facialHair",
+  "glasses",
   "hair",
 ];
 
@@ -103,7 +121,30 @@ export interface LocalAdjustment {
   clarity: number;
   /** Greener (−) or more magenta (+). */
   tint: number;
+  /** Refinement, −100…100: shrink (−) or extend (+) the masked area. */
+  grow: number;
+  /** Refinement, 0…100: soften the mask's edge. */
+  feather: number;
+  /** Refinement strokes: add to the mask, or remove from it (`erase`). */
+  refine: BrushStroke[];
 }
+
+/** Retouching on the upright (uncropped) frame; positions are fractions of it. */
+export interface Retouch {
+  /** Areas filled by generative erase, one per erased object. */
+  erase: { strokes: BrushStroke[] }[];
+  /** Healed spots: centre, and radius as a fraction of the frame width. */
+  spots: Spot[];
+  redEye: boolean;
+}
+
+export interface Spot {
+  x: number;
+  y: number;
+  radius: number;
+}
+
+export const defaultRetouch = (): Retouch => ({ erase: [], spots: [], redEye: false });
 
 /** Aspect presets of the crop tool. */
 export type CropAspect = "free" | "original" | "1:1" | "4:5" | "16:9" | "9:16";
@@ -313,7 +354,16 @@ export interface LookPrompt {
   unknown: string[];
 }
 
-export const STYLE_CATEGORIES = ["Film Simulations", "Portraits & Skin", "Landscape & Nature", "Cinematic"] as const;
+export const STYLE_CATEGORIES = [
+  "Film Simulations",
+  "Portraits & Skin",
+  "Landscape & Nature",
+  "Aerial",
+  "Lifestyle",
+  "Essentials",
+  "Macro",
+  "Cinematic",
+] as const;
 
 export interface StyleInfo {
   id: string;
@@ -358,6 +408,8 @@ export interface Adjustments {
   crop: Crop;
   /** Step 3 hand-drawn masks (brush, linear and radial gradients) with their edits. */
   manual: ManualAdjustment[];
+  /** Step 4 retouching: generative erase, healed spots, red eye. */
+  retouch: Retouch;
 }
 
 /** One brush stroke: points on the upright frame (0–1); size is a share of its width. */
@@ -524,6 +576,8 @@ export interface MaskModels {
   depth: { file: string; available: boolean };
   /** Face parsing (eye and hair masks). */
   face: { file: string; available: boolean };
+  /** Inpainting (generative erase). */
+  inpaint: { file: string; available: boolean };
   /** Every Step 3 mask and whether the installed models can make it. */
   targets: TargetStatus[];
   /** Lenses in the built-in Lensfun database. */
@@ -613,6 +667,7 @@ export function defaultAdjustments(): Adjustments {
     lut: { name: "", amount: 100 },
     crop: defaultCrop(),
     manual: [],
+    retouch: defaultRetouch(),
   };
 }
 
@@ -621,7 +676,7 @@ export function defaultTone(): Tone {
 }
 
 export function defaultLocal(mask: MaskTarget): LocalAdjustment {
-  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0, tint: 0 };
+  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0, tint: 0, grow: 0, feather: 25, refine: [] };
 }
 
 export function defaultToneCurve(): ToneCurve {

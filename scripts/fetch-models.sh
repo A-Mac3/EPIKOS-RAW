@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download the ONNX models used for Step 3 (AI Subject & Semantic Masking: subject, sky,
-# eyes and hair) and Step 6 (depth-based fog) and verify their SHA-256. Models are not committed; the engine
+# face features, people, vehicles, animals), Step 6 (depth-based fog) and generative erase and verify their SHA-256. Models are not committed; the engine
 # looks for them in $EPIKOS_MODELS_DIR, then the app data folder, then <repo>/models.
 #
 #   scripts/fetch-models.sh [DEST_DIR]      (default: <repo>/models)
@@ -18,6 +18,12 @@ MODELS=(
   # BiSeNet face parsing (code and weights MIT, yakhyo/face-parsing), for the eye and
   # hair masks. Trained on CelebAMask-HQ, whose images are for non-commercial research.
   "face-parsing-resnet18.onnx|https://github.com/yakhyo/face-parsing/releases/download/weights/resnet18.onnx|0d9bd318e46987c3bdbfacae9e2c0f461cae1c6ac6ea6d43bbe541a91727e33f"
+  # FCN-ResNet50 semantic segmentation from the ONNX Model Zoo (Apache-2.0; torchvision
+  # weights, BSD-3): people, vehicles and animals (the 21 Pascal VOC classes).
+  "fcn-resnet50-12.onnx|https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet50-12.onnx|eb5017d1b80372eb0b58552655274698817ba2e774437e2c2d3c0a613d2e99bd"
+  # LaMa inpainting (big-lama, Apache-2.0; ONNX port by Carve) for generative erase.
+  # Trained on Places2, whose images are for non-commercial research.
+  "lama-fp32.onnx|https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx|1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
 )
 
 sha256() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1 || sha256sum "$1" | cut -d' ' -f1; }

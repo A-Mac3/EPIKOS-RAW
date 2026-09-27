@@ -43,7 +43,7 @@ pub fn develop_adjustments_with(
 }
 
 /// Everything after demosaic: highlights → WB → noise reduction → optics → camera RGB → Rec.2020 →
-/// exposure → Step 2 tone → orientation → straighten / perspective → crop → Steps 3–8 and style.
+/// orientation → straighten / perspective → retouch → exposure → Step 2 tone → crop → Steps 3–8 and style.
 ///
 /// Takes camera RGB at any resolution, so the full-size develop and the downsampled
 /// interactive preview share one code path.
@@ -53,6 +53,42 @@ pub fn develop_rgb(rgb: ImageRgbF32, profile: &SensorProfile, adj: &Adjustments)
 
 /// [`develop_rgb`] with model outputs (depth) for the look.
 pub fn develop_rgb_with(
+    rgb: ImageRgbF32,
+    profile: &SensorProfile,
+    adj: &Adjustments,
+    inputs: &LookInputs,
+) -> Result<ImageRgbF32> {
+    let mut rgb = develop_upright(rgb, profile, adj, inputs)?;
+
+    // Retouching on the upright frame, before exposure and tone: an erase fill made
+    // once stays right whatever the exposure or tone does afterwards.
+    crate::retouch::apply_retouch(&mut rgb, &adj.retouch, inputs);
+
+    if adj.exposure != 0.0 {
+        let gain = 2f32.powf(adj.exposure.clamp(-10.0, 10.0));
+        for plane in [&mut rgb.r, &mut rgb.g, &mut rgb.b] {
+            plane.iter_mut().for_each(|v| *v *= gain);
+        }
+    }
+
+    apply_tone(&mut rgb, &adj.tone);
+
+    // Steps 4–6 and the style, on the upright frame (depth and light positions are
+    // upright). Radii scale with image size, so the preview matches the export.
+    if adj.crop.is_active() {
+        rgb = crop_image(&rgb, &adj.crop);
+        look_cropped(&mut rgb, adj, inputs);
+    } else {
+        apply_look(&mut rgb, adj, inputs);
+    }
+    rgb.validate()?;
+    Ok(rgb)
+}
+
+/// The develop up to the upright, straightened frame, where retouching happens:
+/// highlights → WB → noise reduction → optics → Rec.2020 → orientation → geometry.
+/// Linear Rec.2020, before exposure and tone.
+pub fn develop_upright(
     mut rgb: ImageRgbF32,
     profile: &SensorProfile,
     adj: &Adjustments,
@@ -98,30 +134,11 @@ pub fn develop_rgb_with(
         camera_to_linear_rec2020(&mut rgb, profile);
     }
 
-    if adj.exposure != 0.0 {
-        let gain = 2f32.powf(adj.exposure.clamp(-10.0, 10.0));
-        for plane in [&mut rgb.r, &mut rgb.g, &mut rgb.b] {
-            plane.iter_mut().for_each(|v| *v *= gain);
-        }
-    }
-
-    apply_tone(&mut rgb, &adj.tone);
-
     // After the optics above, which work in the sensor's own frame.
     let mut rgb = apply_orientation(rgb, profile.orientation);
     if adj.lens.has_transform() {
         rgb = apply_geometry(&rgb, adj.lens.rotation, adj.lens.vertical);
     }
-
-    // Steps 4–6 and the style, on the upright frame (depth and light positions are
-    // upright). Radii scale with image size, so the preview matches the export.
-    if adj.crop.is_active() {
-        rgb = crop_image(&rgb, &adj.crop);
-        look_cropped(&mut rgb, adj, inputs);
-    } else {
-        apply_look(&mut rgb, adj, inputs);
-    }
-    rgb.validate()?;
     Ok(rgb)
 }
 
@@ -144,6 +161,7 @@ fn look_cropped(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs) {
         masks: &planes,
         lens: inputs.lens,
         lut: inputs.lut,
+        fills: inputs.fills,
     };
     let mut adj = adj.clone();
     for light in &mut adj.atmosphere.lights {
@@ -152,6 +170,18 @@ fn look_cropped(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs) {
     let a = &mut adj.atmosphere;
     (a.shaft_x, a.shaft_y) = to_cropped(crop, a.shaft_x, a.shaft_y);
     adj.manual = adj.manual.iter().map(|m| m.cropped(crop)).collect();
+    // Brushed mask refinements follow the crop too.
+    for l in &mut adj.local {
+        if !l.refine.is_empty() {
+            let brush = epikos_sidecar::ManualAdjustment {
+                shape: epikos_sidecar::ManualShape::Brush { strokes: std::mem::take(&mut l.refine) },
+                ..Default::default()
+            };
+            if let epikos_sidecar::ManualShape::Brush { strokes } = brush.cropped(crop).shape {
+                l.refine = strokes;
+            }
+        }
+    }
     apply_look(rgb, &adj, &cropped);
 }
 
