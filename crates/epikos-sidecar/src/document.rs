@@ -165,10 +165,21 @@ pub enum MaskTarget {
     Hair,
     /// The near part of the scene (depth model).
     Foreground,
+    /// Eyebrows (face parsing).
+    Eyebrows,
+    /// The lash line: dark detail just around the eyes (from the eye mask; there is no
+    /// lash class in the face model).
+    Eyelashes,
+    /// Teeth: the light part of the inside of the mouth, lips excluded.
+    Teeth,
+    /// Skin of the face (face parsing): cheeks, forehead, nose, ears.
+    FaceSkin,
+    /// Skin other than the face: neck, arms, hands.
+    BodySkin,
 }
 
 impl MaskTarget {
-    pub const ALL: [MaskTarget; 7] = [
+    pub const ALL: [MaskTarget; 12] = [
         MaskTarget::Subject,
         MaskTarget::Background,
         MaskTarget::Sky,
@@ -176,6 +187,11 @@ impl MaskTarget {
         MaskTarget::Eyes,
         MaskTarget::Hair,
         MaskTarget::Foreground,
+        MaskTarget::Eyebrows,
+        MaskTarget::Eyelashes,
+        MaskTarget::Teeth,
+        MaskTarget::FaceSkin,
+        MaskTarget::BodySkin,
     ];
 
     pub fn id(self) -> &'static str {
@@ -187,7 +203,20 @@ impl MaskTarget {
             MaskTarget::Eyes => "eyes",
             MaskTarget::Hair => "hair",
             MaskTarget::Foreground => "foreground",
+            MaskTarget::Eyebrows => "eyebrows",
+            MaskTarget::Eyelashes => "eyelashes",
+            MaskTarget::Teeth => "teeth",
+            MaskTarget::FaceSkin => "faceSkin",
+            MaskTarget::BodySkin => "bodySkin",
         }
+    }
+
+    /// Face features: made by the face-parsing model.
+    pub fn is_face_feature(self) -> bool {
+        matches!(
+            self,
+            MaskTarget::Eyes | MaskTarget::Hair | MaskTarget::Eyebrows | MaskTarget::Eyelashes | MaskTarget::Teeth | MaskTarget::FaceSkin
+        )
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -203,6 +232,11 @@ impl MaskTarget {
             MaskTarget::Eyes => "Eyes",
             MaskTarget::Hair => "Hair",
             MaskTarget::Foreground => "Foreground",
+            MaskTarget::Eyebrows => "Eyebrows",
+            MaskTarget::Eyelashes => "Eyelashes",
+            MaskTarget::Teeth => "Teeth",
+            MaskTarget::FaceSkin => "Facial skin",
+            MaskTarget::BodySkin => "Body skin",
         }
     }
 }
@@ -416,6 +450,9 @@ pub struct Texture {
     /// Confine skin retouching and line sculpting to the subject mask, so skin-toned
     /// backgrounds (wood, sand, brick) are left alone.
     pub retouch_subject_only: bool,
+    /// 0…100: whitens teeth through the Teeth mask (less yellow, a touch brighter),
+    /// leaving the lips alone.
+    pub teeth_whitening: f32,
 }
 
 impl Texture {

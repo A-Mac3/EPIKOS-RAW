@@ -65,7 +65,11 @@ impl Engine {
                     MaskTarget::Background => (model(MaskKind::Subject), "inverse of the subject"),
                     MaskTarget::Sky => (model(MaskKind::Sky), "U²-Net skyseg"),
                     MaskTarget::Skin => (true, "colour model, subject and face parsing"),
-                    MaskTarget::Eyes | MaskTarget::Hair => (self.masker.face_available(), "BiSeNet face parsing"),
+                    MaskTarget::Eyes | MaskTarget::Hair | MaskTarget::Eyebrows | MaskTarget::Teeth | MaskTarget::FaceSkin => {
+                        (self.masker.face_available(), "BiSeNet face parsing")
+                    }
+                    MaskTarget::Eyelashes => (self.masker.face_available(), "face parsing: dark detail at the eyes' edge"),
+                    MaskTarget::BodySkin => (true, "Skin minus facial skin"),
                     MaskTarget::Foreground => (self.masker.depth_available(), "Depth Anything V2"),
                 };
                 TargetStatus { target, available, source }
@@ -147,7 +151,26 @@ impl Engine {
                 let (width, height, data) = self.inclusive_skin(loaded, adjustments)?;
                 vec![MaskData { target, width, height, data, infer_ms: 0 }]
             }
-            MaskTarget::Eyes | MaskTarget::Hair => self.face_planes(loaded, adjustments)?,
+            MaskTarget::Eyes
+            | MaskTarget::Hair
+            | MaskTarget::Eyebrows
+            | MaskTarget::Eyelashes
+            | MaskTarget::Teeth
+            | MaskTarget::FaceSkin => self.face_planes(loaded, adjustments)?,
+            MaskTarget::BodySkin => {
+                let Some(skin) = self.mask_plane_flat(loaded, adjustments, MaskTarget::Skin)? else { return Ok(None) };
+                let face = if self.masker.face_available() {
+                    self.mask_plane_flat(loaded, adjustments, MaskTarget::FaceSkin)?
+                        .map(|f| crate::analysis::fit(&f.data, f.width, f.height, skin.width, skin.height))
+                } else {
+                    None
+                };
+                let data = match face {
+                    Some(f) => skin.data.iter().zip(f).map(|(s, f)| (s - f).max(0.0)).collect(),
+                    None => skin.data.clone(),
+                };
+                vec![MaskData { target, width: skin.width, height: skin.height, data, infer_ms: 0 }]
+            }
             MaskTarget::Foreground => {
                 let d = self.depth_for(loaded, adjustments)?;
                 vec![MaskData {
@@ -190,11 +213,11 @@ impl Engine {
         Ok((w, h, skin))
     }
 
-    /// The Step 3 Skin mask, for every Monk tone: the strict colour model, face-parsed
-    /// skin, and — inside the subject — pixels close in colour to that person's own skin
-    /// (learnt from face-parsed skin, else from confident colour skin). A fair or a very
-    /// deep face is covered; a sand-coloured strap or a beige coat is not, unless it
-    /// really matches the skin.
+    /// The Step 3 Skin mask, for every Monk tone: skin colour (strict or relaxed model)
+    /// that is on the subject *and* close to that person's own skin colour (learnt from
+    /// face-parsed skin, else from confident colour skin), plus face-parsed skin. A fair
+    /// or a very deep face is covered; a wall, a sand-coloured strap or a beige coat is
+    /// not. Without the subject model, the strict colour model alone.
     fn inclusive_skin(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<(u32, u32, Vec<f32>)> {
         let rgb = loaded.develop_scene(MASK_INPUT_SIDE, adjustments)?;
         let (w, h) = (rgb.width, rgb.height);
@@ -239,31 +262,41 @@ impl Engine {
                 // the relaxed model on the subject, as the only evidence there is.
                 None => colour,
             };
-            let blended = skin[i] * (1.0 - inside) + on_person * inside;
-            skin[i] = blended.max(face.as_ref().map_or(0.0, |f| f[i]));
+            // Skin only on the person: a warm wall, wood or clothing outside the subject
+            // never counts, whatever its colour.
+            skin[i] = (on_person * inside).max(face.as_ref().map_or(0.0, |f| f[i]));
         }
         Ok((w, h, skin))
     }
 
-    /// Eyes and hair (and face skin, cached for the Skin mask) from one face-parsing
-    /// pass over every face found in the frame.
+    /// Face features from one face-parsing pass over every face in the frame: eyes,
+    /// eyebrows, the lash line, teeth, facial skin (also cached for the Skin mask) and
+    /// hair. Faces are found at mask resolution and parsed from a render at twice that,
+    /// so small features (eyes, lashes, teeth) keep their shape.
     fn face_planes(&self, loaded: &Loaded, adjustments: &Adjustments) -> Result<Vec<MaskData>> {
-        let display = render(loaded, &scene_only(adjustments), MASK_INPUT_SIDE, MASK_INPUT_SIDE)?;
-        let rgb = rgba_to_rgb(&display);
-        let (w, h) = (rgb.width() as usize, rgb.height() as usize);
         // Faces are found from skin of any tone, so fair and very deep faces are parsed too.
-        let (_, _, skin) = self.person_skin(loaded, adjustments)?;
-        let skin = if skin.len() == w * h { skin } else { vec![0.0; w * h] };
-        let mut eyes = vec![0.0f32; w * h];
-        let mut hair = vec![0.0f32; w * h];
-        let mut face_skin = vec![0.0f32; w * h];
+        let (sw, sh, skin) = self.person_skin(loaded, adjustments)?;
+        let boxes = face_boxes(&skin, sw as usize, sh as usize);
+        let display = render(loaded, &scene_only(adjustments), MASK_INPUT_SIDE * FACE_DETAIL, MASK_INPUT_SIDE * FACE_DETAIL)?;
+        let rgb = rgba_to_rgb(&display);
+        let lab = crate::learn::display_lab(&display);
+        let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+        let (fx, fy) = (w as f32 / sw as f32, h as f32 / sh as f32);
+        let n = w * h;
+        let plane = || vec![0.0f32; n];
+        let (mut eyes, mut brows, mut lips, mut mouth, mut hair) = (plane(), plane(), plane(), plane(), plane());
+        let (mut neck, mut cloth, mut face_skin) = (plane(), plane(), plane());
+        let mut heads: Vec<[usize; 4]> = Vec::new();
         let mut infer_ms = 0;
-        for [x0, y0, x1, y1] in face_boxes(&skin, w, h) {
+        for [bx0, by0, bx1, by1] in boxes {
+            let x0 = ((bx0 as f32 * fx) as usize).min(w - 1);
+            let y0 = ((by0 as f32 * fy) as usize).min(h - 1);
+            let x1 = ((bx1 as f32 * fx).ceil() as usize).clamp(x0 + 1, w);
+            let y1 = ((by1 as f32 * fy).ceil() as usize).clamp(y0 + 1, h);
             let (cw, ch) = (x1 - x0, y1 - y0);
             let mut data = Vec::with_capacity(cw * ch * 3);
             for y in y0..y1 {
-                let row = &rgb.as_raw()[(y * w + x0) * 3..(y * w + x1) * 3];
-                data.extend_from_slice(row);
+                data.extend_from_slice(&rgb.as_raw()[(y * w + x0) * 3..(y * w + x1) * 3]);
             }
             let crop = RgbImage { width: cw as u32, height: ch as u32, data };
             let parts = self.masker.parse_face(&crop)?;
@@ -272,36 +305,141 @@ impl Engine {
             if parts.face_share() < 0.12 {
                 continue;
             }
+            heads.push([x0, y0, x1, y1]);
             // Fade out towards the crop's edges, where the parser sees a cut-off head.
             let feather = |v: usize, n: usize| {
                 let e = (n as f32 * 0.08).max(1.0);
-                let d = v.min(n - 1 - v) as f32;
-                (d / e).clamp(0.0, 1.0)
+                (v.min(n - 1 - v) as f32 / e).clamp(0.0, 1.0)
             };
             for y in 0..ch {
                 for x in 0..cw {
                     let (i, j) = ((y0 + y) * w + x0 + x, y * cw + x);
                     let f = feather(x, cw).min(feather(y, ch));
                     // Low probabilities are the model's doubt, not a thin mask.
-                    eyes[i] = eyes[i].max(f * confident(parts.eyes[j]));
-                    hair[i] = hair[i].max(f * confident(parts.hair[j]));
-                    face_skin[i] = face_skin[i].max(f * confident(parts.skin[j]));
+                    for (dst, src) in [
+                        (&mut eyes, &parts.eyes),
+                        (&mut brows, &parts.brows),
+                        (&mut lips, &parts.lips),
+                        (&mut mouth, &parts.mouth),
+                        (&mut hair, &parts.hair),
+                        (&mut neck, &parts.neck),
+                        (&mut cloth, &parts.cloth),
+                        (&mut face_skin, &parts.skin),
+                    ] {
+                        dst[i] = dst[i].max(f * confident(src[j]));
+                    }
                 }
             }
         }
+
+        // Teeth: the light, low-colour part of the inside of the mouth; lips never.
+        let teeth: Vec<f32> = (0..n)
+            .map(|i| {
+                let c = lab.g[i].hypot(lab.b[i]);
+                mouth[i] * smoothstep(0.45, 0.62, lab.r[i]) * (1.0 - smoothstep(0.07, 0.13, c)) * (1.0 - lips[i])
+            })
+            .collect();
+
+        // The lash line: detail darker than its surroundings in a thin band around each
+        // eye (no lash class). Darker *relative* to the skin around it, so it works on
+        // every skin tone.
+        let band = heads.iter().map(|b| ((b[3] - b[1]) as f32 * 0.03).round() as usize).max().unwrap_or(2).max(2);
+        let near_eye = crate::analysis::box_mean(&eyes, w, h, (band / 2).max(1));
+        let around = crate::analysis::box_mean(&lab.r, w, h, band * 2);
+        let lashes: Vec<f32> = (0..n)
+            .map(|i| {
+                let ring = smoothstep(0.08, 0.3, near_eye[i]) * (1.0 - eyes[i]);
+                ring * smoothstep(0.04, 0.1, around[i] - lab.r[i]) * (1.0 - brows[i])
+            })
+            .collect();
+
+        // Hair: the model's, or where it finds almost none (very dark or close-cropped
+        // hair, a beard, which the face model reads as skin), the parts of the head
+        // clearly darker than this person's own skin, clothing and features excluded,
+        // with thin rims (feature outlines) opened away.
+        let hair_area = hair.iter().filter(|&&v| v > 0.5).count() as f32 / n as f32;
+        if !heads.is_empty() && hair_area < 0.01 {
+            let mut skin_l: Vec<f32> = (0..n).filter(|&i| face_skin[i] > 0.6).map(|i| lab.r[i]).collect();
+            if let (Some(subject), true) = (self.mask_plane(loaded, adjustments, MaskTarget::Subject)?, skin_l.len() > 50) {
+                let subject = crate::analysis::fit(&subject.data, subject.width, subject.height, w as u32, h as u32);
+                let mid = skin_l.len() / 2;
+                let skin_mid = *skin_l.select_nth_unstable_by(mid, f32::total_cmp).1;
+                let features: Vec<f32> = (0..n).map(|i| eyes[i].max(brows[i]).max(lips[i]).max(mouth[i])).collect();
+                let features = crate::analysis::box_mean(&features, w, h, band);
+                // Hair is textured; skin in shadow is smooth: local variation of lightness.
+                let r_tex = (band / 2).max(1);
+                let mean_l = crate::analysis::box_mean(&lab.r, w, h, r_tex);
+                let sq: Vec<f32> = lab.r.iter().map(|v| v * v).collect();
+                let mean_sq = crate::analysis::box_mean(&sq, w, h, r_tex);
+                let texture: Vec<f32> =
+                    (0..n).map(|i| smoothstep(0.012, 0.03, (mean_sq[i] - mean_l[i] * mean_l[i]).max(0.0).sqrt())).collect();
+                // The skin's lightness nearby (a face lit from one side is darker on the
+                // other): hair is darker than the skin *next to it*.
+                let r_skin = heads.iter().map(|b| (b[2] - b[0]) / 5).max().unwrap_or(8).max(4);
+                let weighted: Vec<f32> = (0..n).map(|i| lab.r[i] * face_skin[i]).collect();
+                let (sum_l, sum_w) = (crate::analysis::box_mean(&weighted, w, h, r_skin), crate::analysis::box_mean(&face_skin, w, h, r_skin));
+                let mut candidate = vec![0.0f32; n];
+                for &[x0, y0, x1, y1] in &heads {
+                    // The head: the face box, higher (hair, crown) and lower (beard).
+                    let (bw, bh) = ((x1 - x0) as f32, (y1 - y0) as f32);
+                    let hy0 = (y0 as f32 - 0.45 * bh).max(0.0) as usize;
+                    let hy1 = ((y1 as f32 + 0.25 * bh) as usize).min(h);
+                    // Wide: the face box is found from skin, which a beard or side hair isn't.
+                    let hx0 = (x0 as f32 - 0.45 * bw).max(0.0) as usize;
+                    let hx1 = ((x1 as f32 + 0.45 * bw) as usize).min(w);
+                    for y in hy0..hy1 {
+                        for x in hx0..hx1 {
+                            let i = y * w + x;
+                            let skin_here = if sum_w[i] > 0.05 { sum_l[i] / sum_w[i] } else { skin_mid };
+                            let darker = smoothstep(0.02, 0.1, skin_here - lab.r[i]);
+                            let c = lab.g[i].hypot(lab.b[i]);
+                            // Hair is dark, textured and low in colour; lenses and straps
+                            // shine or tint, and skin in shadow is smooth.
+                            let hairlike = 1.0 - smoothstep(0.1, 0.18, c);
+                            candidate[i] = subject[i]
+                                * darker
+                                * texture[i]
+                                * hairlike
+                                // The parser often calls a beard clothing: clothing counts
+                                // only where it's smooth like fabric.
+                                * (1.0 - cloth[i] * (1.0 - texture[i]))
+                                * (1.0 - smoothstep(0.02, 0.1, features[i]));
+                        }
+                    }
+                }
+                // Opening: keep areas, drop outlines a few pixels thick; soft edges stay.
+                let r = (band * 2).max(3);
+                let opened = crate::analysis::box_mean(&candidate, w, h, r);
+                hair.iter_mut().zip(opened).for_each(|(v, o)| *v = v.max(smoothstep(0.2, 0.45, o)));
+            }
+        }
+
         let (width, height) = (w as u32, h as u32);
-        let face = Arc::new(MaskData { target: MaskTarget::Skin, width, height, data: face_skin, infer_ms: 0 });
+        let face = Arc::new(MaskData { target: MaskTarget::FaceSkin, width, height, data: face_skin.clone(), infer_ms: 0 });
         {
             let key = face_skin_key(adjustments);
             let mut cache = loaded.planes.lock().unwrap_or_else(PoisonError::into_inner);
             cache.retain(|(k, _)| *k != key);
             cache.push((key, face));
         }
+        let md = |target, data| MaskData { target, width, height, data, infer_ms: 0 };
         Ok(vec![
             MaskData { target: MaskTarget::Eyes, width, height, data: eyes, infer_ms },
-            MaskData { target: MaskTarget::Hair, width, height, data: hair, infer_ms: 0 },
+            md(MaskTarget::Hair, hair),
+            md(MaskTarget::Eyebrows, brows),
+            md(MaskTarget::Eyelashes, lashes),
+            md(MaskTarget::Teeth, teeth),
+            md(MaskTarget::FaceSkin, face_skin),
         ])
     }
+}
+
+/// Face features are parsed at this multiple of the mask resolution.
+const FACE_DETAIL: u32 = 2;
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 fn confident(p: f32) -> f32 {

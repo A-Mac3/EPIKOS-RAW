@@ -3070,3 +3070,13 @@ input[type="range"]::-moz-range-thumb {
 .viewer-photo canvas {
   will-change: transform;
 }
+
+/* While a slider is dragged the mask tint steps aside (handles stay): the edit shows
+   unobscured, and the tint returns on release. */
+.mask-tint {
+  transition: opacity 0.12s;
+}
+
+.mask-tool.is-tint-hidden .mask-tint {
+  opacity: 0;
+}

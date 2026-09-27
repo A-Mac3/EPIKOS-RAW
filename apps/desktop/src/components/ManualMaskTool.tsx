@@ -21,6 +21,8 @@ interface Props {
   onChange: (shape: ManualShape) => void;
   /** End of a drag or stroke: one undo step. */
   onEnd: () => void;
+  /** Hide the red tint (a slider is being dragged); handles stay. */
+  hideTint?: boolean;
 }
 
 const OVERLAY = "rgb(255 48 64)";
@@ -32,7 +34,7 @@ type Drag = { kind: "p0" | "p1" | "line" | "center" | "rx" | "ry"; start: [numbe
  * feather, or a brush that paints (or erases) strokes. Positions are kept on the whole
  * upright frame and mapped through the crop for display.
  */
-export function ManualMaskTool({ shape, width, height, view, brush, onChange, onEnd }: Props) {
+export function ManualMaskTool({ shape, width, height, view, brush, onChange, onEnd, hideTint = false }: Props) {
   const svg = useRef<SVGSVGElement>(null);
   const drag = useRef<Drag>(null);
   const stroke = useRef<BrushStroke | null>(null);
@@ -142,7 +144,7 @@ export function ManualMaskTool({ shape, width, height, view, brush, onChange, on
             <stop offset="1" stopColor={OVERLAY} stopOpacity="0" />
           </linearGradient>
         </defs>
-        <rect x={0} y={0} width={width} height={height} fill="url(#mask-linear)" pointerEvents="none" />
+        <rect x={0} y={0} width={width} height={height} fill="url(#mask-linear)" pointerEvents="none" className="mask-tint" />
         <line x1={ax - nx} y1={ay - ny} x2={ax + nx} y2={ay + ny} className="mask-line is-full" />
         <line x1={bx - nx} y1={by - ny} x2={bx + nx} y2={by + ny} className="mask-line" />
         <line
@@ -184,7 +186,17 @@ export function ManualMaskTool({ shape, width, height, view, brush, onChange, on
           </mask>
         </defs>
         {shape.invert ? (
-          <rect x={0} y={0} width={width} height={height} fill={OVERLAY} fillOpacity={0.38} mask="url(#mask-invert)" pointerEvents="none" />
+          <rect
+            x={0}
+            y={0}
+            width={width}
+            height={height}
+            fill={OVERLAY}
+            fillOpacity={0.38}
+            mask="url(#mask-invert)"
+            pointerEvents="none"
+            className="mask-tint"
+          />
         ) : (
           <ellipse
             cx={cx}
@@ -194,6 +206,7 @@ export function ManualMaskTool({ shape, width, height, view, brush, onChange, on
             fill="url(#mask-radial)"
             transform={`rotate(${shape.angle} ${cx} ${cy})`}
             pointerEvents="none"
+            className="mask-tint"
           />
         )}
         <g transform={`rotate(${shape.angle} ${cx} ${cy})`}>
@@ -212,7 +225,7 @@ export function ManualMaskTool({ shape, width, height, view, brush, onChange, on
           <polyline
             key={i}
             points={s.points.map(([x, y]) => px(x, y).join(",")).join(" ")}
-            className={`mask-stroke${s.erase ? " is-erase" : ""}`}
+            className={`mask-stroke mask-tint${s.erase ? " is-erase" : ""}`}
             strokeWidth={Math.max(1, s.size * fw)}
             strokeOpacity={s.erase ? 0.5 : 0.25 + 0.2 * (s.flow / 100)}
           />
@@ -235,7 +248,7 @@ export function ManualMaskTool({ shape, width, height, view, brush, onChange, on
   return (
     <svg
       ref={svg}
-      className={`mask-tool is-${shape.kind}${brush.erase ? " is-erasing" : ""}`}
+      className={`mask-tool is-${shape.kind}${brush.erase ? " is-erasing" : ""}${hideTint ? " is-tint-hidden" : ""}`}
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}

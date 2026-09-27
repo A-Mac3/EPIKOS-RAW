@@ -10,7 +10,12 @@ export const MASK_LABEL: Record<MaskTarget, string> = {
   background: "Background",
   sky: "Sky",
   skin: "Skin",
+  faceSkin: "Facial skin",
+  bodySkin: "Body skin",
   eyes: "Eyes",
+  eyebrows: "Eyebrows",
+  eyelashes: "Eyelashes",
+  teeth: "Teeth",
   hair: "Hair",
   foreground: "Foreground",
 };

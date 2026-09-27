@@ -216,7 +216,7 @@ export function StepsPanel({
   });
   const texSlider = (
     label: string,
-    key: "clarity" | "microTexture" | "blemishSmoothing" | "specularBalance" | "characterLines",
+    key: "clarity" | "microTexture" | "blemishSmoothing" | "specularBalance" | "characterLines" | "teethWhitening",
     min: number,
   ) => (
     <Slider
@@ -653,6 +653,7 @@ export function StepsPanel({
         {texSlider("Blemish smoothing", "blemishSmoothing", 0)}
         {texSlider("Specular highlight balancing", "specularBalance", 0)}
         {texSlider("Character lines", "characterLines", -100)}
+        {texSlider("Teeth whitening", "teethWhitening", 0)}
         <Toggle
           label="Retouch the subject only"
           checked={tex.retouchSubjectOnly}
@@ -1132,7 +1133,7 @@ function MaskControls({ masks: m }: { masks: MaskState }) {
               <li key={k}>
                 <span>{MASK_LABEL[k]}</span>
                 <span className="hint">
-                  {(100 * m.masks[k]!.coverage).toFixed(k === "eyes" ? 1 : 0)}% of frame
+                  {(100 * m.masks[k]!.coverage).toFixed(m.masks[k]!.coverage < 0.02 ? 2 : 0)}% of frame
                   {m.masks[k]!.inferMs > 0 ? ` · ${m.masks[k]!.inferMs} ms` : ""}
                 </span>
               </li>
@@ -1158,8 +1159,10 @@ function MaskControls({ masks: m }: { masks: MaskState }) {
         </>
       )}
       <p className="note">
-        Runs on this computer&apos;s CPU: IS-Net (subject), U²-Net skyseg (sky), BiSeNet face parsing (eyes, hair),
-        Depth Anything V2 (foreground) and a colour model (skin).
+        Runs on this computer&apos;s CPU: IS-Net (subject), U²-Net skyseg (sky), BiSeNet face parsing (eyes, eyebrows,
+        teeth, facial skin, hair; eyelashes from the eyes&apos; edge), Depth Anything V2 (foreground). Skin is kept to the
+        person: colour that is on the subject and matches their own skin. Where the hair model finds almost none (very
+        dark or close-cropped hair, a beard), hair is read from the head&apos;s darker, textured areas.
       </p>
     </>
   );

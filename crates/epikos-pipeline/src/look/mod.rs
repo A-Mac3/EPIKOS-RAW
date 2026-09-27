@@ -78,6 +78,9 @@ pub fn look_masks(adj: &Adjustments) -> Vec<MaskTarget> {
     if look.needs_skin() {
         out.push(MaskTarget::Skin);
     }
+    if look.teeth_whitening > 0.0 {
+        out.push(MaskTarget::Teeth);
+    }
     // Glow and light shafts keep the light source in the sky and off the subject.
     if look.atmosphere.glow > 0.0 || look.atmosphere.shafts > 0.0 {
         out.push(MaskTarget::Sky);
@@ -168,6 +171,7 @@ struct Look {
     local: Vec<LocalAdjustment>,
     /// Hand-drawn masks with their edits.
     drawn: Vec<epikos_sidecar::ManualAdjustment>,
+    teeth_whitening: f32,
     retouch_subject_only: bool,
     foliage: HslChannel,
     background: BackgroundTint,
@@ -191,6 +195,7 @@ impl Look {
             lut_amount: if adj.lut.is_none() { 0.0 } else { pct(adj.lut.amount) },
             local: adj.local.iter().filter(|l| !l.is_neutral()).copied().collect(),
             drawn: adj.manual.iter().filter(|m| !m.is_neutral()).cloned().collect(),
+            teeth_whitening: adj.texture.teeth_whitening.clamp(0.0, 100.0),
             retouch_subject_only: adj.texture.retouch_subject_only,
             foliage: adj.color.foliage,
             background: adj.color.background,
@@ -278,6 +283,7 @@ impl Look {
     fn is_neutral(&self) -> bool {
         self.local.is_empty()
             && self.drawn.is_empty()
+            && self.teeth_whitening <= 0.0
             && !self.needs_lab()
             && self.atmosphere.is_neutral()
             && !self.lights.iter().any(|l| l.intensity > 0.0)
@@ -306,7 +312,15 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
         let base = if target == MaskTarget::Background { MaskTarget::Subject } else { target };
         if !fitted.iter().any(|(t, _)| *t == base) {
             let plane = inputs.masks.iter().find(|m| m.target == base).and_then(|m| {
-                fit_to_image(rgb, m.data, m.width, m.height, 0.004)
+                // Small face features (eyes, brows, lashes, teeth) are made at high
+                // resolution with soft edges already; edge-fitting would average a lash
+                // line or an eye away, so they're only scaled.
+                let small = matches!(base, MaskTarget::Eyes | MaskTarget::Eyebrows | MaskTarget::Eyelashes | MaskTarget::Teeth);
+                if small && m.data.len() == (m.width * m.height) as usize && m.width > 0 && m.height > 0 {
+                    Some(resize_plane(m.data, m.width, m.height, rgb.width, rgb.height))
+                } else {
+                    fit_to_image(rgb, m.data, m.width, m.height, 0.004)
+                }
             });
             fitted.push((base, plane));
         }
@@ -324,6 +338,11 @@ pub fn apply_look(rgb: &mut ImageRgbF32, adj: &Adjustments, inputs: &LookInputs)
     }
     for m in &look.drawn {
         manual::apply_manual(rgb, m);
+    }
+    if look.teeth_whitening > 0.0 {
+        if let Some(m) = mask(rgb, MaskTarget::Teeth) {
+            local::whiten_teeth(rgb, look.teeth_whitening, &m);
+        }
     }
     if look.needs_lab() {
         let ok = Oklab::new();

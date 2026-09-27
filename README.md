@@ -24,6 +24,13 @@ skin, calm olive foliage, a midtone S-curve) or at any learned style, fitted on 
 photo's own render. Learned styles and custom presets are kept in
 `~/.epikos/learned_styles.json` and `~/.epikos/presets.json` (or `$EPIKOS_DATA_DIR`), so
 they persist across sessions and updates.
+Step 3's AI masks include facial skin, body skin, eyes, eyebrows, eyelashes (the lash
+line at the eyes' edge), teeth and hair. Face features are parsed at twice the mask
+resolution; skin is kept to the person (on the subject and matching their own skin, so
+walls and clothing never count); where the hair model finds almost none (very dark or
+close-cropped hair, a beard) hair comes from the head's darker, textured areas. Step 4
+has Teeth whitening. Mask overlays hide while any slider is dragged and return on
+release.
 Step 3 also has **Manual masking**: a brush (size, feather, flow, erase), linear
 (graduated) and radial gradients drawn on the image, each with exposure, contrast,
 temperature, tint, dehaze, saturation and clarity. While a control is dragged the preview

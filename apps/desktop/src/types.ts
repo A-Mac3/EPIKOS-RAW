@@ -43,6 +43,8 @@ export interface Texture {
   characterLines: number;
   /** Confine skin retouching and line sculpting to the subject mask. */
   retouchSubjectOnly: boolean;
+  /** 0…100: whitens teeth through the Teeth mask, lips untouched. */
+  teethWhitening: number;
 }
 
 /** Step 2 tone controls, each −100…100. */
@@ -61,9 +63,35 @@ export interface Tone {
 export const TONE_KEYS = ["contrast", "highlights", "shadows", "whites", "blacks", "vibrance", "saturation"] as const;
 
 /** A Step 3 region. */
-export type MaskTarget = "subject" | "background" | "sky" | "skin" | "eyes" | "hair" | "foreground";
+export type MaskTarget =
+  | "subject"
+  | "background"
+  | "sky"
+  | "skin"
+  | "faceSkin"
+  | "bodySkin"
+  | "eyes"
+  | "eyebrows"
+  | "eyelashes"
+  | "teeth"
+  | "hair"
+  | "foreground";
 
-export const MASK_TARGETS: MaskTarget[] = ["subject", "background", "sky", "skin", "eyes", "hair", "foreground"];
+/** In the order the mask pickers list them: regions, then skin, then face features. */
+export const MASK_TARGETS: MaskTarget[] = [
+  "subject",
+  "background",
+  "sky",
+  "foreground",
+  "skin",
+  "faceSkin",
+  "bodySkin",
+  "eyes",
+  "eyebrows",
+  "eyelashes",
+  "teeth",
+  "hair",
+];
 
 /** Step 3 edit inside a mask: exposure in EV (−3…3), the rest −100…100. */
 export interface LocalAdjustment {
@@ -560,6 +588,7 @@ export function defaultAdjustments(): Adjustments {
       specularBalance: 0,
       characterLines: 0,
       retouchSubjectOnly: false,
+      teethWhitening: 0,
     },
     color: defaultColorGrade(),
     atmosphere: defaultAtmosphere(),

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { Crop, ManualShape, Mask, Preview } from "../types";
 import { CropBar, CropOverlay } from "./CropTool";
 import { ManualMaskTool, type BrushSettings } from "./ManualMaskTool";
+import { useSliderDragging } from "../sliderDrag";
 import { LightPalette, type LightKind } from "./LightPalette";
 
 /** Zoom limits, as a share of the photo's actual pixels (1 = 100 %). */
@@ -117,6 +118,8 @@ export function Viewer({
   const [panning, setPanning] = useState(false);
   const panStart = useRef<{ x: number; y: number; pan: { x: number; y: number } } | null>(null);
   const dpr = window.devicePixelRatio || 1;
+  // Overlays step aside while a slider is dragged, so the edit is seen unobscured.
+  const sliderDragging = useSliderDragging();
 
   useLayoutEffect(() => {
     const el = frame.current;
@@ -394,7 +397,10 @@ export function Viewer({
         )}
         {/* Always mounted so hiding it (e.g. while showing Before) keeps the drawing. The
             overlay covers the whole frame; the clip shows the cropped part. */}
-        <div className="viewer-overlay-clip" style={{ display: overlay && !showingBefore && !cropTool ? "block" : "none" }}>
+        <div
+          className="viewer-overlay-clip"
+          style={{ display: overlay && !showingBefore && !cropTool && !sliderDragging ? "block" : "none" }}
+        >
           <canvas
             ref={overlayCanvas}
             className="viewer-overlay"
@@ -420,6 +426,7 @@ export function Viewer({
               brush={manualTool.brush}
               onChange={manualTool.onChange}
               onEnd={manualTool.onEnd}
+              hideTint={sliderDragging}
             />
           </div>
         )}

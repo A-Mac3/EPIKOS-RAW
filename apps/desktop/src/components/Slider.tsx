@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { setSliderDragging } from "../sliderDrag";
 
 interface Props {
   label: string;
@@ -59,6 +60,7 @@ export function Slider({
   const at = (f: number) => `calc(var(--knob) / 2 + ${f} * (100% - var(--knob)))`;
   const end = () => {
     setActive(false);
+    setSliderDragging(false);
     onCommit();
   };
   return (
@@ -92,11 +94,15 @@ export function Slider({
           value={pos}
           disabled={disabled}
           onChange={(e) => onChange(fromPosition(Number(e.currentTarget.value)))}
-          onPointerDown={() => setActive(true)}
+          onPointerDown={() => {
+            setActive(true);
+            setSliderDragging(true);
+          }}
           onPointerUp={end}
           onKeyUp={onCommit}
           onBlur={() => {
             setActive(false);
+            setSliderDragging(false);
             onCommit();
           }}
           onDoubleClick={() => {

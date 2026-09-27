@@ -81,6 +81,33 @@ pub(crate) fn apply_local(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[
         });
 }
 
+/// Teeth whitening through the Teeth mask: the yellow / orange cast is pulled towards
+/// neutral (blue lifted towards the red–green level) and the teeth brighten a little,
+/// most on their highlights. `amount` 0…100.
+pub(crate) fn whiten_teeth(rgb: &mut ImageRgbF32, amount: f32, mask: &[f32]) {
+    let k = (amount / 100.0).clamp(0.0, 1.0);
+    if k == 0.0 || mask.len() != rgb.len() {
+        return;
+    }
+    rgb.r
+        .par_iter_mut()
+        .zip(rgb.g.par_iter_mut())
+        .zip(rgb.b.par_iter_mut())
+        .zip(mask.par_iter())
+        .for_each(|(((r, g), b), &m)| {
+            if m <= 0.0 {
+                return;
+            }
+            let w = k * m;
+            // Yellow / orange: blue below the smaller of red and green.
+            let yellow = (r.min(*g) - *b).max(0.0);
+            *b += 0.85 * w * yellow;
+            let y = 0.2627 * *r + 0.678 * *g + 0.0593 * *b;
+            let lift = 1.0 + w * (0.1 + 0.12 * (y / 0.5).clamp(0.0, 1.0));
+            (*r, *g, *b) = (*r * lift, *g * lift, *b * lift);
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +142,10 @@ mod tests {
         assert!(magenta.g[0] / magenta.r[0] < img.g[0] / img.r[0]);
         let y = |i: &ImageRgbF32| 0.2627 * i.r[0] + 0.678 * i.g[0] + 0.0593 * i.b[0];
         assert!((y(&magenta) / y(&img) - 1.0).abs() < 0.02, "tint keeps brightness");
+        // Teeth whitening: less yellow, a touch brighter.
+        let mut teeth = img.clone();
+        whiten_teeth(&mut teeth, 100.0, &mask);
+        assert!(teeth.b[0] / teeth.r[0] > img.b[0] / img.r[0], "less yellow");
         let mut grey = img.clone();
         apply_local(&mut grey, &LocalAdjustment { saturation: -100.0, ..Default::default() }, &mask);
         assert!((grey.r[0] - grey.b[0]).abs() < 1e-5);

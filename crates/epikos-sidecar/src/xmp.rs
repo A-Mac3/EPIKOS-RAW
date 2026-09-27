@@ -164,8 +164,8 @@ fn render_xmp(doc: &DevelopDocument) -> String {
 fn render_look(a: &Adjustments) -> String {
     let t = &a.texture;
     let mut out = format!(
-        "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"\n    epikos:characterLines=\"{}\"\n    epikos:retouchSubjectOnly=\"{}\"",
-        t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance, t.character_lines, t.retouch_subject_only
+        "\n    epikos:clarity=\"{}\"\n    epikos:microTexture=\"{}\"\n    epikos:blemishSmoothing=\"{}\"\n    epikos:specularBalance=\"{}\"\n    epikos:characterLines=\"{}\"\n    epikos:retouchSubjectOnly=\"{}\"\n    epikos:teethWhitening=\"{}\"",
+        t.clarity, t.micro_texture, t.blemish_smoothing, t.specular_balance, t.character_lines, t.retouch_subject_only, t.teeth_whitening
     );
     // Hand-drawn masks: their shapes don't fit a flat list, so they're kept as JSON.
     if !a.manual.is_empty() {
@@ -427,6 +427,7 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                 specular_balance: num("epikos:specularBalance").unwrap_or(0.0),
                 character_lines: num("epikos:characterLines").unwrap_or(0.0),
                 retouch_subject_only: flag("epikos:retouchSubjectOnly").unwrap_or(false),
+                teeth_whitening: num("epikos:teethWhitening").unwrap_or(0.0),
             },
             color: {
                 let mut hsl = HslBands::default();
@@ -753,6 +754,7 @@ mod tests {
         ];
         doc.adjustments.texture.character_lines = 40.0;
         doc.adjustments.texture.retouch_subject_only = true;
+        doc.adjustments.texture.teeth_whitening = 40.0;
         doc.adjustments.color.foliage = HslChannel { hue: 35.0, saturation: -10.0, luminance: 5.0 };
         doc.adjustments.color.background = BackgroundTint { hue: 200.0, amount: 30.0, saturation: -20.0, luminance: -10.0 };
         doc.adjustments.atmosphere.glow_subject_only = true;

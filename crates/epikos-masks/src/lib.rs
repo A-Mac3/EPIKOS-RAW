@@ -111,12 +111,18 @@ const FACE_CLASSES: usize = 19;
 pub struct FaceParts {
     pub width: u32,
     pub height: u32,
-    /// Face skin (not neck).
+    /// Face skin: cheeks, forehead, nose, ears (not the neck).
     pub skin: Vec<f32>,
     pub eyes: Vec<f32>,
     pub brows: Vec<f32>,
+    /// Upper and lower lip.
     pub lips: Vec<f32>,
+    /// Inside of the mouth (teeth, tongue).
+    pub mouth: Vec<f32>,
     pub hair: Vec<f32>,
+    pub neck: Vec<f32>,
+    /// Clothing.
+    pub cloth: Vec<f32>,
     pub infer_ms: u64,
 }
 
@@ -125,7 +131,10 @@ impl FaceParts {
     /// crop held no face.
     pub fn face_share(&self) -> f32 {
         let n = self.skin.len().max(1) as f32;
-        (0..self.skin.len()).map(|i| self.skin[i] + self.eyes[i] + self.brows[i] + self.lips[i]).sum::<f32>() / n
+        (0..self.skin.len())
+            .map(|i| self.skin[i] + self.eyes[i] + self.brows[i] + self.lips[i] + self.mouth[i])
+            .sum::<f32>()
+            / n
     }
 }
 
@@ -268,7 +277,10 @@ impl Masker {
             eyes: fit(&parts[1]),
             brows: fit(&parts[2]),
             lips: fit(&parts[3]),
-            hair: fit(&parts[4]),
+            mouth: fit(&parts[4]),
+            hair: fit(&parts[5]),
+            neck: fit(&parts[6]),
+            cloth: fit(&parts[7]),
             infer_ms,
         })
     }
@@ -420,9 +432,13 @@ fn normalise_depth(disparity: &[f32]) -> Vec<f32> {
 }
 
 /// Softmax over the class axis, summed into [skin, eyes, brows, lips, hair].
-fn face_parts(logits: &[f32], n: usize) -> [Vec<f32>; 5] {
-    let groups: [&[usize]; 5] = [&[1], &[4, 5], &[2, 3], &[11, 12, 13], &[17]];
-    let mut out: [Vec<f32>; 5] = std::array::from_fn(|_| vec![0.0; n]);
+/// CelebAMask-HQ classes grouped: face skin (skin, nose, ears), eyes, brows, lips,
+/// inner mouth, hair, neck, clothing.
+const FACE_GROUPS: [&[usize]; 8] = [&[1, 10, 7, 8], &[4, 5], &[2, 3], &[12, 13], &[11], &[17], &[14], &[16]];
+
+fn face_parts(logits: &[f32], n: usize) -> [Vec<f32>; 8] {
+    let groups = FACE_GROUPS;
+    let mut out: [Vec<f32>; 8] = std::array::from_fn(|_| vec![0.0; n]);
     for i in 0..n {
         let max = (0..FACE_CLASSES).map(|c| logits[c * n + i]).fold(f32::MIN, f32::max);
         let exp: [f32; FACE_CLASSES] = std::array::from_fn(|c| (logits[c * n + i] - max).exp());
@@ -512,7 +528,7 @@ mod tests {
         logits[17 * n] = 20.0;
         logits[4 * n + 1] = 10.0;
         logits[5 * n + 1] = 10.0;
-        let [skin, eyes, _, _, hair] = face_parts(&logits, n);
+        let [skin, eyes, _, _, _, hair, _, _] = face_parts(&logits, n);
         assert!(hair[0] > 0.99 && eyes[0] < 0.01);
         assert!(eyes[1] > 0.99 && skin[1] < 0.01);
     }

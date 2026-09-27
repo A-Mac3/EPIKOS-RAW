@@ -852,6 +852,16 @@ function mask(kind: MaskTarget): ArrayBuffer {
               ? v > 0.7
               : kind === "eyes"
                 ? v > 0.6 && v < 0.62 && ((u > 0.45 && u < 0.47) || (u > 0.52 && u < 0.54))
+                : kind === "eyebrows"
+                  ? v > 0.585 && v < 0.595 && ((u > 0.445 && u < 0.475) || (u > 0.515 && u < 0.545))
+                  : kind === "eyelashes"
+                    ? v > 0.598 && v < 0.602 && ((u > 0.45 && u < 0.47) || (u > 0.52 && u < 0.54))
+                    : kind === "teeth"
+                      ? v > 0.655 && v < 0.665 && u > 0.48 && u < 0.52
+                      : kind === "faceSkin"
+                        ? v > 0.58 && v < 0.68 && u > 0.44 && u < 0.56
+                        : kind === "bodySkin"
+                          ? v > 0.68 && v < 0.75 && u > 0.46 && u < 0.54
                 : kind === "hair"
                   ? v > 0.55 && v < 0.58 && u > 0.44 && u < 0.56
                   : kind === "skin"
