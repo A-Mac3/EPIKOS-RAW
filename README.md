@@ -33,8 +33,9 @@ Step 3's AI masks include people, vehicles and animals (FCN-ResNet50 scene
 segmentation), vegetation and foliage, clothing, facial skin, body skin, eyes, eyebrows,
 eyelashes (the lash line at the eyes' edge), teeth, lips, facial hair, glasses and hair.
 Selecting a local adjustment highlights its mask for review; the highlight clears as
-soon as an edit starts, and Show mask brings it back. Each mask can be extended or
-reduced, feathered (25 by default, so edits fade in without a visible edge) and brushed
+soon as an edit starts, and Show mask brings it back. Each has exposure, contrast,
+highlights, shadows, whites, blacks, saturation, warmth, tint and clarity. Each mask can
+be extended or reduced, feathered (25 by default, so edits fade in without a visible edge) and brushed
 where it should (Add) or shouldn't (Remove) reach. Face features are parsed at twice the mask
 resolution; skin is kept to the person (on the subject and matching their own skin, so
 walls and clothing never count); where the hair model finds almost none (very dark or

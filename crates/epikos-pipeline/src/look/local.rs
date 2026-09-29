@@ -1,5 +1,5 @@
-//! PRD Step 3 local adjustments: exposure, contrast, saturation, warmth, tint and clarity
-//! inside an AI mask, on scene-linear Rec.2020. The mask (0–1, already fitted to the
+//! PRD Step 3 local adjustments: exposure, contrast, highlights, shadows, whites,
+//! blacks, saturation, warmth, tint and clarity inside an AI mask, on scene-linear Rec.2020. The mask (0–1, already fitted to the
 //! photo's edges) scales every change, so soft mask edges give soft transitions.
 
 use epikos_core::ImageRgbF32;
@@ -21,6 +21,9 @@ pub(crate) fn apply_local(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[
     let (contrast, saturation, warmth, clarity) =
         (pct(adj.contrast), pct(adj.saturation), pct(adj.warmth), pct(adj.clarity));
     let exposure = adj.exposure.clamp(-3.0, 3.0);
+    let (highlights, shadows, whites, blacks) =
+        (pct(adj.highlights), pct(adj.shadows), pct(adj.whites), pct(adj.blacks));
+    let ranges = highlights != 0.0 || shadows != 0.0 || whites != 0.0 || blacks != 0.0;
 
     let ev: Vec<f32> = (0..rgb.len())
         .into_par_iter()
@@ -57,6 +60,14 @@ pub(crate) fn apply_local(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[
             if contrast != 0.0 {
                 stops += contrast * 0.5 * e / (1.0 + (e / 5.0).powi(2));
             }
+            if ranges {
+                // Stops from mid-grey: display white sits near +2.5, deep black near −5.
+                // Each range fades in smoothly, so its edges never band.
+                stops += highlights * smoothstep(-0.5, 2.0, e)
+                    + shadows * 1.2 * (1.0 - smoothstep(-3.0, 0.5, e))
+                    + whites * 0.7 * smoothstep(1.2, 2.8, e)
+                    + blacks * 0.8 * (1.0 - smoothstep(-5.5, -2.5, e));
+            }
             if let Some(d) = &detail {
                 stops += clarity * 0.8 * d[i].clamp(-2.0, 2.0);
             }
@@ -79,6 +90,11 @@ pub(crate) fn apply_local(rgb: &mut ImageRgbF32, adj: &LocalAdjustment, mask: &[
             }
             (*r, *g, *b) = (pr, pg, pb);
         });
+}
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Teeth whitening through the Teeth mask: the yellow / orange cast is pulled towards
@@ -125,6 +141,31 @@ mod tests {
         apply_local(&mut img, &adj, &mask);
         assert!((img.g[0] - 0.4).abs() < 1e-5);
         assert!((img.g[7] - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tonal_ranges_move_their_own_tones() {
+        // Dark, mid and bright patches.
+        let levels = [0.01f32, 0.18, 0.9];
+        let mut img = ImageRgbF32::new(3, 2, ColorSpace::LinearRec2020);
+        for i in 0..6 {
+            let v = levels[i % 3];
+            (img.r[i], img.g[i], img.b[i]) = (v, v, v);
+        }
+        let mask = vec![1.0; 6];
+        let run = |adj: LocalAdjustment| {
+            let mut out = img.clone();
+            apply_local(&mut out, &adj, &mask);
+            out.g
+        };
+        let s = run(LocalAdjustment { shadows: 100.0, ..Default::default() });
+        assert!(s[0] > levels[0] * 1.8 && (s[2] / levels[2] - 1.0).abs() < 0.05, "shadows lift darks: {s:?}");
+        let h = run(LocalAdjustment { highlights: -100.0, ..Default::default() });
+        assert!(h[2] < levels[2] * 0.7 && (h[0] / levels[0] - 1.0).abs() < 0.05, "highlights pull brights: {h:?}");
+        let b = run(LocalAdjustment { blacks: -100.0, ..Default::default() });
+        assert!(b[0] < levels[0] && (b[1] / levels[1] - 1.0).abs() < 0.02, "blacks deepen: {b:?}");
+        let w = run(LocalAdjustment { whites: 100.0, ..Default::default() });
+        assert!(w[2] > levels[2] && (w[1] / levels[1] - 1.0).abs() < 0.02, "whites lift: {w:?}");
     }
 
     #[test]

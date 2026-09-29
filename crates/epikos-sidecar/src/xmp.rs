@@ -179,14 +179,15 @@ fn render_look(a: &Adjustments) -> String {
             out += &format!("\n    epikos:manual=\"{}\"", esc(&json));
         }
     }
-    // Local adjustments: "mask,exposure,contrast,saturation,warmth,clarity,tint;…".
+    // Local adjustments: "mask,exposure,contrast,saturation,warmth,clarity,tint,grow,
+    // feather,highlights,shadows,whites,blacks;…".
     if !a.local.is_empty() {
         let local: Vec<String> = a
             .local
             .iter()
             .map(|l| {
                 format!(
-                    "{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     l.mask.id(),
                     l.exposure,
                     l.contrast,
@@ -195,7 +196,11 @@ fn render_look(a: &Adjustments) -> String {
                     l.clarity,
                     l.tint,
                     l.grow,
-                    l.feather
+                    l.feather,
+                    l.highlights,
+                    l.shadows,
+                    l.whites,
+                    l.blacks
                 )
             })
             .collect();
@@ -412,11 +417,19 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                     v.split(';')
                         .filter_map(|l| {
                             let (mask, rest) = l.split_once(',')?;
-                            // Tint, then grow / feather came later: older sidecars have
-                            // five or six values.
-                            let [exposure, contrast, saturation, warmth, clarity, tint, grow, feather] = numbers::<8>(rest)
-                                .or_else(|| numbers::<6>(rest).map(|[e, c, s, w, k, t]| [e, c, s, w, k, t, 0.0, 0.0]))
-                                .or_else(|| numbers::<5>(rest).map(|[e, c, s, w, k]| [e, c, s, w, k, 0.0, 0.0, 0.0]))?;
+                            // Tint, grow / feather, then the tonal ranges came later: older
+                            // sidecars have five, six or eight values.
+                            let [exposure, contrast, saturation, warmth, clarity, tint, grow, feather, highlights, shadows, whites, blacks] =
+                                numbers::<12>(rest)
+                                    .or_else(|| {
+                                        numbers::<8>(rest).map(|[e, c, s, w, k, t, g, f]| [e, c, s, w, k, t, g, f, 0.0, 0.0, 0.0, 0.0])
+                                    })
+                                    .or_else(|| {
+                                        numbers::<6>(rest).map(|[e, c, s, w, k, t]| [e, c, s, w, k, t, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+                                    })
+                                    .or_else(|| {
+                                        numbers::<5>(rest).map(|[e, c, s, w, k]| [e, c, s, w, k, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+                                    })?;
                             Some(LocalAdjustment {
                                 mask: MaskTarget::from_id(mask.trim())?,
                                 exposure,
@@ -425,6 +438,10 @@ fn parse_xmp(xml: &str) -> Result<DevelopDocument> {
                                 warmth,
                                 clarity,
                                 tint,
+                                highlights,
+                                shadows,
+                                whites,
+                                blacks,
                                 grow,
                                 feather,
                                 refine: Vec::new(),
@@ -705,7 +722,7 @@ mod tests {
     fn older_local_adjustments_without_tint_still_load() {
         let mut doc = sample_doc();
         doc.adjustments.local = vec![LocalAdjustment { mask: MaskTarget::Eyes, exposure: 0.4, ..Default::default() }];
-        let xml = render_xmp(&doc).replace("eyes,0.4,0,0,0,0,0,0,0", "eyes,0.4,0,0,0,0");
+        let xml = render_xmp(&doc).replace("eyes,0.4,0,0,0,0,0,0,0,0,0,0,0", "eyes,0.4,0,0,0,0");
         assert!(xml.contains(r#"epikos:local="eyes,0.4,0,0,0,0""#), "{xml}");
         assert_eq!(parse_xmp(&xml).unwrap().adjustments.local, doc.adjustments.local);
     }

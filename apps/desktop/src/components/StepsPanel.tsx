@@ -1210,6 +1210,10 @@ function MaskControls({ masks: m }: { masks: MaskState }) {
 const LOCAL_SLIDERS: [Exclude<keyof LocalAdjustment, "mask" | "grow" | "feather" | "refine">, string][] = [
   ["exposure", "Exposure"],
   ["contrast", "Contrast"],
+  ["highlights", "Highlights"],
+  ["shadows", "Shadows"],
+  ["whites", "Whites"],
+  ["blacks", "Blacks"],
   ["saturation", "Saturation"],
   ["warmth", "Warmth"],
   ["tint", "Tint"],

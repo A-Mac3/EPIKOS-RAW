@@ -346,6 +346,12 @@ pub struct LocalAdjustment {
     pub clarity: f32,
     /// Greener (−) or more magenta (+): balances a skin cast the warmth axis can't.
     pub tint: f32,
+    /// Tonal ranges inside the mask, −100…100: bright areas, dark areas, the white
+    /// point and the black point.
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
     /// Mask refinement, −100…100: shrink (−) or extend (+) the masked area.
     pub grow: f32,
     /// Mask refinement, 0…100: soften the mask's edge so the edit fades in.
@@ -362,6 +368,10 @@ impl LocalAdjustment {
             && self.warmth == 0.0
             && self.clarity == 0.0
             && self.tint == 0.0
+            && self.highlights == 0.0
+            && self.shadows == 0.0
+            && self.whites == 0.0
+            && self.blacks == 0.0
     }
 
     /// Whether the mask is refined (grown, shrunk, feathered or brushed).

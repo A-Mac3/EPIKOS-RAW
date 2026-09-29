@@ -121,6 +121,11 @@ export interface LocalAdjustment {
   clarity: number;
   /** Greener (−) or more magenta (+). */
   tint: number;
+  /** Tonal ranges inside the mask, −100…100. */
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
   /** Refinement, −100…100: shrink (−) or extend (+) the masked area. */
   grow: number;
   /** Refinement, 0…100: soften the mask's edge. */
@@ -676,7 +681,7 @@ export function defaultTone(): Tone {
 }
 
 export function defaultLocal(mask: MaskTarget): LocalAdjustment {
-  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0, tint: 0, grow: 0, feather: 25, refine: [] };
+  return { mask, exposure: 0, contrast: 0, saturation: 0, warmth: 0, clarity: 0, tint: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, grow: 0, feather: 25, refine: [] };
 }
 
 export function defaultToneCurve(): ToneCurve {
