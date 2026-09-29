@@ -25,6 +25,10 @@ const KINDS: { kind: ManualShape["kind"]; label: string; hint: string }[] = [
 const EDITS: [keyof Omit<ManualAdjustment, "shape">, string, number, number, number, (v: number) => string][] = [
   ["exposure", "Exposure", -3, 3, 0.01, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)} EV`],
   ["contrast", "Contrast", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
+  ["highlights", "Highlights", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
+  ["shadows", "Shadows", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
+  ["whites", "Whites", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
+  ["blacks", "Blacks", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
   ["warmth", "Temperature", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
   ["tint", "Tint", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
   ["dehaze", "Dehaze", -100, 100, 1, (v) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}`],
@@ -42,8 +46,8 @@ const name = (m: ManualAdjustment, i: number) =>
 
 /**
  * Step 3 Manual Masking: brush, linear and radial gradient masks drawn on the image,
- * each with its own exposure, contrast, temperature, tint, dehaze, saturation and
- * clarity, applied alongside the AI masks.
+ * each with its own exposure, contrast, highlights, shadows, whites, blacks,
+ * temperature, tint, dehaze, saturation and clarity, applied alongside the AI masks.
  */
 export function ManualMaskPanel({ manual, edit, endEdit, commit, active, setActive, brush, setBrush }: Props) {
   const set = (i: number, patch: Partial<ManualAdjustment>) => (x: Adjustments) => ({

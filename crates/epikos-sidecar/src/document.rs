@@ -415,8 +415,9 @@ impl Default for BrushStroke {
     }
 }
 
-/// A local edit through a hand-drawn mask: exposure (EV), contrast, saturation,
-/// warmth (temperature), tint, clarity and dehaze (−100…100).
+/// A local edit through a hand-drawn mask: exposure (EV), contrast, highlights,
+/// shadows, whites, blacks, saturation, warmth (temperature), tint, clarity and dehaze
+/// (−100…100).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ManualAdjustment {
@@ -428,6 +429,10 @@ pub struct ManualAdjustment {
     pub tint: f32,
     pub clarity: f32,
     pub dehaze: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub whites: f32,
+    pub blacks: f32,
 }
 
 impl Default for ManualAdjustment {
@@ -441,15 +446,31 @@ impl Default for ManualAdjustment {
             tint: 0.0,
             clarity: 0.0,
             dehaze: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+            whites: 0.0,
+            blacks: 0.0,
         }
     }
 }
 
 impl ManualAdjustment {
     pub fn is_neutral(&self) -> bool {
-        [self.exposure, self.contrast, self.saturation, self.warmth, self.tint, self.clarity, self.dehaze]
-            .iter()
-            .all(|v| *v == 0.0)
+        [
+            self.exposure,
+            self.contrast,
+            self.saturation,
+            self.warmth,
+            self.tint,
+            self.clarity,
+            self.dehaze,
+            self.highlights,
+            self.shadows,
+            self.whites,
+            self.blacks,
+        ]
+        .iter()
+        .all(|v| *v == 0.0)
     }
 
     /// The same edit on a crop of the frame: positions and sizes in the crop's own

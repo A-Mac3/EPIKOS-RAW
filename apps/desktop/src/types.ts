@@ -442,6 +442,11 @@ export interface ManualAdjustment {
   tint: number;
   clarity: number;
   dehaze: number;
+  /** Tonal ranges inside the mask, −100…100. */
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
 }
 
 export function newManual(kind: ManualShape["kind"]): ManualAdjustment {
@@ -451,7 +456,20 @@ export function newManual(kind: ManualShape["kind"]): ManualAdjustment {
       : kind === "radial"
         ? { kind, cx: 0.5, cy: 0.5, rx: 0.22, ry: 0.28, angle: 0, feather: 50, invert: false }
         : { kind, strokes: [] };
-  return { shape, exposure: 0, contrast: 0, saturation: 0, warmth: 0, tint: 0, clarity: 0, dehaze: 0 };
+  return {
+    shape,
+    exposure: 0,
+    contrast: 0,
+    highlights: 0,
+    shadows: 0,
+    whites: 0,
+    blacks: 0,
+    saturation: 0,
+    warmth: 0,
+    tint: 0,
+    clarity: 0,
+    dehaze: 0,
+  };
 }
 
 export interface SourceRef {

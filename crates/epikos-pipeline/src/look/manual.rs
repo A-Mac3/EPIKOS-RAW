@@ -136,13 +136,17 @@ pub(crate) fn apply_manual(rgb: &mut ImageRgbF32, m: &ManualAdjustment) {
         warmth: m.warmth,
         tint: m.tint,
         clarity: m.clarity,
+        highlights: m.highlights,
+        shadows: m.shadows,
+        whites: m.whites,
+        blacks: m.blacks,
         ..Default::default()
     };
     apply_local(rgb, &local, &mask);
 }
 
 /// Refine a local adjustment's AI mask in place: extend or shrink it (`grow`,
-/// −100…100, up to 2 % of the frame), add or remove hand-brushed strokes, then soften
+/// −100…100, up to 6 % of the frame), add or remove hand-brushed strokes, then soften
 /// its edge (`feather`, 0…100, up to 3 % of the frame) so the edit fades in instead of
 /// ending on a visible line.
 pub(crate) fn refine_mask(mask: &mut Vec<f32>, adj: &LocalAdjustment, w: usize, h: usize) {

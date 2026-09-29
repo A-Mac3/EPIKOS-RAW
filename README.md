@@ -49,7 +49,7 @@ controls are in Step 8). Mask overlays hide while any slider is dragged and retu
 release.
 Step 3 also has **Manual masking**: a brush (size, feather, flow, erase), linear
 (graduated) and radial gradients drawn on the image, each with exposure, contrast,
-temperature, tint, dehaze, saturation and clarity. While a control is dragged the preview
+highlights, shadows, whites, blacks, temperature, tint, dehaze, saturation and clarity. While a control is dragged the preview
 renders a lighter proxy so feedback keeps up, then sharpens when the drag ends. The AI
 Mentor ranks subjects (primary / secondary, by area and nearness), frames people by
 portrait rules (never cutting the neck, waist, knees or ankles; full body with ground

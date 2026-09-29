@@ -34,6 +34,9 @@ done
 cd "$REPO/apps/desktop"
 npm run tauri build -- --target universal-apple-darwin
 
+# A copy of the DMG on the Desktop, where it's easy to find.
+cp "$REPO"/target/universal-apple-darwin/release/bundle/dmg/*.dmg "$HOME/Desktop/"
+
 echo
 echo "App: $REPO/target/universal-apple-darwin/release/bundle/macos/EPIKOS RAW.app"
-ls "$REPO"/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+ls "$HOME"/Desktop/*.dmg
